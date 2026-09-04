@@ -142,12 +142,14 @@ The repository currently provides:
 * Initial asset, service, discovery job, capacity, dependency and metric sample domain model.
 * Schema reserved for CPU/RAM capacity and utilization (`asset_capacity`, `metric_samples`, `dependencies`).
 * Collector framework with target validation (unrestricted scopes rejected).
-* Nmap collector adapter (executes `nmap`, records discovery jobs; XML fixture parsing skeleton).
+* Nmap collector adapter (executes `nmap`, parses XML output, records discovery jobs).
 * Discovery job history and audit records.
 * Initial architecture documentation.
 * Roadmap and backlog.
 
-The first functional discovery milestone is a **working Nmap XML parser** that turns a scan into a persisted inventory.
+The next functional milestones are richer OS/service fingerprinting from
+Nmap XML, job-history CLI (`orbyn jobs`), and a dedicated asset detail
+command.
 
 ## Requirements
 

@@ -10,7 +10,7 @@ Goal: produce a useful inventory from an authorized IP range, driven from the CL
 - Discovery job model.
 - Safe target/CIDR validation.
 - Nmap execution adapter.
-- Nmap XML parser (completes current stub).
+- Nmap XML parser (quick-xml).
 - Host reconciliation by IP/hostname.
 - Ports and services persistence.
 - Asset list/detail and service commands.

@@ -24,7 +24,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P0** Validate IPv4/IPv6/CIDR targets.
 - [x] **P0** Add explicit maximum scan scope defaults (unrestricted scopes rejected).
 - [x] **P0** Implement Nmap command adapter without shell interpolation.
-- [ ] **P0** Parse Nmap XML fixtures (quick-xml) — current parser stub.
+- [x] **P0** Parse Nmap XML fixtures (quick-xml).
 - [x] **P0** Normalize host/port/service observations.
 - [x] **P0** Persist/reconcile assets and services.
 - [ ] **P1** Job status and history CLI (`orbyn jobs`).
@@ -33,7 +33,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** CSV/JSON exports (`orbyn export`).
 - [x] **P1** Capture scan metadata and errors (job audit records).
 - [ ] **P2** Configurable Nmap profiles.
-- [ ] **P2** Nmap XML fixtures test coverage.
+- [x] **P2** Nmap XML fixtures test coverage.
 
 ## Inventory enrichment
 
