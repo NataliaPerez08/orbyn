@@ -6,7 +6,7 @@ The roadmap describes product capability, not guaranteed release dates.
 
 Goal: produce a useful inventory from an authorized IP range.
 
-- Go API and SQLite foundation.
+- Rust (tokio/axum) API and SQLite foundation.
 - Discovery job model.
 - Safe target/CIDR validation.
 - Nmap execution adapter.
@@ -53,7 +53,7 @@ Goal: produce a useful inventory from an authorized IP range.
 - Manual relationship confirmation.
 - Mermaid/JSON graph export.
 
-**Exit criterion:** OpenMigra can identify and visualize meaningful asset-to-asset dependencies.
+**Exit criterion:** Orbyn can identify and visualize meaningful asset-to-asset dependencies.
 
 ## v0.5 — Migration assessment
 
@@ -78,6 +78,9 @@ Goal: produce a useful inventory from an authorized IP range.
 - Security review.
 - Reproducible release artifacts.
 
+**Exit criterion:** a deployment can be installed, upgraded and operated without
+development tooling or undocumented manual steps.
+
 ## v1.1 — Integrations
 
 - NetBox integration.
@@ -85,6 +88,9 @@ Goal: produce a useful inventory from an authorized IP range.
 - Terraform-friendly export format.
 - vCenter collector/importer.
 - Plugin/collector SDK definition.
+
+**Exit criterion:** at least one third-party source-of-truth and one automation
+export are demonstrated in CI without custom code.
 
 ## v1.2 — CPU/RAM utilization
 
@@ -97,6 +103,9 @@ Goal: produce a useful inventory from an authorized IP range.
 - First right-sizing rules.
 
 **Critical rule:** snapshots alone cannot produce a high-confidence right-sizing recommendation.
+
+**Exit criterion:** an asset with one meeting week of utilization can produce an
+explainable (evidence + rule version) right-sizing recommendation.
 
 ## v1.3+ — Advanced assessment
 

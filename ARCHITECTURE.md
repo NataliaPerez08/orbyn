@@ -2,9 +2,43 @@
 
 ## Objective
 
-OpenMigra converts heterogeneous discovery data into a normalized infrastructure graph suitable for migration assessment.
+Orbyn converts heterogeneous discovery data into a normalized infrastructure graph suitable for migration assessment.
 
 The architecture deliberately separates **collection**, **normalization**, **storage**, **assessment**, and **presentation** so individual pieces can evolve without coupling the project to a particular scanner or cloud provider.
+
+## Technology baseline
+
+Orbyn is a Rust project:
+
+- **Runtime:** async Rust on `tokio`.
+- **HTTP API:** `axum` (hyper/tower based), mirroring the previous Go `net/http`
+  design goal of minimal dependencies and composable middleware.
+- **Persistence:** `sqlx` against SQLite. The schema is versioned via `sqlx`
+  migrations in `migrations/`.
+- **CLI:** `clap`. A single binary exposes `serve` and `discover` subcommands,
+  keeping the "one binary + one SQLite database" local-first promise.
+- **Logging:** `tracing`/`tracing-subscriber`, structured and env-configurable.
+- **XML parsing (Nmap):** `quick-xml`, fast and dependency-light.
+
+Crate layout mirrors the logical layers:
+
+```text
+src/
+├── main.rs               # clap CLI: serve / discover
+├── lib.rs                # library surface
+├── config.rs             # env-based configuration
+├── domain/               # normalized domain model
+├── collectors/           # Collector trait + scanner adapters
+│   ├── types.rs          # Collector, ScanTarget, validation
+│   └── nmap.rs           # Nmap adapter (v0.1 milestone)
+├── store/                # persistence
+│   ├── traits.rs         # Store trait (repository boundary)
+│   └── sqlite.rs         # SQLite via sqlx
+├── graph/                # dependency graph
+├── metrics/              # capacity/utilization processing
+├── assessment/           # migration assessment engine
+└── api/                  # axum HTTP API
+```
 
 ## Components
 
@@ -23,11 +57,18 @@ Examples:
 - Zabbix and Prometheus.
 - Flow telemetry or eBPF.
 
-Collectors should return typed observations and should not write directly to database tables.
+Collectors must return typed observations and never write directly to database
+tables. They implement the `Collector` trait, which requires:
+
+- a stable collector name;
+- validated, explicitly scoped targets;
+- read-only behavior;
+- subprocess targets passed as argument vectors, never shell strings.
 
 ### 2. Normalization layer
 
-The normalization layer translates vendor/tool-specific observations into OpenMigra domain objects:
+The normalization layer translates vendor/tool-specific observations into Orbyn
+domain objects:
 
 ```text
 Asset
@@ -41,20 +82,28 @@ DiscoveryJob
 Observation
 ```
 
-This boundary is important. Nmap may call something a host and VMware may call it a VM, but assessment logic should operate on a normalized `Asset`.
+This boundary is important. Nmap may call something a host and VMware may call
+it a VM, but assessment logic should operate on a normalized `Asset`. The domain
+types live in `src/domain/`, are marked `#[derive(Serialize, Deserialize)]` for
+API/export, and are the single vocabulary shared by collectors, store, graph,
+metrics, assessment and API.
 
 ### 3. Persistence
 
-Initial storage is SQLite.
-
-Reasons:
+Initial storage is SQLite via `sqlx`:
 
 - zero external services for local installs;
 - easy packaging and evaluation;
 - transactional relational model;
 - sufficient for the initial single-node product.
 
-SQLite is not a permanent constraint. Repository interfaces should eventually isolate persistence so PostgreSQL can be offered for multi-user or larger deployments.
+Migrations are plain SQL in `migrations/` and run automatically at startup.
+`sqlx::migrate!` embeds them at compile time, so the binary has no runtime
+dependency on a migration tool.
+
+SQLite is not a permanent constraint. The `Store` trait in
+`src/store/traits.rs` isolates persistence so PostgreSQL can be offered for
+multi-user or larger deployments without touching collectors or assessment.
 
 ### 4. Assessment engine
 
@@ -71,11 +120,13 @@ Planned outputs include:
 - CPU/RAM target recommendations;
 - cloud-target compatibility rules.
 
-Every recommendation should include its evidence and rule/version.
+Every recommendation should include its evidence and rule/version. The v0.5
+engine will be rule-driven; `src/assessment/` currently provides the
+`Finding`/`Severity` vocabulary and a placeholder scoring function.
 
 ### 5. Dependency graph
 
-Dependencies should be modeled as directional edges:
+Dependencies are modeled as directional edges:
 
 ```text
 Asset A --tcp/5432--> Asset B
@@ -89,15 +140,18 @@ Evidence may come from:
 - service configuration;
 - user-confirmed relationships.
 
-Every edge should retain source and confidence. Guesses should look like guesses, not divine revelation.
+Every edge should retain source and confidence. Guesses should look like
+guesses, not divine revelation. `src/graph/` provides an in-memory graph over
+persisted `Dependency` edges with forward/reverse lookups.
 
 ### 6. API
 
-The Go API is the boundary for CLI/UI/automation clients.
+The axum HTTP API is the boundary for CLI/UI/automation clients.
 
-Versioned endpoints live under `/api/v1`.
-
-The first implementation uses the standard library `net/http` router to minimize dependencies. A third-party router can be introduced only when routing/middleware needs justify it.
+Versioned endpoints live under `/api/v1`. The router is assembled in
+`src/api/`, handlers extract an app state holding the store and return JSON.
+Middleware needs (CORS, tracing, request logging) are satisfied via
+`tower-http`.
 
 ## Data-flow example
 
@@ -105,7 +159,10 @@ The first implementation uses the standard library `net/http` router to minimize
 Nmap scan
    |
    v
-Nmap parser
+Nmap adapter (subprocess, args not shell)
+   |
+   v
+Nmap XML parser (quick-xml)
    |
    v
 []Observation
@@ -116,12 +173,12 @@ Normalizer -------> Reconciliation/deduplication
    +-------------------------+
              |
              v
-           Assets
+           Assets (Store)
              |
       +------+-------+
       |              |
       v              v
- Assessment     Dependency graph
+ Assessment       Dependency graph
       |              |
       +------+-------+
              v
@@ -162,7 +219,9 @@ metric_samples
 - load_15m
 ```
 
-Right-sizing must specify its observation window, sample count, aggregation, and safety factor.
+Right-sizing must specify its observation window, sample count, aggregation,
+and safety factor. `src/metrics/` provides windowed aggregation with a minimum
+sample-count guard; a single snapshot is never treated as utilization evidence.
 
 ## Future scaling
 
@@ -170,24 +229,27 @@ Potential evolution without changing the collector contract:
 
 ```text
 SQLite     -> PostgreSQL
-in-process -> worker queue
+in-process -> worker queue / task scheduler
 local data -> Prometheus/VictoriaMetrics integration
 single API -> API + collectors deployed remotely
 ```
 
-A remote collector/agent should communicate outbound to the server where possible, minimizing inbound firewall requirements.
+A remote collector/agent should communicate outbound to the server where
+possible, minimizing inbound firewall requirements.
 
 ## Security boundaries
 
-Collectors operate against user-provided network targets and credentials, making them the highest-risk component.
+Collectors operate against user-provided network targets and credentials,
+making them the highest-risk component.
 
 Rules:
 
 - read-only operations by default;
-- scoped targets;
+- scoped targets (targets validated by `validate_target`, unrestricted
+  `0.0.0.0/0`-style scopes rejected);
 - explicit credential profiles;
 - secrets never returned through normal API responses;
-- sanitization of subprocess arguments;
-- no shell interpolation for Nmap/SSH commands;
+- subprocess arguments, never shell interpolation (Nmap/SSH commands built as
+  `std::process`/`tokio::process` argument vectors);
 - discovery job audit records;
 - request limits and authorization before multi-user deployments.

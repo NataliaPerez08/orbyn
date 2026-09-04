@@ -4,13 +4,13 @@ Priorities use `P0` (blocking), `P1` (important), `P2` (useful), and `P3` (later
 
 ## Foundation
 
-- [ ] **P0** Replace placeholder Go module path with the final GitHub organization/repository.
-- [ ] **P0** Add database schema versioning/migration runner.
-- [ ] **P0** Add structured logging.
-- [ ] **P0** Add graceful HTTP shutdown.
+- [ ] **P0** Replace placeholder module path with the final GitHub organization/repository.
+- [x] **P0** Add database schema versioning/migration runner (sqlx migrations).
+- [x] **P0** Add structured logging (tracing).
+- [x] **P0** Add graceful HTTP shutdown.
 - [ ] **P1** Add configuration package and validation.
-- [ ] **P1** Add repository interfaces between domain and SQLite.
-- [ ] **P1** Add CI: fmt, vet, test, build.
+- [x] **P1** Add repository interfaces between domain and SQLite.
+- [ ] **P1** Add CI: fmt, clippy, test, build.
 - [ ] **P1** Add release workflow.
 - [ ] **P2** Add Docker image.
 
@@ -20,7 +20,7 @@ Priorities use `P0` (blocking), `P1` (important), `P2` (useful), and `P3` (later
 - [ ] **P0** Validate IPv4/IPv6/CIDR targets.
 - [ ] **P0** Add explicit maximum scan scope defaults.
 - [ ] **P0** Implement Nmap command adapter without shell interpolation.
-- [ ] **P0** Parse Nmap XML fixtures.
+- [ ] **P0** Parse Nmap XML fixtures (quick-xml).
 - [ ] **P0** Normalize host/port/service observations.
 - [ ] **P0** Persist/reconcile assets and services.
 - [ ] **P1** Job status API.

@@ -79,7 +79,7 @@ Existing monitoring platforms such as Prometheus and Zabbix should eventually be
 
 ## Architecture
 
-Orbyn follows a collector-based architecture.
+Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime, `axum` for the HTTP API, `sqlx` for SQLite persistence, and `quick-xml` for Nmap output parsing.
 
 ```text
 +-------------+
@@ -123,18 +123,21 @@ Orbyn follows a collector-based architecture.
           Exporters / Reports
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed architecture.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 
 ## Current bootstrap
 
 The repository currently provides:
 
-* Go HTTP API.
-* SQLite persistence.
-* Initial asset and service domain model.
-* Schema reserved for CPU/RAM capacity and utilization.
+* Rust crate scaffold (single binary: `serve` / `discover`).
+* axum HTTP API.
+* SQLite persistence via `sqlx` with versioned migrations.
+* Initial asset, service, discovery job, capacity, dependency and metric sample domain model.
+* Schema reserved for CPU/RAM capacity and utilization (`asset_capacity`, `metric_samples`, `dependencies`).
 * `/healthz` endpoint.
 * `/api/v1/assets` endpoint.
+* Collector framework with target validation (unrestricted scopes rejected).
+* Nmap collector adapter and XML fixture parsing skeleton.
 * Initial architecture documentation.
 * Roadmap and backlog.
 
@@ -144,21 +147,21 @@ The first functional discovery milestone is the **Nmap collector**.
 
 Current development requirements:
 
-* Go 1.22+
-* SQLite
+* Rust 1.75+ (via [rustup](https://rustup.rs))
+* A C toolchain for the bundled SQLite build (standard for Rust SQLite drivers)
 * Nmap for network discovery
 
-The selected SQLite driver does not require a C compiler.
+No other external services are required for a local install.
 
 ## Run locally
 
 ```bash
-git clone https://github.com/your-org/orbyn.git
+git clone https://github.com/NataliaPerez08/orbyn.git
 cd orbyn
 
 cp .env.example .env
 
-make run
+cargo run -- serve
 ```
 
 By default, the API listens on:
@@ -174,11 +177,19 @@ curl http://localhost:8080/healthz
 curl http://localhost:8080/api/v1/assets
 ```
 
-The SQLite database is created automatically at:
+The SQLite database is created and migrated automatically at:
 
 ```text
 ./data/orbyn.db
 ```
+
+Run a single Nmap discovery job:
+
+```bash
+cargo run -- discover --target 10.0.0.0/24
+```
+
+Prefer `make` for common tasks — see the `Makefile` (build, test, lint, fmt, run).
 
 ## Configuration
 
@@ -186,38 +197,35 @@ The SQLite database is created automatically at:
 | ------------ | ----------------- | -------------------- |
 | `ORBYN_ADDR` | `:8080`           | HTTP listen address  |
 | `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path |
+| `ORBYN_LOG`  | `orbyn=info,tower_http=info` | tracing filter |
+| `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 
 ## Repository layout
 
 ```text
 orbyn/
-├── cmd/
-│   └── server/                 # API executable
+├── Cargo.toml
+├── src/
+│   ├── main.rs                  # CLI executable (serve / discover)
+│   ├── lib.rs
+│   ├── config.rs                # env-based configuration
+│   ├── api/                     # axum HTTP API
+│   ├── assessment/              # migration assessment
+│   ├── collectors/              # discovery collectors
+│   ├── domain/                  # normalized domain model
+│   ├── graph/                   # dependency graph
+│   ├── metrics/                 # capacity/utilization processing
+│   └── store/                   # store traits + SQLite
 │
-├── internal/
-│   ├── collectors/             # Discovery collectors
-│   ├── db/                     # SQLite persistence
-│   ├── graph/                  # Dependency graph
-│   ├── httpapi/                # HTTP API
-│   ├── metrics/                # Capacity/utilization processing
-│   ├── model/                  # Normalized domain model
-│   └── assessment/             # Migration assessment
+├── migrations/                  # versioned SQL migrations (sqlx)
 │
-├── migrations/                 # Versioned database migrations
-│
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── ROADMAP.md
-│   └── BACKLOG.md
-│
+├── Makefile
 ├── .env.example
 ├── .gitignore
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── LICENSE
-├── Makefile
-├── README.md
-└── go.mod
+└── README.md
 ```
 
 ## Guiding principles
@@ -457,7 +465,7 @@ v1.0    Stable discovery platform
 v1.2    Historical metrics + right-sizing
 ```
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/BACKLOG.md](docs/BACKLOG.md).
+See [ROADMAP.md](ROADMAP.md) and [BACKLOG.md](BACKLOG.md).
 
 ## Contributing
 
