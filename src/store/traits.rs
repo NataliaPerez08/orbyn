@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::domain::{Asset, DiscoveryJob, Observation, Service};
+use crate::domain::{Asset, Dependency, DiscoveryJob, JobStatus, Observation, Service};
 
 /// Storage contracts used across Orbyn.
 ///
@@ -25,7 +25,10 @@ pub trait Store: Send + Sync {
 
     async fn list_assets(&self) -> Result<Vec<Asset>>;
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>>;
+    async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>>;
     async fn list_services(&self, asset_id: &str) -> Result<Vec<Service>>;
+    async fn list_dependencies(&self) -> Result<Vec<Dependency>>;
     async fn create_job(&self, job: DiscoveryJob) -> Result<()>;
     async fn get_job(&self, id: &str) -> Result<Option<DiscoveryJob>>;
+    async fn finish_job(&self, id: &str, status: JobStatus, error: Option<String>) -> Result<()>;
 }

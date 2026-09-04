@@ -4,18 +4,18 @@ The roadmap describes product capability, not guaranteed release dates.
 
 ## v0.1 — Network discovery foundation
 
-Goal: produce a useful inventory from an authorized IP range.
+Goal: produce a useful inventory from an authorized IP range, driven from the CLI.
 
-- Rust (tokio/axum) API and SQLite foundation.
+- Rust CLI (clap) and SQLite foundation.
 - Discovery job model.
 - Safe target/CIDR validation.
 - Nmap execution adapter.
-- Nmap XML parser.
+- Nmap XML parser (completes current stub).
 - Host reconciliation by IP/hostname.
 - Ports and services persistence.
-- Asset list/detail API.
+- Asset list/detail and service commands.
 - CSV and JSON export.
-- CLI command for a discovery job.
+- Table output for the terminal.
 - Unit/integration tests.
 
 **Exit criterion:** a user can scan an authorized subnet and inspect a persisted inventory.
@@ -27,8 +27,8 @@ Goal: produce a useful inventory from an authorized IP range.
 - Device classification.
 - Environment, owner, criticality and tags.
 - Import/export hooks.
-- Discovery history and changes.
-- Basic web UI or TUI decision.
+- Discovery history and changes (job listing CLI).
+- TUI decision point.
 
 **Exit criterion:** inventory is useful beyond raw port discovery.
 
@@ -51,7 +51,7 @@ Goal: produce a useful inventory from an authorized IP range.
 - Dependency graph model.
 - Confidence/evidence model.
 - Manual relationship confirmation.
-- Mermaid/JSON graph export.
+- Graph export (JSON/Mermaid) via the CLI.
 
 **Exit criterion:** Orbyn can identify and visualize meaningful asset-to-asset dependencies.
 
@@ -66,20 +66,21 @@ Goal: produce a useful inventory from an authorized IP range.
 
 **Exit criterion:** inventory becomes an actionable migration assessment.
 
-## v1.0 — Stable discovery product
+## v1.0 — Stable CLI product
 
-- Stable API v1.
-- Authentication for server deployments.
-- Roles/permissions.
-- Job scheduling.
-- Audit trail.
+- Stable CLI v1 (subcommand surface frozen with `orbyn <cmd> --help`).
+- Command completion scripts (bash/zsh/fish).
+- Audit trail surfaced through the CLI.
 - Production installation documentation.
 - Upgrade/migration mechanism for the database.
 - Security review.
 - Reproducible release artifacts.
 
-**Exit criterion:** a deployment can be installed, upgraded and operated without
+**Exit criterion:** a CLI can be installed, upgraded and operated without
 development tooling or undocumented manual steps.
+
+A web/HTTP interface is a possible later add-on and is explicitly out of scope
+for the core product.
 
 ## v1.1 — Integrations
 

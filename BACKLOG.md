@@ -2,33 +2,38 @@
 
 Priorities use `P0` (blocking), `P1` (important), `P2` (useful), and `P3` (later).
 
+Orbyn is a CLI tool. Server/web concepts apply **only** if a future web layer is
+added; today the product surface is `orbyn` subcommands.
+
 ## Foundation
 
 - [ ] **P0** Replace placeholder module path with the final GitHub organization/repository.
 - [x] **P0** Add database schema versioning/migration runner (sqlx migrations).
-- [x] **P0** Add structured logging (tracing).
-- [x] **P0** Add graceful HTTP shutdown.
-- [ ] **P1** Add configuration package and validation.
+- [x] **P0** Add structured logging (tracing, stderr, `-v`/`-vv`).
+- [x] **P0** Add CLI framework (clap) and config resolution (env + `--db`).
 - [x] **P1** Add repository interfaces between domain and SQLite.
+- [x] **P1** Add output format layer (table / JSON / CSV).
 - [ ] **P1** Add CI: fmt, clippy, test, build.
-- [ ] **P1** Add release workflow.
+- [ ] **P1** Add release workflow (binary artifacts + checksums).
+- [ ] **P1** Add shell completion scripts (bash/zsh/fish).
 - [ ] **P2** Add Docker image.
 
 ## Discovery v0.1
 
-- [ ] **P0** Define `DiscoveryJob` domain model.
-- [ ] **P0** Validate IPv4/IPv6/CIDR targets.
-- [ ] **P0** Add explicit maximum scan scope defaults.
-- [ ] **P0** Implement Nmap command adapter without shell interpolation.
-- [ ] **P0** Parse Nmap XML fixtures (quick-xml).
-- [ ] **P0** Normalize host/port/service observations.
-- [ ] **P0** Persist/reconcile assets and services.
-- [ ] **P1** Job status API.
-- [ ] **P1** Asset detail endpoint.
-- [ ] **P1** Services endpoint.
-- [ ] **P1** CSV/JSON exports.
-- [ ] **P1** Capture scan metadata and errors.
+- [x] **P0** Define `DiscoveryJob` domain model.
+- [x] **P0** Validate IPv4/IPv6/CIDR targets.
+- [x] **P0** Add explicit maximum scan scope defaults (unrestricted scopes rejected).
+- [x] **P0** Implement Nmap command adapter without shell interpolation.
+- [ ] **P0** Parse Nmap XML fixtures (quick-xml) — current parser stub.
+- [x] **P0** Normalize host/port/service observations.
+- [x] **P0** Persist/reconcile assets and services.
+- [ ] **P1** Job status and history CLI (`orbyn jobs`).
+- [ ] **P1** Asset detail command (`orbyn asset <id-or-ip>`).
+- [x] **P1** Services command (`orbyn services <id-or-ip>`).
+- [x] **P1** CSV/JSON exports (`orbyn export`).
+- [x] **P1** Capture scan metadata and errors (job audit records).
 - [ ] **P2** Configurable Nmap profiles.
+- [ ] **P2** Nmap XML fixtures test coverage.
 
 ## Inventory enrichment
 
@@ -41,11 +46,12 @@ Priorities use `P0` (blocking), `P1` (important), `P2` (useful), and `P3` (later
 
 ## Dependencies
 
-- [ ] **P1** Dependency edge schema.
-- [ ] **P1** Evidence source and confidence.
+- [x] **P1** Dependency edge schema.
+- [x] **P1** Evidence source and confidence model.
+- [x] **P1** Dependency persistence + graph CLI.
 - [ ] **P1** Active connection collector.
 - [ ] **P2** Firewall/flow-log importer.
-- [ ] **P2** Mermaid dependency export.
+- [ ] **P2** Mermaid graph export.
 - [ ] **P3** eBPF-based telemetry.
 
 ## CPU/RAM and right-sizing
@@ -63,11 +69,10 @@ Priorities use `P0` (blocking), `P1` (important), `P2` (useful), and `P3` (later
 
 ## Security
 
-- [ ] **P0** Document authorized-use requirement.
-- [ ] **P0** Prevent unrestricted `0.0.0.0/0` scans by default.
-- [ ] **P0** Ensure scan targets are passed as process arguments, never shell strings.
-- [ ] **P1** Credential storage design.
+- [x] **P0** Document authorized-use requirement.
+- [x] **P0** Prevent unrestricted `0.0.0.0/0` scans by default.
+- [x] **P0** Ensure scan targets are passed as process arguments, never shell strings.
+- [ ] **P1** Credential storage design (needed for SSH/WinRM collectors).
 - [ ] **P1** Secret redaction.
-- [ ] **P1** Audit logs.
 - [ ] **P1** Threat model.
-- [ ] **P2** RBAC.
+- [ ] **P2** RBAC (only if a web/server layer is introduced).

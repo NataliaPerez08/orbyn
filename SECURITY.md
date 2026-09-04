@@ -17,7 +17,7 @@ or authorization service and must not be used as one.
   unless deliberately and explicitly enabled by an operator.
 - Targets are passed to subprocesses as argument vectors, never interpolated
   through a shell.
-- Credentials are never returned through normal API responses and are never
+- Credentials are never exposed through CLI or API output and are never
   logged.
 - Orbyn avoids storing credentials whenever possible. When credential storage
   becomes necessary (v0.3 SSH/WinRM collectors), credentials must be encrypted

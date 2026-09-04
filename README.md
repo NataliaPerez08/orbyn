@@ -1,10 +1,10 @@
 # Orbyn
 
-**Open-source infrastructure discovery, dependency mapping, and migration assessment.**
+**Open-source infrastructure discovery, dependency mapping, and migration assessment — from the command line.**
 
-Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments.
+Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v0.1 bootstrap.
+> **Status:** Early development — v0.1 bootstrap, CLI focus.
 
 ## Why Orbyn?
 
@@ -26,7 +26,7 @@ Orbyn aims to build that picture automatically.
 
 ## What Orbyn is
 
-Orbyn is designed as a vendor-neutral discovery and assessment layer.
+Orbyn is a vendor-neutral discovery and assessment layer, driven entirely from a CLI.
 
 It collects infrastructure information from multiple sources, normalizes it into a common model, builds relationships between assets and services, and makes that information available for inventory, dependency analysis, migration assessment, and right-sizing.
 
@@ -64,7 +64,7 @@ It collects infrastructure information from multiple sources, normalizes it into
 
 ## What Orbyn is not
 
-Orbyn is **not intended to become another general-purpose monitoring platform**.
+Orbyn is **not intended to become another general-purpose monitoring platform**, nor is it primarily a web service.
 
 Telemetry is collected when it contributes to:
 
@@ -75,52 +75,58 @@ Telemetry is collected when it contributes to:
 * right-sizing;
 * migration planning.
 
-Existing monitoring platforms such as Prometheus and Zabbix should eventually be usable as telemetry sources rather than replaced.
+Existing monitoring platforms such as Prometheus and Zabbix should eventually be usable as telemetry sources rather than replaced. A web/HTTP interface is a *future option*; the CLI is the interface that matters.
 
 ## Architecture
 
-Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime, `axum` for the HTTP API, `sqlx` for SQLite persistence, and `quick-xml` for Nmap output parsing.
+Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime, `clap` for the CLI, `sqlx` for SQLite persistence, `quick-xml` for Nmap output parsing, and `comfy-table` for terminal tables.
 
 ```text
-+-------------+
-| CLI/Web/API |
-+------+------+
-       |
-       v
-+------+-------+
-| Discovery   |
-| Coordinator |
-+------+-------+
-       |
-       +-------------------------------+
-       |          |          |         |
-       v          v          v         v
-     Nmap        SNMP       SSH      WinRM
-       |          |          |         |
-       +----------+----------+---------+
-                  |
-                  v
-          +-------+--------+
-          | Normalization  |
-          +-------+--------+
-                  |
-                  v
-          +-------+--------+
-          | SQLite / Store |
-          +-------+--------+
-                  |
-           +------+------+
-           |             |
-           v             v
-      Orbyn Graph    Metrics Engine
-           |             |
-           +------+------+
-                  |
-                  v
-          Assessment Engine
-                  |
-                  v
-          Exporters / Reports
++----------+   +----------+   +-----------+   +----------+
+| discover |   |  assets  |   |  export   |   |  assess  |
++-----+----+   +----+-----+   +-----+-----+   +----+-----+
+      |             |               |               |
+      +-------------+---------------+---------------+
+                    |
+                    v
+           +--------+--------+
+           |    CLI (clap)   |
+           +--------+--------+
+                    |
+                    v
+           +--------+--------+
+           | Discovery Coordinator / Collectors
+           +--------+--------+
+                    |
+       +------------+------------+
+       |            |            |
+       v            v            v
+     Nmap          SNMP         SSH/WinRM
+       |            |            |
+       +------------+------------+
+                    |
+                    v
+            +-------+--------+
+            | Normalization  |
+            +-------+--------+
+                    |
+                    v
+            +-------+--------+
+            | SQLite / Store |
+            +-------+--------+
+                    |
+             +------+------+
+             |             |
+             v             v
+        Orbyn Graph    Metrics Engine
+             |             |
+             +------+------+
+                    |
+                    v
+            Assessment Engine
+                    |
+                    v
+         CLI output (table/json/csv)
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
@@ -129,19 +135,19 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 
 The repository currently provides:
 
-* Rust crate scaffold (single binary: `serve` / `discover`).
-* axum HTTP API.
+* Rust crate scaffold (single binary, CLI-first).
+* CLI commands: `discover`, `assets`, `services`, `export`, `graph`, `assess`.
+* Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
 * Initial asset, service, discovery job, capacity, dependency and metric sample domain model.
 * Schema reserved for CPU/RAM capacity and utilization (`asset_capacity`, `metric_samples`, `dependencies`).
-* `/healthz` endpoint.
-* `/api/v1/assets` endpoint.
 * Collector framework with target validation (unrestricted scopes rejected).
-* Nmap collector adapter and XML fixture parsing skeleton.
+* Nmap collector adapter (executes `nmap`, records discovery jobs; XML fixture parsing skeleton).
+* Discovery job history and audit records.
 * Initial architecture documentation.
 * Roadmap and backlog.
 
-The first functional discovery milestone is the **Nmap collector**.
+The first functional discovery milestone is a **working Nmap XML parser** that turns a scan into a persisted inventory.
 
 ## Requirements
 
@@ -151,9 +157,9 @@ Current development requirements:
 * A C toolchain for the bundled SQLite build (standard for Rust SQLite drivers)
 * Nmap for network discovery
 
-No other external services are required for a local install.
+No other external services are required.
 
-## Run locally
+## Install & run locally
 
 ```bash
 git clone https://github.com/NataliaPerez08/orbyn.git
@@ -161,20 +167,7 @@ cd orbyn
 
 cp .env.example .env
 
-cargo run -- serve
-```
-
-By default, the API listens on:
-
-```text
-http://localhost:8080
-```
-
-Verify that Orbyn is running:
-
-```bash
-curl http://localhost:8080/healthz
-curl http://localhost:8080/api/v1/assets
+cargo run -- --help
 ```
 
 The SQLite database is created and migrated automatically at:
@@ -183,21 +176,51 @@ The SQLite database is created and migrated automatically at:
 ./data/orbyn.db
 ```
 
-Run a single Nmap discovery job:
+Point any command at a different database with `--db <path>` (or `ORBYN_DB`).
 
-```bash
-cargo run -- discover --target 10.0.0.0/24
+## CLI reference
+
+```text
+orbyn discover --target <cidr>     Scan a subnet with Nmap and persist inventory
+orbyn assets [--format table|json|csv]
+orbyn services <id-or-ip> [--format ...]
+orbyn export [--format json|csv] [--output <file>]
+orbyn graph [--format ...]
+orbyn assess [--format ...]
 ```
 
-Prefer `make` for common tasks — see the `Makefile` (build, test, lint, fmt, run).
+Example session:
+
+```bash
+# scan an authorized subnet
+orbyn discover --target 10.0.0.0/24
+
+# inspect what was found
+orbyn assets
+orbyn services 10.0.0.10
+orbyn services <asset-id>
+
+# machine-readable inventory
+orbyn assets --format json
+orbyn export --format csv --output inventory.csv
+
+# dependency graph (v0.4)
+orbyn graph
+
+# migration assessment (v0.5)
+orbyn assess
+```
+
+By default output is a terminal table; `--format json` and `--format csv`
+stream machine-readable data to stdout. Logs go to stderr, so stdout stays
+clean for piping.
 
 ## Configuration
 
 | Variable     | Default           | Purpose              |
 | ------------ | ----------------- | -------------------- |
-| `ORBYN_ADDR` | `:8080`           | HTTP listen address  |
 | `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path |
-| `ORBYN_LOG`  | `orbyn=info,tower_http=info` | tracing filter |
+| `ORBYN_LOG`  | `orbyn=warn`      | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 
 ## Repository layout
@@ -206,18 +229,19 @@ Prefer `make` for common tasks — see the `Makefile` (build, test, lint, fmt, r
 orbyn/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs                  # CLI executable (serve / discover)
+│   ├── main.rs                  # CLI executable (clap)
 │   ├── lib.rs
-│   ├── config.rs                # env-based configuration
-│   ├── api/                     # axum HTTP API
+│   ├── config.rs                # env/flag-based configuration
 │   ├── assessment/              # migration assessment
 │   ├── collectors/              # discovery collectors
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
 │   ├── metrics/                 # capacity/utilization processing
+│   ├── output/                  # table/json/csv rendering
 │   └── store/                   # store traits + SQLite
 │
 ├── migrations/                  # versioned SQL migrations (sqlx)
+├── tests/                       # integration tests
 │
 ├── Makefile
 ├── .env.example
@@ -263,6 +287,12 @@ Orbyn should never produce a mysterious migration score or right-sizing recommen
 
 Recommendations must expose the evidence and rules that produced them.
 
+### CLI-first
+
+The command line is the primary interface. Results are human-friendly by
+default (tables) and machine-readable on request (`--format json|csv`). A UI
+layer must never become a prerequisite for using the tool.
+
 ### Composable collectors
 
 Every collector should transform its observations into the same normalized domain model.
@@ -273,7 +303,7 @@ The rest of Orbyn should not need to care whether those facts came from Nmap, SS
 
 ### Local-first
 
-A user should be able to start Orbyn with:
+A user should be able to run Orbyn with:
 
 ```text
 one binary
@@ -403,43 +433,21 @@ Risk: Low
 
 Recommendations should include the observations, safety margins and rules used to produce the result.
 
-## API direction
-
-Initial namespace:
-
-```text
-GET  /healthz
-
-GET  /api/v1/assets
-GET  /api/v1/assets/{id}
-GET  /api/v1/assets/{id}/services
-GET  /api/v1/assets/{id}/metrics
-GET  /api/v1/assets/{id}/dependencies
-
-POST /api/v1/discovery/jobs
-GET  /api/v1/discovery/jobs/{id}
-
-GET  /api/v1/graph
-GET  /api/v1/assessments
-```
-
-Endpoints not implemented yet are part of the planned API and may change before v1.0.
-
 ## Security
 
 Infrastructure discovery is security-sensitive.
 
-Orbyn should therefore:
+Orbyn therefore:
 
-* require explicit discovery targets;
-* reject accidental unrestricted scans by default;
-* use read-only operations whenever possible;
-* never expose credentials in logs;
-* avoid storing credentials unless absolutely necessary;
-* encrypt stored secrets when credential storage becomes necessary;
-* run collectors with minimum privileges;
-* maintain an audit trail for discovery operations;
-* clearly identify which collector produced each observation.
+* requires explicit discovery targets;
+* rejects accidental unrestricted scans by default;
+* uses read-only operations whenever possible;
+* never exposes credentials in logs;
+* avoids storing credentials unless absolutely necessary;
+* encrypts stored secrets when credential storage becomes necessary;
+* runs collectors with minimum privileges;
+* maintains an audit trail for discovery operations (job history);
+* clearly identifies which collector produced each observation.
 
 Users are responsible for ensuring they have authorization to scan and inspect target infrastructure.
 
@@ -460,10 +468,13 @@ v0.4    Dependency mapping
           ↓
 v0.5    Migration assessment
           ↓
-v1.0    Stable discovery platform
+v1.0    Stable CLI product
           ↓
 v1.2    Historical metrics + right-sizing
 ```
+
+A web/HTTP interface for `orbyn` is a possible later add-on, not a goal for the
+core tool.
 
 See [ROADMAP.md](ROADMAP.md) and [BACKLOG.md](BACKLOG.md).
 

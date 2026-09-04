@@ -11,12 +11,13 @@ The architecture deliberately separates **collection**, **normalization**, **sto
 Orbyn is a Rust project:
 
 - **Runtime:** async Rust on `tokio`.
-- **HTTP API:** `axum` (hyper/tower based), mirroring the previous Go `net/http`
-  design goal of minimal dependencies and composable middleware.
+- **CLI:** `clap`, with `comfy-table` for terminal tables. Every interaction is
+  a subcommand; the CLI is the product boundary.
+- **Presentation:** `src/output/` renders results as tables by default, or as
+  `json`/`csv` for machine consumption. Logs go to stderr so stdout stays clean
+  for piping.
 - **Persistence:** `sqlx` against SQLite. The schema is versioned via `sqlx`
   migrations in `migrations/`.
-- **CLI:** `clap`. A single binary exposes `serve` and `discover` subcommands,
-  keeping the "one binary + one SQLite database" local-first promise.
 - **Logging:** `tracing`/`tracing-subscriber`, structured and env-configurable.
 - **XML parsing (Nmap):** `quick-xml`, fast and dependency-light.
 
@@ -24,9 +25,9 @@ Crate layout mirrors the logical layers:
 
 ```text
 src/
-├── main.rs               # clap CLI: serve / discover
+├── main.rs               # clap CLI: discover / assets / services / export / graph / assess
 ├── lib.rs                # library surface
-├── config.rs             # env-based configuration
+├── config.rs             # env/flag-based configuration
 ├── domain/               # normalized domain model
 ├── collectors/           # Collector trait + scanner adapters
 │   ├── types.rs          # Collector, ScanTarget, validation
@@ -37,7 +38,7 @@ src/
 ├── graph/                # dependency graph
 ├── metrics/              # capacity/utilization processing
 ├── assessment/           # migration assessment engine
-└── api/                  # axum HTTP API
+└── output/               # table / json / csv rendering
 ```
 
 ## Components
@@ -85,8 +86,8 @@ Observation
 This boundary is important. Nmap may call something a host and VMware may call
 it a VM, but assessment logic should operate on a normalized `Asset`. The domain
 types live in `src/domain/`, are marked `#[derive(Serialize, Deserialize)]` for
-API/export, and are the single vocabulary shared by collectors, store, graph,
-metrics, assessment and API.
+JSON output/export, and are the single vocabulary shared by collectors, store,
+graph, metrics, assessment and CLI output.
 
 ### 3. Persistence
 
@@ -144,14 +145,20 @@ Every edge should retain source and confidence. Guesses should look like
 guesses, not divine revelation. `src/graph/` provides an in-memory graph over
 persisted `Dependency` edges with forward/reverse lookups.
 
-### 6. API
+### 6. CLI
 
-The axum HTTP API is the boundary for CLI/UI/automation clients.
+The command line is the interface. Each subcommand (`discover`, `assets`,
+`services`, `export`, `graph`, `assess`) fetches data through the `Store`
+trait, computes results, and delegates rendering to `src/output/`.
 
-Versioned endpoints live under `/api/v1`. The router is assembled in
-`src/api/`, handlers extract an app state holding the store and return JSON.
-Middleware needs (CORS, tracing, request logging) are satisfied via
-`tower-http`.
+Rendering rules:
+
+- default output is a terminal table (`comfy-table`);
+- `--format json|csv` streams machine-readable data to stdout;
+- diagnostics and logs go to stderr.
+
+A web/HTTP interface is intentionally **not** part of the core; it would be a
+later optional add-on built on the same library surface and store.
 
 ## Data-flow example
 
@@ -182,7 +189,7 @@ Normalizer -------> Reconciliation/deduplication
       |              |
       +------+-------+
              v
-       Report / API
+   CLI output (table / json / csv)
 ```
 
 ## CPU and memory design
@@ -228,14 +235,14 @@ sample-count guard; a single snapshot is never treated as utilization evidence.
 Potential evolution without changing the collector contract:
 
 ```text
-SQLite     -> PostgreSQL
-in-process -> worker queue / task scheduler
-local data -> Prometheus/VictoriaMetrics integration
-single API -> API + collectors deployed remotely
+SQLite        -> PostgreSQL
+local process -> optional distributed collectors / worker queue
+local data    -> Prometheus/VictoriaMetrics integration
+CLI only      -> optional web UI/HTTP API add-on (later, non-core)
 ```
 
-A remote collector/agent should communicate outbound to the server where
-possible, minimizing inbound firewall requirements.
+If remote collectors or a server are ever introduced, they should communicate
+outbound where possible, minimizing inbound firewall requirements.
 
 ## Security boundaries
 
@@ -248,8 +255,8 @@ Rules:
 - scoped targets (targets validated by `validate_target`, unrestricted
   `0.0.0.0/0`-style scopes rejected);
 - explicit credential profiles;
-- secrets never returned through normal API responses;
+- secrets never exposed through CLI or API output;
 - subprocess arguments, never shell interpolation (Nmap/SSH commands built as
   `std::process`/`tokio::process` argument vectors);
-- discovery job audit records;
-- request limits and authorization before multi-user deployments.
+- discovery job audit records (stored job history surfaced by the CLI);
+- least-privilege and scoped operation for any future multi-user or web layer.

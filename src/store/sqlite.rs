@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, SqlitePool};
 
-use crate::domain::{Asset, DiscoveryJob, JobStatus, Observation, Service};
+use crate::domain::{Asset, Dependency, DiscoveryJob, JobStatus, Observation, Service};
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -67,6 +67,31 @@ impl ServiceRow {
             name: self.name,
             state: self.state,
             banner: self.banner,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct DependencyRow {
+    source_asset_id: String,
+    target_asset_id: String,
+    proto: String,
+    port: i64,
+    evidence_source: String,
+    confidence: f64,
+    confirmed: bool,
+}
+
+impl DependencyRow {
+    fn into_dependency(self) -> Dependency {
+        Dependency {
+            source_asset_id: self.source_asset_id,
+            target_asset_id: self.target_asset_id,
+            proto: self.proto,
+            port: self.port as u16,
+            evidence_source: self.evidence_source,
+            confidence: self.confidence as f32,
+            confirmed: self.confirmed,
         }
     }
 }
@@ -185,9 +210,24 @@ impl crate::store::traits::Store for SqliteStore {
                     .await
                     .context("inserting service")?;
                 }
-                Observation::Dependency(_)
-                | Observation::Capacity(_)
-                | Observation::MetricSample(_) => {
+                Observation::Dependency(dep) => {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO dependencies \
+                           (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    )
+                    .bind(&dep.source_asset_id)
+                    .bind(&dep.target_asset_id)
+                    .bind(&dep.proto)
+                    .bind(dep.port as i64)
+                    .bind(&dep.evidence_source)
+                    .bind(dep.confidence)
+                    .bind(dep.confirmed)
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting dependency")?;
+                }
+                Observation::Capacity(_) | Observation::MetricSample(_) => {
                     tracing::warn!("observation type not yet persisted");
                 }
             }
@@ -218,6 +258,32 @@ impl crate::store::traits::Store for SqliteStore {
         .await
         .context("fetching asset")?;
         Ok(row.map(AssetRow::into_asset))
+    }
+
+    async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>> {
+        let row = sqlx::query_as::<_, AssetRow>(
+            "SELECT id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen \
+             FROM assets WHERE ip = ?1",
+        )
+        .bind(ip)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching asset by ip")?;
+        Ok(row.map(AssetRow::into_asset))
+    }
+
+    async fn list_dependencies(&self) -> Result<Vec<Dependency>> {
+        let rows = sqlx::query_as::<_, DependencyRow>(
+            "SELECT source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed \
+             FROM dependencies ORDER BY source_asset_id, port",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing dependencies")?;
+        Ok(rows
+            .into_iter()
+            .map(DependencyRow::into_dependency)
+            .collect())
     }
 
     async fn list_services(&self, asset_id: &str) -> Result<Vec<Service>> {
@@ -261,6 +327,20 @@ impl crate::store::traits::Store for SqliteStore {
         .await
         .context("fetching discovery job")?;
         Ok(row.map(JobRow::into_job))
+    }
+
+    async fn finish_job(&self, id: &str, status: JobStatus, error: Option<String>) -> Result<()> {
+        sqlx::query(
+            "UPDATE discovery_jobs SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(status_as_str(status))
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(&error)
+        .execute(&self.pool)
+        .await
+        .context("finishing discovery job")?;
+        Ok(())
     }
 }
 

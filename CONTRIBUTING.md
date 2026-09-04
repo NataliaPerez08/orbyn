@@ -16,23 +16,29 @@ and testing are welcome.
    ```bash
    cargo build
    cargo test
-   cargo clippy -- -D warnings
+   cargo clippy --all-targets -- -D warnings
    ```
 
 ## Code conventions
 
 - Orbyn is a Rust project. It is not a Go project, and references to Go in
   older documentation are stale.
+- Orbyn is CLI-first. Every feature must be reachable (and testable) through a
+  subcommand. Add to the `Command` enum in `src/main.rs`, fetch data through
+  `crate::store::traits::Store`, and render through `crate::output`.
+- New subcommands default to table output and expose `--format table|json|csv`.
+  Logs go to stderr; sustained data goes to stdout.
 - Domain types live in `src/domain/`. Collectors normalize their output into
   `crate::domain::Observation`. No collector writes directly to the database.
 - Storage is behind `crate::store::traits::Store`; SQLite is the reference
   implementation under `src/store/sqlite.rs`.
-- Appearance of a new collector requires:
+- A new collector requires:
   - a `Collector` implementation returning normalized observations;
   - validation of targets (never shell-interpolate);
   - a fixture-backed test;
   - a database schema change only if the observation type is genuinely new.
-- `cargo fmt` must be clean and `cargo clippy -- -D warnings` must pass.
+- `cargo fmt` must be clean and `cargo clippy --all-targets -- -D warnings`
+  must pass.
 
 ## Security
 
