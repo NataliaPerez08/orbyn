@@ -6,7 +6,9 @@
 //!
 //! Read-only by default: collectors must not modify the systems they inspect.
 
+pub mod classify;
 pub mod nmap;
+pub mod snmp;
 pub mod types;
 
 pub use types::{Collector, ScanTarget, ScanTargetError};

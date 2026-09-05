@@ -31,7 +31,9 @@ src/
 ├── domain/               # normalized domain model
 ├── collectors/           # Collector trait + scanner adapters
 │   ├── types.rs          # Collector, ScanTarget, validation
-│   └── nmap.rs           # Nmap adapter (v0.1 milestone)
+│   ├── classify.rs       # device classification heuristics
+│   ├── nmap.rs           # Nmap adapter (v0.1 milestone)
+│   └── snmp.rs           # SNMP adapter (v0.2 milestone)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
 │   └── sqlite.rs         # SQLite via sqlx
@@ -82,6 +84,14 @@ MetricSample
 DiscoveryJob
 Observation
 ```
+
+Collectors normalize vendor-specific output into this model **and** enrich it:
+Nmap reports hosts, ports, OS matches, and the responding MAC address with its
+vendor; SNMP reports `sysDescr`/`sysName` plus the full interface table
+(`ifDescr`, `ifPhysAddress`, `ifMtu`, `ifOperStatus`). A classifier maps that
+evidence onto a small set of device classes (`server`, `network-device`,
+`printer`, ...). Inventory annotations (environment, owner, criticality, tags)
+are user metadata set through the CLI and preserved across re-discovery.
 
 This boundary is important. Nmap may call something a host and VMware may call
 it a VM, but assessment logic should operate on a normalized `Asset`. The domain
@@ -148,8 +158,19 @@ persisted `Dependency` edges with forward/reverse lookups.
 ### 6. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
-`services`, `export`, `graph`, `assess`) fetches data through the `Store`
-trait, computes results, and delegates rendering to `src/output/`.
+`asset`, `services`, `interfaces`, `jobs`, `annotate`, `import`, `export`,
+`graph`, `assess`) fetches data through the `Store` trait, computes results,
+and delegates rendering to `src/output/`.
+
+Inventory enrichment is a read/write CLI surface:
+
+- `orbyn asset <id-or-ip>` shows annotations, services and interfaces;
+- `orbyn annotate <id-or-ip> --environment --owner --criticality --tag`
+  applies user metadata that anchor migration planning;
+- `orbyn jobs` exposes discovery history with per-job outcomes (assets,
+  services, duration, status) for change tracking;
+- `orbyn import` and `orbyn export` provide inventory interchange hooks in
+  JSON and CSV.
 
 Rendering rules:
 

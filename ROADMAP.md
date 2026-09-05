@@ -22,13 +22,17 @@ Goal: produce a useful inventory from an authorized IP range, driven from the CL
 
 ## v0.2 — Inventory enrichment
 
-- SNMP collector.
+**Status:** implemented. Exit criterion met: the inventory is useful beyond raw
+port discovery.
+
+- SNMP collector (system + interface MIB walk via `snmpwalk`).
 - Interfaces and MAC addresses.
 - Device classification.
 - Environment, owner, criticality and tags.
-- Import/export hooks.
-- Discovery history and changes (job listing CLI).
-- TUI decision point.
+- Import/export hooks (`orbyn import` / enriched `orbyn export`).
+- Discovery history and changes (`orbyn jobs` CLI with per-job outcome).
+- TUI decision: no interactive TUI for v0.2; the CLI remains the product
+  surface. A TUI/web layer stays a possible later non-core add-on.
 
 **Exit criterion:** inventory is useful beyond raw port discovery.
 

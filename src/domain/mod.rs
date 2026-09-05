@@ -4,7 +4,9 @@
 //! graph, metrics and presentation layers operate on the domain model and must
 //! not care where an observation came from.
 
+use std::fmt;
 use std::net::IpAddr;
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,8 +20,124 @@ pub struct Asset {
     pub device_class: Option<String>,
     pub os_name: Option<String>,
     pub os_version: Option<String>,
+    /// Free-form environment label (e.g. `prod`, `staging`, `dr`).
+    pub environment: Option<String>,
+    /// Owning team or operator responsible for the asset.
+    pub owner: Option<String>,
+    /// Business criticality assigned to the asset.
+    pub criticality: Option<Criticality>,
+    /// Custom tags attached to the asset.
+    pub tags: Vec<String>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
+}
+
+/// A network interface observed on an asset.
+///
+/// Collectors report whatever they can see: SNMP walks the full `ifTable`,
+/// while Nmap only observes the responding MAC address and its vendor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Interface {
+    pub id: String,
+    pub asset_id: String,
+    pub name: Option<String>,
+    /// Normalized MAC address (lowercase `xx:xx:xx:xx:xx:xx`).
+    pub mac: Option<String>,
+    pub ip: Option<IpAddr>,
+    /// MAC vendor/OUI string when known.
+    pub vendor: Option<String>,
+    pub mtu: Option<u32>,
+    pub if_index: Option<u32>,
+    pub is_up: Option<bool>,
+}
+
+impl Interface {
+    /// Build an interface with a deterministic id derived from its identifying
+    /// attributes so re-observed interfaces reconcile to the same row.
+    pub fn new(asset_id: &str, name: Option<&str>, mac: Option<&str>, ip: Option<IpAddr>) -> Self {
+        Self {
+            id: interface_id(asset_id, name, mac, ip),
+            asset_id: asset_id.to_string(),
+            name: name.map(str::to_string),
+            mac: mac.map(normalize_mac),
+            ip,
+            vendor: None,
+            mtu: None,
+            if_index: None,
+            is_up: None,
+        }
+    }
+}
+
+/// Deterministic storage id for an interface.
+pub fn interface_id(
+    asset_id: &str,
+    name: Option<&str>,
+    mac: Option<&str>,
+    ip: Option<IpAddr>,
+) -> String {
+    let name = &name.unwrap_or_default().to_lowercase()[..];
+    let mac = &normalize_mac(mac.unwrap_or_default())[..];
+    let ip = &ip.map(|a| a.to_string()).unwrap_or_default()[..];
+    format!("{asset_id}--{name}--{mac}--{ip}")
+}
+
+/// Normalize a MAC address representation to lowercase `xx:xx:xx:xx:xx:xx`.
+///
+/// Accepts plain hex, dotted, and colon/dash separated forms (as returned by
+/// Nmap, SNMP `ifPhysAddress`, and ARP tables).
+pub fn normalize_mac(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_lowercase();
+    if cleaned.len() != 12 {
+        return raw.to_lowercase();
+    }
+    cleaned
+        .as_bytes()
+        .chunks(2)
+        .map(|b| std::str::from_utf8(b).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Business criticality used for inventory annotation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum Criticality {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl fmt::Display for Criticality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Criticality::Low => write!(f, "low"),
+            Criticality::Medium => write!(f, "medium"),
+            Criticality::High => write!(f, "high"),
+            Criticality::Critical => write!(f, "critical"),
+        }
+    }
+}
+
+impl FromStr for Criticality {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "low" => Ok(Criticality::Low),
+            "medium" | "med" => Ok(Criticality::Medium),
+            "high" => Ok(Criticality::High),
+            "critical" | "crit" => Ok(Criticality::Critical),
+            other => Err(format!(
+                "unknown criticality '{other}' (expected low|medium|high|critical)"
+            )),
+        }
+    }
 }
 
 /// A network service observed on an asset.
@@ -80,6 +198,13 @@ pub enum JobStatus {
     Failed,
 }
 
+/// Aggregate outcome recorded on a finished discovery job.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobOutcome {
+    pub assets_found: u32,
+    pub services_found: u32,
+}
+
 /// Metadata about a discovery run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveryJob {
@@ -90,6 +215,10 @@ pub struct DiscoveryJob {
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// Assets persisted by this job (None until the job finishes).
+    pub assets_found: Option<u32>,
+    /// Services persisted by this job (None until the job finishes).
+    pub services_found: Option<u32>,
 }
 
 /// A typed observation produced by a collector before normalization.
@@ -97,7 +226,35 @@ pub struct DiscoveryJob {
 pub enum Observation {
     Asset(Asset),
     Service(Service),
+    Interface(Interface),
     Capacity(Capacity),
     MetricSample(MetricSample),
     Dependency(Dependency),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_mac_formats() {
+        assert_eq!(normalize_mac("0011:2233:4455"), "00:11:22:33:44:55");
+        assert_eq!(normalize_mac("00-11-22-33-44-55"), "00:11:22:33:44:55");
+        assert_eq!(normalize_mac("00:11:22:33:44:55"), "00:11:22:33:44:55");
+        assert_eq!(normalize_mac("112233445566"), "11:22:33:44:55:66");
+    }
+
+    #[test]
+    fn criticality_round_trips() {
+        assert_eq!("high".parse::<Criticality>().unwrap(), Criticality::High);
+        assert_eq!(Criticality::Critical.to_string(), "critical");
+        assert!("nonsense".parse::<Criticality>().is_err());
+    }
+
+    #[test]
+    fn interface_id_is_deterministic_and_stable() {
+        let a = Interface::new("10-0-0-10", Some("eth0"), Some("00:11:22:33:44:55"), None);
+        let b = Interface::new("10-0-0-10", Some("eth0"), Some("00:11:22:33:44:55"), None);
+        assert_eq!(a.id, b.id);
+    }
 }

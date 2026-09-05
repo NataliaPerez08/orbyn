@@ -19,8 +19,9 @@ use quick_xml::Reader;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::domain::{Asset, Observation, Service};
+use crate::domain::{Asset, Interface, Observation, Service};
 
+use super::classify::classify_device;
 use super::types::{Collector, ScanTarget};
 
 pub struct NmapCollector {
@@ -131,6 +132,8 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
     let mut ip: Option<IpAddr> = None;
     let mut hostname: Option<String> = None;
     let mut os_name: Option<String> = None;
+    let mut mac: Option<String> = None;
+    let mut mac_vendor: Option<String> = None;
     let mut ports: Vec<Port> = Vec::new();
     let mut in_os_tag = false;
 
@@ -145,16 +148,18 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().as_ref() {
-                b"address" if ip.is_none() => {
-                    if matches!(
-                        get_attr(&e, b"addrtype")?.as_deref(),
-                        Some("ipv4") | Some("ipv6")
-                    ) {
+                b"address" => match get_attr(&e, b"addrtype")?.as_deref() {
+                    Some("ipv4") | Some("ipv6") if ip.is_none() => {
                         if let Some(raw) = get_attr(&e, b"addr")? {
                             ip = raw.parse().ok();
                         }
                     }
-                }
+                    Some("mac") if mac.is_none() => {
+                        mac = get_attr(&e, b"addr")?;
+                        mac_vendor = get_attr(&e, b"vendor")?;
+                    }
+                    _ => {}
+                },
                 b"hostname" if hostname.is_none() => {
                     hostname = get_attr(&e, b"name")?;
                 }
@@ -188,16 +193,46 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
 
     let now = Utc::now();
     let id = ip.to_string().replace(['.', ':'], "-");
+    let open_services: Vec<&str> = ports
+        .iter()
+        .filter(|p| p.state.as_deref() == Some("open"))
+        .filter_map(|p| p.name.as_deref())
+        .collect();
+    let device_class = classify_device(
+        os_name.as_deref(),
+        mac_vendor.as_deref(),
+        &open_services,
+        None,
+    );
+
     let mut observations = vec![Observation::Asset(Asset {
         id: id.clone(),
         ip,
         hostname,
-        device_class: None,
+        device_class,
         os_name,
         os_version: None,
+        environment: None,
+        owner: None,
+        criticality: None,
+        tags: Vec::new(),
         first_seen: now,
         last_seen: now,
     })];
+
+    if mac.is_some() {
+        observations.push(Observation::Interface(Interface {
+            id: crate::domain::interface_id(&id, None, mac.as_deref(), Some(ip)),
+            asset_id: id.clone(),
+            name: None,
+            mac: mac.as_deref().map(crate::domain::normalize_mac),
+            ip: Some(ip),
+            vendor: mac_vendor,
+            mtu: None,
+            if_index: None,
+            is_up: None,
+        }));
+    }
 
     for port in ports {
         if port.state.as_deref() != Some("open") {
@@ -264,6 +299,7 @@ mod tests {
 <host starttime="1700000000" endtime="1700000001">
 <status state="up" reason="syn-ack" reason_ttl="0"/>
 <address addr="10.0.0.10" addrtype="ipv4"/>
+<address addr="00:11:22:33:44:55" addrtype="mac" vendor="Intel"/>
 <hostnames>
 <hostname name="server-a.example.com" type="PTR"/>
 </hostnames>
@@ -312,6 +348,13 @@ mod tests {
                 _ => None,
             })
             .collect();
+        let interfaces: Vec<&Interface> = observations
+            .iter()
+            .filter_map(|o| match o {
+                Observation::Interface(i) => Some(i),
+                _ => None,
+            })
+            .collect();
 
         assert_eq!(assets.len(), 1, "down host must be skipped");
         let asset = assets[0];
@@ -319,6 +362,7 @@ mod tests {
         assert_eq!(asset.ip.to_string(), "10.0.0.10");
         assert_eq!(asset.hostname.as_deref(), Some("server-a.example.com"));
         assert_eq!(asset.os_name.as_deref(), Some("Linux 5.15.0-94-generic"));
+        assert_eq!(asset.device_class.as_deref(), Some("server"));
 
         assert_eq!(services.len(), 2, "filtered port must be excluded");
         let ssh = services.iter().find(|s| s.port == 22).expect("port 22");
@@ -330,6 +374,13 @@ mod tests {
         let web = services.iter().find(|s| s.port == 443).expect("port 443");
         assert_eq!(web.name.as_deref(), Some("https"));
         assert_eq!(web.banner.as_deref(), Some("nginx 1.18.0"));
+
+        assert_eq!(interfaces.len(), 1);
+        let iface = interfaces[0];
+        assert_eq!(iface.asset_id, "10-0-0-10");
+        assert_eq!(iface.mac.as_deref(), Some("00:11:22:33:44:55"));
+        assert_eq!(iface.vendor.as_deref(), Some("Intel"));
+        assert_eq!(iface.ip, Some("10.0.0.10".parse().unwrap()));
     }
 
     #[test]

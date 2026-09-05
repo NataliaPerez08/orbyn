@@ -27,8 +27,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P0** Parse Nmap XML fixtures (quick-xml).
 - [x] **P0** Normalize host/port/service observations.
 - [x] **P0** Persist/reconcile assets and services.
-- [ ] **P1** Job status and history CLI (`orbyn jobs`).
-- [ ] **P1** Asset detail command (`orbyn asset <id-or-ip>`).
+- [x] **P1** Job status and history CLI (`orbyn jobs`).
+- [x] **P1** Asset detail command (`orbyn asset <id-or-ip>`).
 - [x] **P1** Services command (`orbyn services <id-or-ip>`).
 - [x] **P1** CSV/JSON exports (`orbyn export`).
 - [x] **P1** Capture scan metadata and errors (job audit records).
@@ -37,8 +37,11 @@ added; today the product surface is `orbyn` subcommands.
 
 ## Inventory enrichment
 
-- [ ] **P1** SNMP collector.
-- [ ] **P1** Interfaces/MAC addresses.
+- [x] **P1** SNMP collector (system + interface MIB walk via snmpwalk).
+- [x] **P1** Interfaces/MAC addresses.
+- [x] **P1** Device classification.
+- [x] **P1** Environment, owner, criticality and tags (`orbyn annotate`).
+- [x] **P1** Import/export hooks (`orbyn import`).
 - [ ] **P1** SSH Linux collector.
 - [ ] **P1** WinRM Windows collector.
 - [ ] **P2** Virtualization metadata.

@@ -3,11 +3,17 @@
 //! Database schema lives in the top-level `migrations/` directory and is
 //! applied at startup through `sqlx::migrate!`.
 
-use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{FromRow, SqlitePool};
+use std::net::IpAddr;
 
-use crate::domain::{Asset, Dependency, DiscoveryJob, JobStatus, Observation, Service};
+use anyhow::{anyhow, Context, Result};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{FromRow, Row, SqlitePool};
+
+use crate::domain::{
+    Asset, Criticality, Dependency, DiscoveryJob, Interface, JobOutcome, JobStatus, Observation,
+    Service,
+};
+use crate::store::traits::AssetAnnotations;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -22,6 +28,10 @@ struct AssetRow {
     device_class: Option<String>,
     os_name: Option<String>,
     os_version: Option<String>,
+    environment: Option<String>,
+    owner: Option<String>,
+    criticality: Option<String>,
+    tags: String,
     first_seen: String,
     last_seen: String,
 }
@@ -38,12 +48,12 @@ impl AssetRow {
             device_class: self.device_class,
             os_name: self.os_name,
             os_version: self.os_version,
-            first_seen: chrono::DateTime::parse_from_rfc3339(&self.first_seen)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now()),
-            last_seen: chrono::DateTime::parse_from_rfc3339(&self.last_seen)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now()),
+            environment: self.environment,
+            owner: self.owner,
+            criticality: self.criticality.and_then(|c| c.parse::<Criticality>().ok()),
+            tags: serde_json::from_str(&self.tags).unwrap_or_default(),
+            first_seen: parse_ts(&self.first_seen),
+            last_seen: parse_ts(&self.last_seen),
         }
     }
 }
@@ -67,6 +77,35 @@ impl ServiceRow {
             name: self.name,
             state: self.state,
             banner: self.banner,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct InterfaceRow {
+    id: String,
+    asset_id: String,
+    name: Option<String>,
+    mac: Option<String>,
+    ip: Option<String>,
+    vendor: Option<String>,
+    mtu: Option<i64>,
+    if_index: Option<i64>,
+    is_up: Option<bool>,
+}
+
+impl InterfaceRow {
+    fn into_interface(self) -> Interface {
+        Interface {
+            id: self.id,
+            asset_id: self.asset_id,
+            name: self.name,
+            mac: self.mac,
+            ip: self.ip.and_then(|ip| ip.parse::<IpAddr>().ok()),
+            vendor: self.vendor,
+            mtu: self.mtu.map(|m| m as u32),
+            if_index: self.if_index.map(|i| i as u32),
+            is_up: self.is_up,
         }
     }
 }
@@ -105,6 +144,8 @@ struct JobRow {
     started_at: String,
     finished_at: Option<String>,
     error: Option<String>,
+    assets_found: Option<i64>,
+    services_found: Option<i64>,
 }
 
 impl JobRow {
@@ -119,17 +160,19 @@ impl JobRow {
                 "failed" => JobStatus::Failed,
                 _ => JobStatus::Pending,
             },
-            started_at: chrono::DateTime::parse_from_rfc3339(&self.started_at)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now()),
-            finished_at: self.finished_at.and_then(|ts| {
-                chrono::DateTime::parse_from_rfc3339(&ts)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .ok()
-            }),
+            started_at: parse_ts(&self.started_at),
+            finished_at: self.finished_at.as_deref().map(parse_ts),
             error: self.error,
+            assets_found: self.assets_found.map(|v| v as u32),
+            services_found: self.services_found.map(|v| v as u32),
         }
     }
+}
+
+fn parse_ts(ts: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now())
 }
 
 impl SqliteStore {
@@ -180,15 +223,21 @@ impl crate::store::traits::Store for SqliteStore {
                 Observation::Asset(asset) => {
                     let ip = asset.ip.to_string();
                     sqlx::query(
-                        "INSERT INTO assets (id, ip, hostname, first_seen, last_seen) \
-                         VALUES (?1, ?2, ?3, ?4, ?4) \
+                        "INSERT INTO assets (id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) \
                          ON CONFLICT(ip) DO UPDATE SET \
                            hostname = COALESCE(excluded.hostname, assets.hostname), \
+                           device_class = COALESCE(excluded.device_class, assets.device_class), \
+                           os_name = COALESCE(excluded.os_name, assets.os_name), \
+                           os_version = COALESCE(excluded.os_version, assets.os_version), \
                            last_seen = excluded.last_seen",
                     )
                     .bind(&asset.id)
                     .bind(&ip)
                     .bind(&asset.hostname)
+                    .bind(&asset.device_class)
+                    .bind(&asset.os_name)
+                    .bind(&asset.os_version)
                     .bind(asset.first_seen.to_rfc3339())
                     .execute(&mut *tx)
                     .await
@@ -209,6 +258,29 @@ impl crate::store::traits::Store for SqliteStore {
                     .execute(&mut *tx)
                     .await
                     .context("inserting service")?;
+                }
+                Observation::Interface(interface) => {
+                    sqlx::query(
+                        "INSERT INTO asset_interfaces (id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                         ON CONFLICT(id) DO UPDATE SET \
+                           name = COALESCE(excluded.name, asset_interfaces.name), \
+                           vendor = COALESCE(excluded.vendor, asset_interfaces.vendor), \
+                           mtu = COALESCE(excluded.mtu, asset_interfaces.mtu), \
+                           is_up = COALESCE(excluded.is_up, asset_interfaces.is_up)",
+                    )
+                    .bind(&interface.id)
+                    .bind(&interface.asset_id)
+                    .bind(&interface.name)
+                    .bind(&interface.mac)
+                    .bind(interface.ip.map(|ip| ip.to_string()))
+                    .bind(&interface.vendor)
+                    .bind(interface.mtu.map(|m| m as i64))
+                    .bind(interface.if_index.map(|i| i as i64))
+                    .bind(interface.is_up)
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting interface")?;
                 }
                 Observation::Dependency(dep) => {
                     sqlx::query(
@@ -239,7 +311,8 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn list_assets(&self) -> Result<Vec<Asset>> {
         let rows = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+                    environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets ORDER BY ip",
         )
         .fetch_all(&self.pool)
@@ -250,7 +323,8 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+                    environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets WHERE id = ?1",
         )
         .bind(id)
@@ -262,7 +336,8 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+                    environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets WHERE ip = ?1",
         )
         .bind(ip)
@@ -298,11 +373,74 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(ServiceRow::into_service).collect())
     }
 
+    async fn list_interfaces(&self, asset_id: &str) -> Result<Vec<Interface>> {
+        let rows = sqlx::query_as::<_, InterfaceRow>(
+            "SELECT id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up \
+             FROM asset_interfaces WHERE asset_id = ?1 ORDER BY if_index, name",
+        )
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing interfaces")?;
+        Ok(rows.into_iter().map(InterfaceRow::into_interface).collect())
+    }
+
+    async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()> {
+        let row =
+            sqlx::query("SELECT environment, owner, criticality, tags FROM assets WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .context("fetching asset for annotation")?
+                .ok_or_else(|| anyhow!("no asset matches '{id}'"))?;
+
+        let current_tags: Vec<String> = row
+            .try_get::<String, _>("tags")
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+
+        let mut tags = current_tags;
+        tags.retain(|t| !annotations.remove_tags.iter().any(|r| r == t));
+        for tag in &annotations.add_tags {
+            if !tags.contains(tag) {
+                tags.push(tag.clone());
+            }
+        }
+
+        let environment = match annotations.environment {
+            Some(v) => Some(v),
+            None => row.try_get("environment")?,
+        };
+        let owner = match annotations.owner {
+            Some(v) => Some(v),
+            None => row.try_get("owner")?,
+        };
+        let criticality: Option<String> = match annotations.criticality {
+            Some(c) => Some(c.to_string()),
+            None => row.try_get("criticality")?,
+        };
+
+        sqlx::query(
+            "UPDATE assets SET environment = ?2, owner = ?3, criticality = ?4, tags = ?5 \
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(&environment)
+        .bind(&owner)
+        .bind(&criticality)
+        .bind(serde_json::to_string(&tags)?)
+        .execute(&self.pool)
+        .await
+        .context("annotating asset")?;
+        Ok(())
+    }
+
     async fn create_job(&self, job: DiscoveryJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO discovery_jobs \
-               (id, collector, targets, status, started_at, finished_at, error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+               (id, collector, targets, status, started_at, finished_at, error, assets_found, services_found) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(&job.id)
         .bind(&job.collector)
@@ -311,6 +449,8 @@ impl crate::store::traits::Store for SqliteStore {
         .bind(job.started_at.to_rfc3339())
         .bind(job.finished_at.map(|ts| ts.to_rfc3339()))
         .bind(&job.error)
+        .bind(job.assets_found.map(|n| n as i64))
+        .bind(job.services_found.map(|n| n as i64))
         .execute(&self.pool)
         .await
         .context("creating discovery job")?;
@@ -319,7 +459,8 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_job(&self, id: &str) -> Result<Option<DiscoveryJob>> {
         let row = sqlx::query_as::<_, JobRow>(
-            "SELECT id, collector, targets, status, started_at, finished_at, error \
+            "SELECT id, collector, targets, status, started_at, finished_at, error, \
+                    assets_found, services_found \
              FROM discovery_jobs WHERE id = ?1",
         )
         .bind(id)
@@ -329,14 +470,44 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(JobRow::into_job))
     }
 
-    async fn finish_job(&self, id: &str, status: JobStatus, error: Option<String>) -> Result<()> {
+    async fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<DiscoveryJob>> {
+        let mut sql = String::from(
+            "SELECT id, collector, targets, status, started_at, finished_at, error, \
+                    assets_found, services_found \
+             FROM discovery_jobs ORDER BY started_at DESC",
+        );
+        if let Some(limit) = limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
+        let rows = sqlx::query_as::<_, JobRow>(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .context("listing discovery jobs")?;
+        Ok(rows.into_iter().map(JobRow::into_job).collect())
+    }
+
+    async fn finish_job(
+        &self,
+        id: &str,
+        status: JobStatus,
+        error: Option<String>,
+        outcome: Option<JobOutcome>,
+    ) -> Result<()> {
+        let assets_found = outcome.map(|o| o.assets_found as i64);
+        let services_found = outcome.map(|o| o.services_found as i64);
         sqlx::query(
-            "UPDATE discovery_jobs SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+            "UPDATE discovery_jobs \
+             SET status = ?2, finished_at = ?3, error = ?4, \
+                 assets_found = COALESCE(?5, assets_found), \
+                 services_found = COALESCE(?6, services_found) \
+             WHERE id = ?1",
         )
         .bind(id)
         .bind(status_as_str(status))
         .bind(chrono::Utc::now().to_rfc3339())
         .bind(&error)
+        .bind(assets_found)
+        .bind(services_found)
         .execute(&self.pool)
         .await
         .context("finishing discovery job")?;

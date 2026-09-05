@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v0.1 bootstrap, CLI focus.
+> **Status:** Early development — v0.2 inventory enrichment, CLI focus.
 
 ## Why Orbyn?
 
@@ -136,20 +136,28 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 The repository currently provides:
 
 * Rust crate scaffold (single binary, CLI-first).
-* CLI commands: `discover`, `assets`, `services`, `export`, `graph`, `assess`.
+* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `jobs`, `annotate`, `import`, `export`, `graph`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
-* Initial asset, service, discovery job, capacity, dependency and metric sample domain model.
-* Schema reserved for CPU/RAM capacity and utilization (`asset_capacity`, `metric_samples`, `dependencies`).
+* Asset, service, interface and discovery job domain model, with capacity,
+  dependency and metric-sample tables reserved for upcoming milestones.
 * Collector framework with target validation (unrestricted scopes rejected).
-* Nmap collector adapter (executes `nmap`, parses XML output, records discovery jobs).
-* Discovery job history and audit records.
-* Initial architecture documentation.
-* Roadmap and backlog.
+* Nmap collector adapter (executes `nmap`, parses XML output, records
+  discovery jobs, classifies device type, captures the responding MAC and
+  vendor).
+* SNMP collector adapter (walks the system and interface MIBs via
+  `snmpwalk`, derives hostname/OS/device class, and collects interface MACs,
+  MTU and operational state).
+* Device classification (server / network-device / printer / storage / …).
+* Inventory annotations: environment, owner, criticality and tags
+  (`orbyn annotate`), preserved across re-discovery.
+* Import/export hooks in JSON and CSV (`orbyn import`, `orbyn export`).
+* Discovery job history CLI (`orbyn jobs`) with per-job outcomes.
+* Rich asset detail command (`orbyn asset <id-or-ip>`).
+* Architecture documentation, roadmap and backlog.
 
-The next functional milestones are richer OS/service fingerprinting from
-Nmap XML, job-history CLI (`orbyn jobs`), and a dedicated asset detail
-command.
+The next functional milestone is host-level discovery via SSH and WinRM
+(v0.3), which builds on the collector framework and annotation model.
 
 ## Requirements
 
@@ -158,6 +166,7 @@ Current development requirements:
 * Rust 1.75+ (via [rustup](https://rustup.rs))
 * A C toolchain for the bundled SQLite build (standard for Rust SQLite drivers)
 * Nmap for network discovery
+* net-snmp-utils (`snmpwalk`) for SNMP discovery
 
 No other external services are required.
 
@@ -183,9 +192,16 @@ Point any command at a different database with `--db <path>` (or `ORBYN_DB`).
 ## CLI reference
 
 ```text
-orbyn discover --target <cidr>     Scan a subnet with Nmap and persist inventory
+orbyn discover --target <cidr>                    Scan a subnet with Nmap and persist inventory
+orbyn discover --target <ip> --collector snmp     Walk a host over SNMP (sysDescr + interfaces)
 orbyn assets [--format table|json|csv]
+orbyn asset <id-or-ip> [--format ...]             Full asset record: annotations, services, interfaces
 orbyn services <id-or-ip> [--format ...]
+orbyn interfaces <id-or-ip> [--format ...]
+orbyn annotate <id-or-ip> --environment prod --owner <team> \
+    --criticality high --tag core --remove-tag dr  Enrich inventory metadata
+orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
+orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
 orbyn export [--format json|csv] [--output <file>]
 orbyn graph [--format ...]
 orbyn assess [--format ...]
@@ -194,17 +210,29 @@ orbyn assess [--format ...]
 Example session:
 
 ```bash
-# scan an authorized subnet
+# scan an authorized subnet with Nmap
 orbyn discover --target 10.0.0.0/24
+
+# walk a single switch over SNMP (needs an authorized community string)
+orbyn discover --target 10.0.0.8 --collector snmp --community public
 
 # inspect what was found
 orbyn assets
+orbyn asset 10.0.0.10          # full record incl. interfaces and tags
 orbyn services 10.0.0.10
-orbyn services <asset-id>
+orbyn interfaces 10.0.0.10
+
+# enrich the inventory (metadata is preserved across re-discovery)
+orbyn annotate 10.0.0.10 --environment prod --owner platform \
+    --criticality high --tag core --tag api
+
+# discovery history and change tracking
+orbyn jobs
 
 # machine-readable inventory
 orbyn assets --format json
 orbyn export --format csv --output inventory.csv
+orbyn import --format csv --file inventory.csv
 
 # dependency graph (v0.4)
 orbyn graph
@@ -224,6 +252,8 @@ clean for piping.
 | `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path |
 | `ORBYN_LOG`  | `orbyn=warn`      | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
+| `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
+| `ORBYN_SNMP_COMMUNITY` | `public`  | Default SNMP v1/v2c community string |
 
 ## Repository layout
 
@@ -236,6 +266,9 @@ orbyn/
 │   ├── config.rs                # env/flag-based configuration
 │   ├── assessment/              # migration assessment
 │   ├── collectors/              # discovery collectors
+│   │   ├── classify.rs          # device classification
+│   │   ├── nmap.rs              # Nmap adapter
+│   │   └── snmp.rs              # SNMP adapter
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
 │   ├── metrics/                 # capacity/utilization processing
@@ -460,9 +493,9 @@ See [SECURITY.md](SECURITY.md).
 The project will evolve incrementally:
 
 ```text
-v0.1    Network discovery
+v0.1    Network discovery          (done)
           ↓
-v0.2    Inventory enrichment
+v0.2    Inventory enrichment       (done)
           ↓
 v0.3    Host discovery via SSH / WinRM
           ↓
