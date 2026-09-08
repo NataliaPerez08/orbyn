@@ -29,11 +29,15 @@ src/
 ├── lib.rs                # library surface
 ├── config.rs             # env/flag-based configuration
 ├── domain/               # normalized domain model
+├── parsing.rs            # shared text parsing (CSV lines, ### sections)
 ├── collectors/           # Collector trait + scanner adapters
-│   ├── types.rs          # Collector, ScanTarget, validation
+│   ├── types.rs          # Collector, ScanTarget, CpuFacts, validation
+│   ├── credentials.rs    # CredentialProfile (no stored secrets)
 │   ├── classify.rs       # device classification heuristics
 │   ├── nmap.rs           # Nmap adapter (v0.1 milestone)
-│   └── snmp.rs           # SNMP adapter (v0.2 milestone)
+│   ├── snmp.rs           # SNMP adapter (v0.2 milestone)
+│   ├── ssh.rs            # SSH transport + Linux host collector (v0.3)
+│   └── windows.rs        # Windows host collector over PowerShell (v0.3)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
 │   └── sqlite.rs         # SQLite via sqlx
@@ -68,6 +72,14 @@ tables. They implement the `Collector` trait, which requires:
 - read-only behavior;
 - subprocess targets passed as argument vectors, never shell strings.
 
+Host-level collectors (v0.3) authenticate through a **credential profile**
+(`src/collectors/credentials.rs`): a login user, a port and an optional
+identity-file path. Orbyn deliberately stores no credentials — authentication
+is delegated to ssh-agent or the referenced key, so secret material never
+passes through the CLI, logs or database. The Linux and Windows collectors
+share one `SshTransport`; a native WinRM transport can implement the same
+command contract later without touching parsing or the store.
+
 ### 2. Normalization layer
 
 The normalization layer translates vendor/tool-specific observations into Orbyn
@@ -78,6 +90,8 @@ Asset
 Interface
 Address
 Service
+Filesystem
+RunningService
 Dependency
 Capacity
 MetricSample
@@ -158,9 +172,10 @@ persisted `Dependency` edges with forward/reverse lookups.
 ### 6. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
-`asset`, `services`, `interfaces`, `jobs`, `annotate`, `import`, `export`,
-`graph`, `assess`) fetches data through the `Store` trait, computes results,
-and delegates rendering to `src/output/`.
+`asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`,
+`jobs`, `annotate`, `import`, `export`, `graph`, `assess`) fetches data
+through the `Store` trait, computes results, and delegates rendering to
+`src/output/`.
 
 Inventory enrichment is a read/write CLI surface:
 

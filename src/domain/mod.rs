@@ -175,6 +175,30 @@ pub struct Capacity {
     pub collected_at: DateTime<Utc>,
 }
 
+/// A mounted filesystem observed on an asset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Filesystem {
+    pub asset_id: String,
+    pub device: Option<String>,
+    /// Mount point (Linux) or drive letter (Windows, e.g. `C:`).
+    pub mount: String,
+    pub fs_type: Option<String>,
+    pub size_kb: u64,
+    pub used_kb: Option<u64>,
+    pub available_kb: Option<u64>,
+    pub used_pct: Option<u32>,
+}
+
+/// A host-level running service observed on an asset (systemd unit on Linux,
+/// service on Windows). Distinct from network [`Service`] port observations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunningService {
+    pub asset_id: String,
+    pub name: String,
+    pub state: Option<String>,
+    pub description: Option<String>,
+}
+
 /// A single observation of resource utilization. Always a snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MetricSample {
@@ -228,6 +252,8 @@ pub enum Observation {
     Service(Service),
     Interface(Interface),
     Capacity(Capacity),
+    Filesystem(Filesystem),
+    RunningService(RunningService),
     MetricSample(MetricSample),
     Dependency(Dependency),
 }

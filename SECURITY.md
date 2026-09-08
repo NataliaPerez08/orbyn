@@ -19,9 +19,12 @@ or authorization service and must not be used as one.
   through a shell.
 - Credentials are never exposed through CLI or API output and are never
   logged.
-- Orbyn avoids storing credentials whenever possible. When credential storage
-  becomes necessary (v0.3 SSH/WinRM collectors), credentials must be encrypted
-  at rest and stored in an explicit credential profile.
+- Orbyn avoids storing credentials whenever possible. The v0.3 host-level
+  collectors store **no credentials at all**: authentication is delegated to
+  ssh-agent or a user-referenced identity file through a credential profile
+  (login user, port, key path). If password-based collection is ever added,
+  those credentials must be encrypted at rest in an explicit credential
+  profile and never passed through CLI arguments or logs.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
 

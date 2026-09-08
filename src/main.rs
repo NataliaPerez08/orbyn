@@ -6,12 +6,16 @@ use chrono::Utc;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 use orbyn::assessment::{assess, AssessmentReport, Finding, Severity};
+use orbyn::collectors::credentials::CredentialProfile;
 use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
+use orbyn::collectors::ssh::LinuxCollector;
+use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
 use orbyn::config::Config;
 use orbyn::domain::{Asset, Criticality, DiscoveryJob, JobOutcome, JobStatus, Observation};
 use orbyn::output::{Format, Inventory};
+use orbyn::parsing::split_csv_line;
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
 use orbyn::store::Store;
@@ -39,6 +43,8 @@ struct Cli {
 enum DiscoveryCollector {
     Nmap,
     Snmp,
+    Ssh,
+    Windows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -49,9 +55,10 @@ enum ImportFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Discover assets in a CIDR range (Nmap) or walk a single host (SNMP).
+    /// Discover assets in a CIDR range (Nmap) or collect a single host
+    /// (SNMP walk, SSH Linux probe, or Windows PowerShell probe over SSH).
     Discover {
-        /// Target IP or CIDR range, e.g. 10.0.0.0/24.
+        /// Target IP or CIDR range, e.g. 10.0.0.0/24 (single IP for snmp/ssh/windows).
         #[arg(long)]
         target: String,
         /// Collector adapter to run.
@@ -66,6 +73,15 @@ enum Command {
         /// SNMP agent UDP port.
         #[arg(long, default_value_t = 161)]
         snmp_port: u16,
+        /// SSH login user for ssh/windows collectors (default: current user).
+        #[arg(long)]
+        user: Option<String>,
+        /// SSH port for ssh/windows collectors.
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// SSH identity (private key) file for ssh/windows collectors.
+        #[arg(long)]
+        identity_file: Option<PathBuf>,
         /// Output format for the resulting inventory.
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
@@ -116,6 +132,30 @@ enum Command {
 
     /// List interfaces observed on an asset (by ID or IP).
     Interfaces {
+        /// Asset ID or IP address.
+        asset: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// Show CPU/RAM capacity recorded for an asset (by ID or IP).
+    Capacity {
+        /// Asset ID or IP address.
+        asset: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// List filesystems observed on an asset (by ID or IP).
+    Disks {
+        /// Asset ID or IP address.
+        asset: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// List running host services observed on an asset (by ID or IP).
+    HostServices {
         /// Asset ID or IP address.
         asset: String,
         #[arg(long, value_enum, default_value_t = Format::Table)]
@@ -178,10 +218,14 @@ async fn main() -> anyhow::Result<()> {
             community,
             snmp_version,
             snmp_port,
+            user,
+            port,
+            identity_file,
         } => {
             let store = SqliteStore::open(&config.db_path).await?;
             let scan_target = validate_target(&target).map_err(|e| anyhow!(e.to_string()))?;
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
+            let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
 
             let collector: Box<dyn Collector> = match collector {
                 DiscoveryCollector::Nmap => Box::new(NmapCollector::new()),
@@ -190,6 +234,8 @@ async fn main() -> anyhow::Result<()> {
                     version,
                     snmp_port,
                 )),
+                DiscoveryCollector::Ssh => Box::new(LinuxCollector::new(profile)),
+                DiscoveryCollector::Windows => Box::new(WindowsCollector::new(profile)),
             };
 
             discover(&store, &scan_target, collector.as_ref()).await?;
@@ -204,12 +250,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Asset { asset, format } => {
             let store = SqliteStore::open(&config.db_path).await?;
             let asset = resolve_asset(&store, &asset).await?;
-            let services = store.list_services(&asset.id).await?;
-            let ifaces = store.list_interfaces(&asset.id).await?;
-            print!(
-                "{}",
-                orbyn::output::asset_detail(&asset, &services, &ifaces, format)
-            );
+            let rendered = render_asset_detail(&store, &asset, format).await?;
+            print!("{rendered}");
         }
         Command::Annotate {
             asset,
@@ -239,12 +281,8 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             let updated = store.get_asset(&asset.id).await?.expect("asset exists");
-            let services = store.list_services(&updated.id).await?;
-            let ifaces = store.list_interfaces(&updated.id).await?;
-            print!(
-                "{}",
-                orbyn::output::asset_detail(&updated, &services, &ifaces, format)
-            );
+            let rendered = render_asset_detail(&store, &updated, format).await?;
+            print!("{rendered}");
         }
         Command::Services { asset, format } => {
             let store = SqliteStore::open(&config.db_path).await?;
@@ -257,6 +295,24 @@ async fn main() -> anyhow::Result<()> {
             let asset = resolve_asset(&store, &asset).await?;
             let ifaces = store.list_interfaces(&asset.id).await?;
             print!("{}", orbyn::output::interfaces(&ifaces, format));
+        }
+        Command::Capacity { asset, format } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let asset = resolve_asset(&store, &asset).await?;
+            let capacity = store.get_capacity(&asset.id).await?;
+            print!("{}", orbyn::output::capacity(capacity.as_ref(), format));
+        }
+        Command::Disks { asset, format } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let asset = resolve_asset(&store, &asset).await?;
+            let filesystems = store.list_filesystems(&asset.id).await?;
+            print!("{}", orbyn::output::filesystems(&filesystems, format));
+        }
+        Command::HostServices { asset, format } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let asset = resolve_asset(&store, &asset).await?;
+            let running = store.list_running_services(&asset.id).await?;
+            print!("{}", orbyn::output::running_services(&running, format));
         }
         Command::Jobs { limit, format } => {
             let store = SqliteStore::open(&config.db_path).await?;
@@ -364,6 +420,14 @@ async fn discover(
                 .iter()
                 .filter(|o| matches!(o, Observation::Service(_)))
                 .count();
+            let filesystems = observations
+                .iter()
+                .filter(|o| matches!(o, Observation::Filesystem(_)))
+                .count();
+            let running = observations
+                .iter()
+                .filter(|o| matches!(o, Observation::RunningService(_)))
+                .count();
             store.store_observations(observations).await?;
             store
                 .finish_job(
@@ -378,8 +442,8 @@ async fn discover(
                 .await?;
             tracing::info!(job = %job.id, assets, services, "discovery complete");
             eprintln!(
-                "Discovery job {} complete: {} assets, {} services.",
-                job.id, assets, services
+                "Discovery job {} complete: {} assets, {} services, {} filesystems, {} running services.",
+                job.id, assets, services, filesystems, running
             );
             Ok(())
         }
@@ -401,6 +465,24 @@ async fn resolve_asset(store: &SqliteStore, key: &str) -> Result<Asset> {
             .await?
             .ok_or_else(|| anyhow!("no asset matches '{key}'")),
     }
+}
+
+/// Fetch every asset facet from the store and render the composite detail.
+async fn render_asset_detail(store: &SqliteStore, asset: &Asset, format: Format) -> Result<String> {
+    let services = store.list_services(&asset.id).await?;
+    let ifaces = store.list_interfaces(&asset.id).await?;
+    let capacity = store.get_capacity(&asset.id).await?;
+    let filesystems = store.list_filesystems(&asset.id).await?;
+    let running = store.list_running_services(&asset.id).await?;
+    Ok(orbyn::output::asset_detail(
+        asset,
+        &services,
+        &ifaces,
+        capacity.as_ref(),
+        &filesystems,
+        &running,
+        format,
+    ))
 }
 
 /// An asset row accepted by `orbyn import`.
@@ -536,7 +618,7 @@ fn parse_import_csv(input: &str) -> Result<Vec<ImportedAsset>> {
         if line.starts_with("id,ip") {
             continue; // column header
         }
-        let fields = csv_fields(line);
+        let fields = split_csv_line(line);
         // Accept both the 12-column export and a compact 7-column import form.
         let (
             ip,
@@ -625,29 +707,6 @@ fn opt(value: String) -> Option<String> {
     } else {
         Some(value)
     }
-}
-
-/// Split a CSV line into fields, honoring double-quote escaping.
-fn csv_fields(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' if in_quotes && chars.peek() == Some(&'"') => {
-                current.push('"');
-                chars.next();
-            }
-            '"' => in_quotes = !in_quotes,
-            ',' if !in_quotes => {
-                fields.push(std::mem::take(&mut current));
-            }
-            _ => current.push(c),
-        }
-    }
-    fields.push(current);
-    fields
 }
 
 fn read_input(file: Option<&PathBuf>) -> Result<String> {

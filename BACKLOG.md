@@ -42,10 +42,10 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Device classification.
 - [x] **P1** Environment, owner, criticality and tags (`orbyn annotate`).
 - [x] **P1** Import/export hooks (`orbyn import`).
-- [ ] **P1** SSH Linux collector.
-- [ ] **P1** WinRM Windows collector.
+- [x] **P1** SSH Linux collector.
+- [ ] **P1** WinRM Windows collector (native WS-Man transport; v0.3 covers Windows hosts via PowerShell-over-SSH).
 - [ ] **P2** Virtualization metadata.
-- [ ] **P2** Disk/filesystem inventory.
+- [x] **P2** Disk/filesystem inventory.
 
 ## Dependencies
 
@@ -59,8 +59,8 @@ added; today the product surface is `orbyn` subcommands.
 
 ## CPU/RAM and right-sizing
 
-- [ ] **P1** Linux CPU/RAM capacity collector.
-- [ ] **P1** Windows CPU/RAM capacity collector.
+- [x] **P1** Linux CPU/RAM capacity collector.
+- [x] **P1** Windows CPU/RAM capacity collector (PowerShell-over-SSH).
 - [ ] **P1** Resource snapshot collector.
 - [ ] **P1** Periodic metric sampling.
 - [ ] **P1** p95/p99 aggregation.
@@ -75,7 +75,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P0** Document authorized-use requirement.
 - [x] **P0** Prevent unrestricted `0.0.0.0/0` scans by default.
 - [x] **P0** Ensure scan targets are passed as process arguments, never shell strings.
-- [ ] **P1** Credential storage design (needed for SSH/WinRM collectors).
+- [x] **P1** Credential storage design (v0.3 decision: no credential storage; ssh-agent/identity-file credential profiles, no secrets held or logged).
 - [ ] **P1** Secret redaction.
 - [ ] **P1** Threat model.
 - [ ] **P2** RBAC (only if a web/server layer is introduced).

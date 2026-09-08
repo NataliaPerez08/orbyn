@@ -7,10 +7,14 @@
 //! Read-only by default: collectors must not modify the systems they inspect.
 
 pub mod classify;
+pub mod credentials;
 pub mod nmap;
 pub mod snmp;
+pub mod ssh;
 pub mod types;
+pub mod windows;
 
+pub use credentials::CredentialProfile;
 pub use types::{Collector, ScanTarget, ScanTargetError};
 
 /// Validate a discovery target expression (IPv4, IPv6, or CIDR).

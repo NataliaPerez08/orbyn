@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v0.2 inventory enrichment, CLI focus.
+> **Status:** Early development — v0.3 host-level discovery, CLI focus.
 
 ## Why Orbyn?
 
@@ -136,7 +136,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 The repository currently provides:
 
 * Rust crate scaffold (single binary, CLI-first).
-* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `jobs`, `annotate`, `import`, `export`, `graph`, `assess`.
+* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `jobs`, `annotate`, `import`, `export`, `graph`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
 * Asset, service, interface and discovery job domain model, with capacity,
@@ -154,10 +154,19 @@ The repository currently provides:
 * Import/export hooks in JSON and CSV (`orbyn import`, `orbyn export`).
 * Discovery job history CLI (`orbyn jobs`) with per-job outcomes.
 * Rich asset detail command (`orbyn asset <id-or-ip>`).
+* Host-level discovery (v0.3):
+  * SSH collector for Linux (OS, kernel, hostname, CPU/RAM capacity,
+    filesystem inventory, running systemd services) via the `ssh` binary.
+  * Windows collector (OS, CPU, RAM, disks, running services) running
+    read-only PowerShell CIM queries over the Windows OpenSSH Server.
+  * Credential profile abstraction: ssh-agent / identity-file authentication,
+    no credentials stored or logged.
+  * `orbyn capacity`, `orbyn disks`, `orbyn host-services` commands; the
+    asset detail view shows every recorded facet.
 * Architecture documentation, roadmap and backlog.
 
-The next functional milestone is host-level discovery via SSH and WinRM
-(v0.3), which builds on the collector framework and annotation model.
+The next functional milestone is dependency mapping (v0.4): active connection
+observations, DNS evidence and the dependency graph model.
 
 ## Requirements
 
@@ -167,8 +176,13 @@ Current development requirements:
 * A C toolchain for the bundled SQLite build (standard for Rust SQLite drivers)
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
+* An OpenSSH client (`ssh`) for host-level collection
 
-No other external services are required.
+Host-level collection uses key-based authentication (ssh-agent or
+`--identity-file`); passwords are never passed through the CLI or stored.
+Windows hosts need the OpenSSH Server optional feature and PowerShell 3+
+(`Get-CimInstance`). A native WinRM transport is planned on the same
+credential profile abstraction (see ROADMAP.md).
 
 ## Install & run locally
 
@@ -194,10 +208,15 @@ Point any command at a different database with `--db <path>` (or `ORBYN_DB`).
 ```text
 orbyn discover --target <cidr>                    Scan a subnet with Nmap and persist inventory
 orbyn discover --target <ip> --collector snmp     Walk a host over SNMP (sysDescr + interfaces)
+orbyn discover --target <ip> --collector ssh      Probe a Linux host over SSH (OS, CPU, RAM, disks, units)
+orbyn discover --target <ip> --collector windows  Probe a Windows host (PowerShell over OpenSSH)
 orbyn assets [--format table|json|csv]
-orbyn asset <id-or-ip> [--format ...]             Full asset record: annotations, services, interfaces
-orbyn services <id-or-ip> [--format ...]
+orbyn asset <id-or-ip> [--format ...]             Full record: annotations, interfaces, capacity, disks, units
+orbyn services <id-or-ip> [--format ...]          Network services (ports)
 orbyn interfaces <id-or-ip> [--format ...]
+orbyn capacity <id-or-ip> [--format ...]          CPU/RAM capacity
+orbyn disks <id-or-ip> [--format ...]             Filesystem inventory
+orbyn host-services <id-or-ip> [--format ...]     Running host services (systemd units / Windows services)
 orbyn annotate <id-or-ip> --environment prod --owner <team> \
     --criticality high --tag core --remove-tag dr  Enrich inventory metadata
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
@@ -216,11 +235,19 @@ orbyn discover --target 10.0.0.0/24
 # walk a single switch over SNMP (needs an authorized community string)
 orbyn discover --target 10.0.0.8 --collector snmp --community public
 
+# collect host-level facts from Linux / Windows hosts (key-based auth)
+orbyn discover --target 10.0.0.10 --collector ssh --user deploy --port 22
+orbyn discover --target 10.0.0.20 --collector windows --user administrator \
+    --identity-file ~/.ssh/id_ed25519
+
 # inspect what was found
 orbyn assets
 orbyn asset 10.0.0.10          # full record incl. interfaces and tags
 orbyn services 10.0.0.10
 orbyn interfaces 10.0.0.10
+orbyn capacity 10.0.0.10       # CPU/RAM capacity
+orbyn disks 10.0.0.10          # filesystem inventory
+orbyn host-services 10.0.0.10  # running systemd units / Windows services
 
 # enrich the inventory (metadata is preserved across re-discovery)
 orbyn annotate 10.0.0.10 --environment prod --owner platform \
@@ -254,6 +281,7 @@ clean for piping.
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | Default SNMP v1/v2c community string |
+| `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
 
 ## Repository layout
 
@@ -360,8 +388,9 @@ The underlying asset and dependency model should remain portable.
 | ---------- | ------------------------------------- | ------ |
 | Nmap       | Hosts, ports and service fingerprints | v0.1   |
 | SNMP       | Network and device metadata           | v0.2   |
-| SSH        | Linux inventory and capacity          | v0.3+  |
-| WinRM      | Windows inventory and capacity        | v0.3+  |
+| SSH        | Linux inventory and capacity          | v0.3   |
+| PowerShell | Windows inventory and capacity (over OpenSSH) | v0.3 |
+| WinRM      | Native Windows transport              | Later (same credential profiles) |
 | VMware     | VM and hypervisor inventory           | Later  |
 | NetBox     | Source-of-truth import/export         | Later  |
 | Prometheus | Historical utilization                | v1.2+  |
@@ -497,7 +526,7 @@ v0.1    Network discovery          (done)
           ↓
 v0.2    Inventory enrichment       (done)
           ↓
-v0.3    Host discovery via SSH / WinRM
+v0.3    Host discovery via SSH / Windows (done — native WinRM pending)
           ↓
 v0.4    Dependency mapping
           ↓

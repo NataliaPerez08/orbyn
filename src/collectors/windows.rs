@@ -1,0 +1,376 @@
+//! Windows host collector (v0.3 milestone).
+//!
+//! Collects Windows host facts (OS, CPU, RAM, disks, running services) by
+//! running PowerShell over the OpenSSH Server feature of Windows hosts —
+//! the same [`SshTransport`] and [`CredentialProfile`] used for Linux.
+//!
+//! A native WS-Man/WinRM transport can replace the transport later without
+//! touching the parsing or observation layer; see ROADMAP.md.
+//!
+//! Security rules mirror the Linux collector:
+//! - the probe is a fixed constant string; only the host comes from user input;
+//! - every PowerShell query is read-only (`Get-CimInstance`, `Get-Service`);
+//! - authentication is ssh-agent or identity-file based; no secrets are held.
+
+use std::net::IpAddr;
+
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use chrono::Utc;
+
+use crate::domain::{Asset, Capacity, Filesystem, Observation, RunningService};
+use crate::parsing::{split_csv_line, split_sections};
+
+use super::credentials::CredentialProfile;
+use super::ssh::SshTransport;
+use super::types::{Collector, CpuFacts, ScanTarget};
+
+/// One read-only PowerShell probe round trip. Sections are delimited by
+/// `###name` string literals; CIM queries emit CSV via `ConvertTo-Csv`.
+///
+/// The probe deliberately avoids `$` and backticks so it survives being passed
+/// through cmd.exe or a PowerShell default shell unchanged.
+pub const WINDOWS_PROBE: &str = "powershell -NoProfile -Command \"& { \
+     '###os'; Get-CimInstance Win32_OperatingSystem \
+       | Select-Object Caption,Version,BuildNumber,CSName \
+       | ConvertTo-Csv -NoTypeInformation; \
+     '###cpu'; Get-CimInstance Win32_Processor \
+       | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors \
+       | ConvertTo-Csv -NoTypeInformation; \
+     '###ram'; [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory); \
+     '###disk'; Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 3 \
+       | Select-Object DeviceID,FileSystem,VolumeName,Size,FreeSpace \
+       | ConvertTo-Csv -NoTypeInformation; \
+     '###svc'; Get-Service | Where-Object Status -eq Running \
+       | Select-Object Name,DisplayName \
+       | ConvertTo-Csv -NoTypeInformation \
+     }\"";
+
+/// Windows host collector over SSH (OpenSSH Server on the Windows host).
+pub struct WindowsCollector {
+    transport: SshTransport,
+}
+
+impl WindowsCollector {
+    pub fn new(profile: CredentialProfile) -> Self {
+        Self {
+            transport: SshTransport::new(profile),
+        }
+    }
+
+    /// Parse probe output into facts without invoking ssh (fixture-testable).
+    pub fn parse_probe(&self, output: &str) -> WindowsHostFacts {
+        parse_windows_probe(output)
+    }
+}
+
+impl Default for WindowsCollector {
+    fn default() -> Self {
+        Self::new(CredentialProfile::default())
+    }
+}
+
+#[async_trait]
+impl Collector for WindowsCollector {
+    fn name(&self) -> &'static str {
+        "windows"
+    }
+
+    async fn scan(&self, target: &ScanTarget) -> Result<Vec<Observation>> {
+        let ip = match target {
+            ScanTarget::Ip(ip) => *ip,
+            ScanTarget::Cidr(cidr) => bail!(
+                "Windows collection targets a single host; target must be an IP address (got '{cidr}')"
+            ),
+        };
+        let output = self
+            .transport
+            .run(ip, WINDOWS_PROBE)
+            .await
+            .with_context(|| format!("Windows probe of {ip}"))?;
+        let facts = parse_windows_probe(&output);
+        Ok(windows_observations(ip, &facts))
+    }
+}
+
+/// Host facts parsed from the Windows probe.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct WindowsHostFacts {
+    pub os_name: Option<String>,
+    pub os_version: Option<String>,
+    pub hostname: Option<String>,
+    pub cpu: Option<CpuFacts>,
+    pub ram_total_mb: Option<u64>,
+    pub filesystems: Vec<Filesystem>,
+    pub services: Vec<RunningService>,
+}
+
+/// Parse the full Windows probe output into facts.
+pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
+    let sections = split_sections(output);
+    let section = |name: &str| sections.get(name).cloned().unwrap_or_default();
+
+    let os_rows = csv_rows(&section("os"));
+    let (os_name, mut os_version, hostname) = match os_rows.first() {
+        Some(row) if row.len() >= 4 => (field(row, 0), field(row, 1), field(row, 3)),
+        _ => (None, None, None),
+    };
+    if let (Some(version), Some(build)) =
+        (&os_version, os_rows.first().and_then(|row| field(row, 2)))
+    {
+        os_version = Some(format!("{version} build {build}"));
+    }
+
+    let cpu_rows = csv_rows(&section("cpu"));
+    let cpu = if cpu_rows.is_empty() {
+        None
+    } else {
+        let mut cores = 0u32;
+        let mut threads = 0u32;
+        let mut model = None;
+        for row in &cpu_rows {
+            if model.is_none() {
+                model = field(row, 0);
+            }
+            if let Some(c) = field(row, 1).and_then(|v| v.parse::<u32>().ok()) {
+                cores += c;
+            }
+            if let Some(t) = field(row, 2).and_then(|v| v.parse::<u32>().ok()) {
+                threads += t;
+            }
+        }
+        Some(CpuFacts {
+            model,
+            sockets: Some(cpu_rows.len() as u32),
+            cores: if cores > 0 { Some(cores) } else { None },
+            threads: if threads > 0 { Some(threads) } else { None },
+        })
+    };
+
+    let ram_total_mb = section("ram")
+        .first()
+        .and_then(|l| l.trim().parse::<u64>().ok())
+        .map(|bytes| (bytes + 524_288) / 1_048_576);
+
+    let mut filesystems = Vec::new();
+    for row in csv_rows(&section("disk")) {
+        let Some(size) = field(&row, 3).and_then(|v| v.parse::<u64>().ok()) else {
+            continue;
+        };
+        let free = field(&row, 4).and_then(|v| v.parse::<u64>().ok());
+        let Some(mount) = field(&row, 0) else {
+            continue;
+        };
+        filesystems.push(Filesystem {
+            asset_id: String::new(),
+            device: None,
+            mount,
+            fs_type: field(&row, 1),
+            size_kb: (size + 512) / 1024,
+            used_kb: free.map(|f| (size.saturating_sub(f) + 512) / 1024),
+            available_kb: free.map(|f| (f + 512) / 1024),
+            used_pct: free.map(|f| {
+                (size.saturating_sub(f) * 100)
+                    .checked_div(size)
+                    .unwrap_or(0) as u32
+            }),
+        });
+    }
+
+    let mut services = Vec::new();
+    for row in csv_rows(&section("svc")) {
+        let Some(name) = field(&row, 0) else {
+            continue;
+        };
+        services.push(RunningService {
+            asset_id: String::new(),
+            name,
+            state: Some("running".into()),
+            description: field(&row, 1),
+        });
+    }
+
+    WindowsHostFacts {
+        os_name,
+        os_version,
+        hostname,
+        cpu,
+        ram_total_mb,
+        filesystems,
+        services,
+    }
+}
+
+/// Build normalized observations from parsed facts. The asset observation
+/// always comes first so foreign keys resolve inside the store transaction.
+pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observation> {
+    let now = Utc::now();
+    let id = ip.to_string().replace(['.', ':'], "-");
+    let mut observations = vec![Observation::Asset(Asset {
+        id: id.clone(),
+        ip,
+        hostname: facts.hostname.clone(),
+        device_class: Some("server".into()),
+        os_name: facts.os_name.clone(),
+        os_version: facts.os_version.clone(),
+        environment: None,
+        owner: None,
+        criticality: None,
+        tags: Vec::new(),
+        first_seen: now,
+        last_seen: now,
+    })];
+
+    if facts.cpu.is_some() || facts.ram_total_mb.is_some() {
+        let cpu = facts.cpu.clone().unwrap_or_default();
+        observations.push(Observation::Capacity(Capacity {
+            asset_id: id.clone(),
+            cpu_model: cpu.model,
+            cpu_sockets: cpu.sockets,
+            cpu_cores: cpu.cores,
+            cpu_threads: cpu.threads,
+            ram_total_mb: facts.ram_total_mb,
+            collected_at: now,
+        }));
+    }
+
+    for fs in &facts.filesystems {
+        let mut fs = fs.clone();
+        fs.asset_id = id.clone();
+        observations.push(Observation::Filesystem(fs));
+    }
+    for svc in &facts.services {
+        let mut svc = svc.clone();
+        svc.asset_id = id.clone();
+        observations.push(Observation::RunningService(svc));
+    }
+    observations
+}
+
+/// Parse CSV lines (PowerShell `ConvertTo-Csv`) into rows, skipping the
+/// header line.
+fn csv_rows(lines: &[String]) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut header_seen = false;
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !header_seen {
+            header_seen = true;
+            continue;
+        }
+        rows.push(split_csv_line(line));
+    }
+    rows
+}
+
+/// A non-empty trimmed field of a CSV row.
+fn field(row: &[String], idx: usize) -> Option<String> {
+    row.get(idx)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROBE_OUTPUT: &str = "###os\n\
+\"Caption\",\"Version\",\"BuildNumber\",\"CSName\"\n\
+\"Microsoft Windows Server 2022 Standard\",\"10.0\",\"20348\",\"WIN-APP01\"\n\
+###cpu\n\
+\"Name\",\"NumberOfCores\",\"NumberOfLogicalProcessors\"\n\
+\"Intel(R) Xeon(R) Silver 4310 CPU @ 2.20GHz\",\"12\",\"24\"\n\
+###ram\n\
+17179869184\n\
+###disk\n\
+\"DeviceID\",\"FileSystem\",\"VolumeName\",\"Size\",\"FreeSpace\"\n\
+\"C:\",\"NTFS\",\"System\",\"107374182400\",\"53687091200\"\n\
+\"D:\",\"NTFS\",\"Data\",\"214748364800\",\"107374182400\"\n\
+###svc\n\
+\"Name\",\"DisplayName\"\n\
+\"W3SVC\",\"World Wide Web Publishing Service\"\n\
+\"MSSQLSERVER\",\"SQL Server (MSSQLSERVER)\"\n";
+
+    #[test]
+    fn parses_full_probe() {
+        let facts = parse_windows_probe(PROBE_OUTPUT);
+
+        assert_eq!(
+            facts.os_name.as_deref(),
+            Some("Microsoft Windows Server 2022 Standard")
+        );
+        assert_eq!(facts.os_version.as_deref(), Some("10.0 build 20348"));
+        assert_eq!(facts.hostname.as_deref(), Some("WIN-APP01"));
+
+        let cpu = facts.cpu.expect("cpu facts");
+        assert_eq!(
+            cpu.model.as_deref(),
+            Some("Intel(R) Xeon(R) Silver 4310 CPU @ 2.20GHz")
+        );
+        assert_eq!(cpu.sockets, Some(1));
+        assert_eq!(cpu.cores, Some(12));
+        assert_eq!(cpu.threads, Some(24));
+
+        assert_eq!(facts.ram_total_mb, Some(16384));
+
+        assert_eq!(facts.filesystems.len(), 2);
+        let c = facts.filesystems.iter().find(|f| f.mount == "C:").unwrap();
+        assert_eq!(c.fs_type.as_deref(), Some("NTFS"));
+        assert_eq!(c.size_kb, 104857600);
+        assert_eq!(c.available_kb, Some(52428800));
+        assert_eq!(c.used_pct, Some(50));
+
+        assert_eq!(facts.services.len(), 2);
+        assert_eq!(facts.services[0].name, "W3SVC");
+        assert_eq!(facts.services[0].state.as_deref(), Some("running"));
+        assert_eq!(
+            facts.services[0].description.as_deref(),
+            Some("World Wide Web Publishing Service")
+        );
+    }
+
+    #[test]
+    fn sums_multi_socket_cpus() {
+        let cpu_section = "\"Name\",\"NumberOfCores\",\"NumberOfLogicalProcessors\"\n\
+\"Xeon E5-2680 v4\",\"14\",\"28\"\n\
+\"Xeon E5-2680 v4\",\"14\",\"28\"\n";
+        let output = format!("###cpu\n{cpu_section}");
+        let facts = parse_windows_probe(&output);
+        let cpu = facts.cpu.unwrap();
+        assert_eq!(cpu.sockets, Some(2));
+        assert_eq!(cpu.cores, Some(28));
+        assert_eq!(cpu.threads, Some(56));
+    }
+
+    #[test]
+    fn builds_observations_with_asset_first() {
+        let facts = parse_windows_probe(PROBE_OUTPUT);
+        let observations = windows_observations("10.0.0.20".parse().unwrap(), &facts);
+
+        assert!(matches!(observations[0], Observation::Asset(_)));
+        assert_eq!(observations.len(), 1 + 1 + 2 + 2);
+
+        if let Some(Observation::Asset(asset)) = observations.first() {
+            assert_eq!(asset.device_class.as_deref(), Some("server"));
+            assert_eq!(asset.hostname.as_deref(), Some("WIN-APP01"));
+        }
+    }
+
+    #[test]
+    fn empty_probe_yields_asset_only() {
+        let facts = parse_windows_probe("");
+        let observations = windows_observations("10.0.0.21".parse().unwrap(), &facts);
+        assert_eq!(observations.len(), 1);
+    }
+
+    #[test]
+    fn crlf_csv_rows_parse() {
+        let output = "###svc\r\n\"Name\",\"DisplayName\"\r\n\"W32Time\",\"Windows Time\"\r\n";
+        let facts = parse_windows_probe(output);
+        assert_eq!(facts.services.len(), 1);
+        assert_eq!(facts.services[0].name, "W32Time");
+    }
+}

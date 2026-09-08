@@ -12,6 +12,16 @@ pub enum ScanTarget {
     Cidr(String),
 }
 
+/// CPU capacity facts normalized from `lscpu`, `/proc/cpuinfo` or
+/// `Win32_Processor` before becoming a domain [`crate::domain::Capacity`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CpuFacts {
+    pub model: Option<String>,
+    pub sockets: Option<u32>,
+    pub cores: Option<u32>,
+    pub threads: Option<u32>,
+}
+
 /// A collector discovers facts about infrastructure.
 ///
 /// Implementors must:

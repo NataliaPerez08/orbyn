@@ -5,8 +5,8 @@
 
 use chrono::Utc;
 use orbyn::domain::{
-    Asset, Criticality, Dependency, DiscoveryJob, Interface, JobOutcome, JobStatus, Observation,
-    Service,
+    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobOutcome,
+    JobStatus, Observation, RunningService, Service,
 };
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
@@ -303,4 +303,126 @@ async fn annotate_unknown_asset_errors() {
         .annotate_asset("nope", AssetAnnotations::default())
         .await;
     assert!(result.is_err());
+}
+
+fn host_fact_observations() -> Vec<Observation> {
+    let now = Utc::now();
+    let asset = Asset {
+        id: "asset-host".into(),
+        ip: "10.0.0.5".parse().unwrap(),
+        hostname: Some("web-01".into()),
+        device_class: Some("server".into()),
+        os_name: Some("Ubuntu 22.04.4 LTS".into()),
+        os_version: Some("5.15.0-94-generic".into()),
+        environment: None,
+        owner: None,
+        criticality: None,
+        tags: Vec::new(),
+        first_seen: now,
+        last_seen: now,
+    };
+    let capacity = |ram_total_mb| Capacity {
+        asset_id: "asset-host".into(),
+        cpu_model: Some("Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz".into()),
+        cpu_sockets: Some(1),
+        cpu_cores: Some(4),
+        cpu_threads: Some(8),
+        ram_total_mb: Some(ram_total_mb),
+        collected_at: now,
+    };
+    vec![
+        Observation::Asset(asset),
+        Observation::Capacity(capacity(16001)),
+        Observation::Filesystem(Filesystem {
+            asset_id: "asset-host".into(),
+            device: Some("/dev/sda1".into()),
+            mount: "/".into(),
+            fs_type: Some("ext4".into()),
+            size_kb: 52425716,
+            used_kb: Some(12345678),
+            available_kb: Some(37380844),
+            used_pct: Some(25),
+        }),
+        Observation::RunningService(RunningService {
+            asset_id: "asset-host".into(),
+            name: "nginx.service".into(),
+            state: Some("running".into()),
+            description: Some("A high performance web server".into()),
+        }),
+    ]
+}
+
+#[tokio::test]
+async fn host_facts_round_trip() {
+    let _ = std::fs::remove_file(format!("{}.host", sample_db_path()));
+    let store = SqliteStore::open(std::path::Path::new(&format!("{}.host", sample_db_path())))
+        .await
+        .expect("open test db");
+    store
+        .store_observations(host_fact_observations())
+        .await
+        .expect("persist host facts");
+
+    let capacity = store
+        .get_capacity("asset-host")
+        .await
+        .expect("get capacity")
+        .expect("capacity exists");
+    assert_eq!(capacity.cpu_threads, Some(8));
+    assert_eq!(capacity.ram_total_mb, Some(16001));
+
+    let filesystems = store
+        .list_filesystems("asset-host")
+        .await
+        .expect("list filesystems");
+    assert_eq!(filesystems.len(), 1);
+    assert_eq!(filesystems[0].mount, "/");
+    assert_eq!(filesystems[0].used_pct, Some(25));
+
+    let running = store
+        .list_running_services("asset-host")
+        .await
+        .expect("list running services");
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].name, "nginx.service");
+
+    // Re-observing reconciles instead of duplicating, and a capacity refresh
+    // with partial data keeps previously collected fields.
+    let mut refresh = host_fact_observations();
+    for obs in &mut refresh {
+        if let Observation::Capacity(cap) = obs {
+            cap.cpu_model = None;
+            cap.ram_total_mb = Some(32768);
+        }
+    }
+    store
+        .store_observations(refresh)
+        .await
+        .expect("re-persist host facts");
+
+    let capacity = store
+        .get_capacity("asset-host")
+        .await
+        .expect("get capacity")
+        .expect("capacity exists");
+    assert_eq!(capacity.ram_total_mb, Some(32768));
+    assert_eq!(
+        capacity.cpu_model.as_deref(),
+        Some("Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz")
+    );
+
+    assert_eq!(
+        store.list_filesystems("asset-host").await.unwrap().len(),
+        1,
+        "filesystems must reconcile by (asset, mount)"
+    );
+    assert_eq!(
+        store
+            .list_running_services("asset-host")
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "running services must reconcile by (asset, name)"
+    );
 }

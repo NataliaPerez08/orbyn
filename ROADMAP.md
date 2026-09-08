@@ -38,13 +38,20 @@ port discovery.
 
 ## v0.3 — Host-level discovery
 
+**Status:** implemented for Linux (SSH) and Windows (PowerShell over the
+OpenSSH Server feature). A native WS-Man/WinRM transport remains a follow-up
+adapter over the same credential profile / command-transport abstraction.
+
 - SSH collector for Linux.
-- WinRM collector for Windows.
+- WinRM collector for Windows — ships as read-only PowerShell CIM queries
+  over OpenSSH; native WinRM adapter pending.
 - OS details.
 - Installed CPU/RAM capacity.
 - Disk/filesystem inventory.
-- Running process/service observations.
-- Credential profile abstraction.
+- Running process/service observations (running services; full process
+  listing later).
+- Credential profile abstraction (ssh-agent / identity files; Orbyn stores
+  no credentials).
 
 **Exit criterion:** authorized credentials enrich assets with host-level facts.
 

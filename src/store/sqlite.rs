@@ -10,8 +10,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 
 use crate::domain::{
-    Asset, Criticality, Dependency, DiscoveryJob, Interface, JobOutcome, JobStatus, Observation,
-    Service,
+    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobOutcome,
+    JobStatus, Observation, RunningService, Service,
 };
 use crate::store::traits::AssetAnnotations;
 
@@ -108,6 +108,66 @@ impl InterfaceRow {
             is_up: self.is_up,
         }
     }
+}
+
+#[derive(Debug, FromRow)]
+struct CapacityRow {
+    asset_id: String,
+    cpu_model: Option<String>,
+    cpu_sockets: Option<i64>,
+    cpu_cores: Option<i64>,
+    cpu_threads: Option<i64>,
+    ram_total_mb: Option<i64>,
+    collected_at: String,
+}
+
+impl CapacityRow {
+    fn into_capacity(self) -> Capacity {
+        Capacity {
+            asset_id: self.asset_id,
+            cpu_model: self.cpu_model,
+            cpu_sockets: self.cpu_sockets.map(|v| v as u32),
+            cpu_cores: self.cpu_cores.map(|v| v as u32),
+            cpu_threads: self.cpu_threads.map(|v| v as u32),
+            ram_total_mb: self.ram_total_mb.map(|v| v as u64),
+            collected_at: parse_ts(&self.collected_at),
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct FilesystemRow {
+    asset_id: String,
+    device: Option<String>,
+    mount: String,
+    fs_type: Option<String>,
+    size_kb: i64,
+    used_kb: Option<i64>,
+    available_kb: Option<i64>,
+    used_pct: Option<i64>,
+}
+
+impl FilesystemRow {
+    fn into_filesystem(self) -> Filesystem {
+        Filesystem {
+            asset_id: self.asset_id,
+            device: self.device,
+            mount: self.mount,
+            fs_type: self.fs_type,
+            size_kb: self.size_kb as u64,
+            used_kb: self.used_kb.map(|v| v as u64),
+            available_kb: self.available_kb.map(|v| v as u64),
+            used_pct: self.used_pct.map(|v| v as u32),
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct RunningServiceRow {
+    asset_id: String,
+    name: String,
+    state: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -299,7 +359,72 @@ impl crate::store::traits::Store for SqliteStore {
                     .await
                     .context("inserting dependency")?;
                 }
-                Observation::Capacity(_) | Observation::MetricSample(_) => {
+                Observation::Capacity(capacity) => {
+                    sqlx::query(
+                        "INSERT INTO asset_capacity \
+                           (asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                         ON CONFLICT(asset_id) DO UPDATE SET \
+                           cpu_model = COALESCE(excluded.cpu_model, asset_capacity.cpu_model), \
+                           cpu_sockets = COALESCE(excluded.cpu_sockets, asset_capacity.cpu_sockets), \
+                           cpu_cores = COALESCE(excluded.cpu_cores, asset_capacity.cpu_cores), \
+                           cpu_threads = COALESCE(excluded.cpu_threads, asset_capacity.cpu_threads), \
+                           ram_total_mb = COALESCE(excluded.ram_total_mb, asset_capacity.ram_total_mb), \
+                           collected_at = excluded.collected_at",
+                    )
+                    .bind(&capacity.asset_id)
+                    .bind(&capacity.cpu_model)
+                    .bind(capacity.cpu_sockets.map(|v| v as i64))
+                    .bind(capacity.cpu_cores.map(|v| v as i64))
+                    .bind(capacity.cpu_threads.map(|v| v as i64))
+                    .bind(capacity.ram_total_mb.map(|v| v as i64))
+                    .bind(capacity.collected_at.to_rfc3339())
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting capacity")?;
+                }
+                Observation::Filesystem(fs) => {
+                    sqlx::query(
+                        "INSERT INTO asset_filesystems \
+                           (asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                         ON CONFLICT(asset_id, mount) DO UPDATE SET \
+                           device = COALESCE(excluded.device, asset_filesystems.device), \
+                           fs_type = COALESCE(excluded.fs_type, asset_filesystems.fs_type), \
+                           size_kb = excluded.size_kb, \
+                           used_kb = excluded.used_kb, \
+                           available_kb = excluded.available_kb, \
+                           used_pct = excluded.used_pct",
+                    )
+                    .bind(&fs.asset_id)
+                    .bind(&fs.device)
+                    .bind(&fs.mount)
+                    .bind(&fs.fs_type)
+                    .bind(fs.size_kb as i64)
+                    .bind(fs.used_kb.map(|v| v as i64))
+                    .bind(fs.available_kb.map(|v| v as i64))
+                    .bind(fs.used_pct.map(|v| v as i64))
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting filesystem")?;
+                }
+                Observation::RunningService(svc) => {
+                    sqlx::query(
+                        "INSERT INTO asset_running_services (asset_id, name, state, description) \
+                         VALUES (?1, ?2, ?3, ?4) \
+                         ON CONFLICT(asset_id, name) DO UPDATE SET \
+                           state = excluded.state, \
+                           description = COALESCE(excluded.description, asset_running_services.description)",
+                    )
+                    .bind(&svc.asset_id)
+                    .bind(&svc.name)
+                    .bind(&svc.state)
+                    .bind(&svc.description)
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting running service")?;
+                }
+                Observation::MetricSample(_) => {
                     tracing::warn!("observation type not yet persisted");
                 }
             }
@@ -383,6 +508,53 @@ impl crate::store::traits::Store for SqliteStore {
         .await
         .context("listing interfaces")?;
         Ok(rows.into_iter().map(InterfaceRow::into_interface).collect())
+    }
+
+    async fn get_capacity(&self, asset_id: &str) -> Result<Option<Capacity>> {
+        let row = sqlx::query_as::<_, CapacityRow>(
+            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
+             FROM asset_capacity WHERE asset_id = ?1",
+        )
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching capacity")?;
+        Ok(row.map(CapacityRow::into_capacity))
+    }
+
+    async fn list_filesystems(&self, asset_id: &str) -> Result<Vec<Filesystem>> {
+        let rows = sqlx::query_as::<_, FilesystemRow>(
+            "SELECT asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct \
+             FROM asset_filesystems WHERE asset_id = ?1 ORDER BY mount",
+        )
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing filesystems")?;
+        Ok(rows
+            .into_iter()
+            .map(FilesystemRow::into_filesystem)
+            .collect())
+    }
+
+    async fn list_running_services(&self, asset_id: &str) -> Result<Vec<RunningService>> {
+        let rows = sqlx::query_as::<_, RunningServiceRow>(
+            "SELECT asset_id, name, state, description \
+             FROM asset_running_services WHERE asset_id = ?1 ORDER BY name",
+        )
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing running services")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RunningService {
+                asset_id: row.asset_id,
+                name: row.name,
+                state: row.state,
+                description: row.description,
+            })
+            .collect())
     }
 
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()> {

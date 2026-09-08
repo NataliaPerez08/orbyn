@@ -9,7 +9,10 @@ use std::fmt;
 use comfy_table::{Cell, ContentArrangement, Table};
 
 use crate::assessment::{AssessmentReport, Severity};
-use crate::domain::{Asset, Criticality, Dependency, DiscoveryJob, Interface, JobStatus, Service};
+use crate::domain::{
+    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobStatus,
+    RunningService, Service,
+};
 
 /// Output format selected through `--format` on each command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -183,6 +186,133 @@ pub fn interfaces(ifaces: &[Interface], format: Format) -> String {
     }
 }
 
+/// Render recorded CPU/RAM capacity for an asset.
+pub fn capacity(cap: Option<&Capacity>, format: Format) -> String {
+    match format {
+        Format::Json => json(&cap),
+        Format::Csv => {
+            let mut out = String::from(
+                "asset_id,cpu_model,cpu_sockets,cpu_cores,cpu_threads,ram_total_mb,collected_at\n",
+            );
+            if let Some(c) = cap {
+                out.push_str(&format!(
+                    "{},{},{},{},{},{},{}\n",
+                    csv(&c.asset_id),
+                    csv(&c.cpu_model.clone().unwrap_or_default()),
+                    c.cpu_sockets.map(|v| v.to_string()).unwrap_or_default(),
+                    c.cpu_cores.map(|v| v.to_string()).unwrap_or_default(),
+                    c.cpu_threads.map(|v| v.to_string()).unwrap_or_default(),
+                    c.ram_total_mb.map(|v| v.to_string()).unwrap_or_default(),
+                    c.collected_at.to_rfc3339(),
+                ));
+            }
+            out
+        }
+        Format::Table => match cap {
+            None => "No capacity recorded for this asset yet.\n".to_string(),
+            Some(c) => {
+                let vcpu = c
+                    .cpu_threads
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "-".into());
+                format!(
+                    "CPU model : {}\nSockets   : {}\nCores     : {}\nvCPU      : {}\nRAM       : {}\nCollected : {}\n",
+                    c.cpu_model.clone().unwrap_or_else(|| "-".into()),
+                    c.cpu_sockets.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                    c.cpu_cores.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                    vcpu,
+                    c.ram_total_mb
+                        .map(|mb| format!("{mb} MB"))
+                        .unwrap_or_else(|| "-".into()),
+                    c.collected_at.format("%Y-%m-%d %H:%M:%S"),
+                )
+            }
+        },
+    }
+}
+
+/// Render the filesystem inventory of an asset.
+pub fn filesystems(filesystems: &[Filesystem], format: Format) -> String {
+    match format {
+        Format::Json => json(filesystems),
+        Format::Csv => {
+            let mut out = String::from(
+                "asset_id,device,mount,fs_type,size_kb,used_kb,available_kb,used_pct\n",
+            );
+            for f in filesystems {
+                out.push_str(&format!(
+                    "{},{},{},{},{},{},{},{}\n",
+                    csv(&f.asset_id),
+                    csv(&f.device.clone().unwrap_or_default()),
+                    csv(&f.mount),
+                    csv(&f.fs_type.clone().unwrap_or_default()),
+                    f.size_kb,
+                    f.used_kb.map(|v| v.to_string()).unwrap_or_default(),
+                    f.available_kb.map(|v| v.to_string()).unwrap_or_default(),
+                    f.used_pct.map(|v| v.to_string()).unwrap_or_default(),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if filesystems.is_empty() {
+                return "No filesystems recorded for this asset yet.\n".to_string();
+            }
+            let mut table = table(&["Device", "Mount", "Type", "Size", "Used", "Free", "Use%"]);
+            for f in filesystems {
+                table.add_row(vec![
+                    Cell::new(f.device.clone().unwrap_or_else(|| "-".into())),
+                    Cell::new(&f.mount),
+                    Cell::new(f.fs_type.clone().unwrap_or_else(|| "-".into())),
+                    Cell::new(human_kb(f.size_kb)),
+                    Cell::new(f.used_kb.map(human_kb).unwrap_or_else(|| "-".into())),
+                    Cell::new(f.available_kb.map(human_kb).unwrap_or_else(|| "-".into())),
+                    Cell::new(
+                        f.used_pct
+                            .map(|p| format!("{p}%"))
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                ]);
+            }
+            table.to_string()
+        }
+    }
+}
+
+/// Render the running host services of an asset.
+pub fn running_services(services: &[RunningService], format: Format) -> String {
+    match format {
+        Format::Json => json(services),
+        Format::Csv => {
+            let mut out = String::from("asset_id,name,state,description\n");
+            for s in services {
+                out.push_str(&format!(
+                    "{},{},{},{}\n",
+                    csv(&s.asset_id),
+                    csv(&s.name),
+                    csv(&s.state.clone().unwrap_or_default()),
+                    csv(&s.description.clone().unwrap_or_default()),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if services.is_empty() {
+                return "No running services recorded for this asset yet.\n".to_string();
+            }
+            let mut table = table(&["Unit", "State", "Description"]);
+            for s in services {
+                table.add_row(vec![
+                    Cell::new(&s.name),
+                    Cell::new(s.state.clone().unwrap_or_else(|| "-".into())),
+                    Cell::new(s.description.clone().unwrap_or_else(|| "-".into())),
+                ]);
+            }
+            table.to_string()
+        }
+    }
+}
+
 /// Render a discovery job history listing.
 pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
     match format {
@@ -247,11 +377,16 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
     }
 }
 
-/// Render a rich asset detail view: annotations, services, and interfaces.
+/// Render a rich asset detail view: annotations, interfaces, capacity,
+/// filesystems, network services and running host services.
+#[allow(clippy::too_many_arguments)]
 pub fn asset_detail(
     asset: &Asset,
     svcs: &[Service],
     ifaces: &[Interface],
+    cap: Option<&Capacity>,
+    disks: &[Filesystem],
+    running: &[RunningService],
     format: Format,
 ) -> String {
     match format {
@@ -259,11 +394,17 @@ pub fn asset_detail(
             asset: asset.clone(),
             services: svcs.to_vec(),
             interfaces: ifaces.to_vec(),
+            capacity: cap.cloned(),
+            filesystems: disks.to_vec(),
+            running_services: running.to_vec(),
         }),
         Format::Csv => {
             let mut out = assets(std::slice::from_ref(asset), Format::Csv);
             out.push_str(&interfaces(ifaces, Format::Csv));
+            out.push_str(&capacity(cap, Format::Csv));
+            out.push_str(&filesystems(disks, Format::Csv));
             out.push_str(&services(svcs, Format::Csv));
+            out.push_str(&running_services(running, Format::Csv));
             out
         }
         Format::Table => {
@@ -310,7 +451,13 @@ pub fn asset_detail(
             out.push('\n');
             out.push_str(&interfaces(ifaces, Format::Table));
             out.push('\n');
+            out.push_str(&capacity(cap, Format::Table));
+            out.push('\n');
+            out.push_str(&filesystems(disks, Format::Table));
+            out.push('\n');
             out.push_str(&services(svcs, Format::Table));
+            out.push('\n');
+            out.push_str(&running_services(running, Format::Table));
             out
         }
     }
@@ -426,6 +573,9 @@ pub struct AssetDetail {
     pub asset: Asset,
     pub services: Vec<Service>,
     pub interfaces: Vec<Interface>,
+    pub capacity: Option<Capacity>,
+    pub filesystems: Vec<Filesystem>,
+    pub running_services: Vec<RunningService>,
 }
 
 /// Render a full inventory export.
@@ -497,6 +647,17 @@ fn duration_label(job: &DiscoveryJob) -> String {
 
 fn json<T: serde::Serialize + ?Sized>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Human-readable size from kilobytes (e.g. `49.9G`, `12.0M`, `512K`).
+fn human_kb(kb: u64) -> String {
+    if kb >= 10 * 1024 * 1024 {
+        format!("{:.1}G", kb as f64 / 1024.0 / 1024.0)
+    } else if kb >= 10 * 1024 {
+        format!("{:.1}M", kb as f64 / 1024.0)
+    } else {
+        format!("{kb}K")
+    }
 }
 
 fn csv(field: &str) -> String {

@@ -64,7 +64,25 @@ orbyn discover --target 192.168.1.10 --collector snmp --community public
 Orbyn rejects unrestricted scopes by default. You are responsible for having
 authorization to scan targets.
 
-## 5. Enrich inventory
+## 5. Collect host-level facts (SSH / Windows)
+
+```bash
+# Linux host: OS, kernel, CPU/RAM capacity, filesystems, running services
+orbyn discover --target 192.168.1.10 --collector ssh --user deploy
+
+# Windows host (OpenSSH Server enabled): OS, CPU, RAM, disks, services
+orbyn discover --target 192.168.1.20 --collector windows \
+    --user administrator --identity-file ~/.ssh/id_ed25519
+
+orbyn capacity 192.168.1.10        # CPU/RAM
+orbyn disks 192.168.1.10           # filesystems
+orbyn host-services 192.168.1.10   # running systemd units / Windows services
+```
+
+Authentication is key-based only (ssh-agent or `--identity-file`); Orbyn never
+stores or logs credentials. Native WinRM transport is planned (ROADMAP.md).
+
+## 6. Enrich inventory
 
 ```bash
 orbyn annotate 127.0.0.1 --environment prod --owner platform \
@@ -74,14 +92,14 @@ orbyn asset 127.0.0.1
 
 Annotations are preserved across re-discovery.
 
-## 6. Export / import
+## 7. Export / import
 
 ```bash
 orbyn export --format csv --output inventory.csv
 orbyn import --format csv --file inventory.csv
 ```
 
-## 7. Dependency graph & assessment
+## 8. Dependency graph & assessment
 
 ```bash
 orbyn graph
@@ -95,6 +113,8 @@ orbyn assess
 | `nmap not found`              | scope uses nmap without `nmap` installed (`sudo apt install nmap`) |
 | `snmpwalk: command not found` | install net-snmp-utils (`sudo apt install snmp`)                  |
 | SNMP discover returns nothing | wrong/firewalled target, or community string not authorized       |
+| `ssh ... Permission denied`   | host-level collection needs key auth: `ssh-add` or `--identity-file` |
+| ssh collector hangs/times out | check the port (`--port`), firewall, and that the host is authorized |
 | no activity on a command      | `-vv` for verbose logs; stdout is clean, logs go to stderr        |
 
 Full reference and configuration (env vars, collectors, formats) live in
