@@ -37,13 +37,16 @@ src/
 │   ├── nmap.rs           # Nmap adapter (v0.1 milestone)
 │   ├── snmp.rs           # SNMP adapter (v0.2 milestone)
 │   ├── ssh.rs            # SSH transport + Linux host collector (v0.3)
-│   └── windows.rs        # Windows host collector over PowerShell (v0.3)
+│   ├── windows.rs        # Windows host collector over PowerShell (v0.3)
+│   └── dns.rs            # DNS relationship evidence (v0.4)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
 │   └── sqlite.rs         # SQLite via sqlx
 ├── graph/                # dependency graph
 ├── metrics/              # capacity/utilization processing
 ├── assessment/           # migration assessment engine
+│   ├── rules.rs          # rule catalog + evaluators
+│   └── grouping.rs       # application grouping (union-find)
 └── output/               # table / json / csv rendering
 ```
 
@@ -132,22 +135,26 @@ multi-user or larger deployments without touching collectors or assessment.
 
 ### 4. Assessment engine
 
-The assessment layer evaluates normalized data instead of raw collector output.
+The assessment layer evaluates normalized data instead of raw collector
+output. `src/assessment/` (v0.5) is a versioned rule engine:
 
-Planned outputs include:
+- `rules.rs` holds the catalog: small pure functions over an
+  `AssessmentInput` (full inventory snapshot) that append findings. Rules
+  cover legacy/EOL OS, insecure and management service exposure, dependency
+  hubs (blast radius), external endpoints, unconfirmed edges, missing
+  capacity and near-full filesystems.
+- Every finding carries rule id, severity, rationale and evidence; the report
+  carries `rules_version` so results stay comparable across releases.
+- Scoring: severity weights (Info 2 / Warning 10 / High 25) accumulate into a
+  per-asset 0-100 complexity score, averaged into an overall score with a
+  low/medium/high band.
+- `grouping.rs` provides application grouping primitives: union-find over
+  runtime/manual dependency edges (DNS alias evidence excluded), producing
+  likely co-migrating application groups.
 
-- migration complexity score;
-- unsupported/legacy OS warnings;
-- dependency risk;
-- exposed-service risk;
-- possible application groups;
-- over-provisioning indicators;
-- CPU/RAM target recommendations;
-- cloud-target compatibility rules.
-
-Every recommendation should include its evidence and rule/version. The v0.5
-engine will be rule-driven; `src/assessment/` currently provides the
-`Finding`/`Severity` vocabulary and a placeholder scoring function.
+Planned later outputs include over-provisioning indicators, CPU/RAM target
+recommendations (v1.2 right-sizing) and cloud-target compatibility rules.
+`orbyn assess --rules` lists the catalog.
 
 ### 5. Dependency graph
 
@@ -159,23 +166,31 @@ Asset A --tcp/5432--> Asset B
 
 Evidence may come from:
 
-- active connections;
-- firewall/network flow logs;
-- eBPF;
-- service configuration;
-- user-confirmed relationships.
+- active connections (v0.4: the SSH/Windows probes report established
+  sessions; the store reconciles each remote endpoint against known assets
+  and upserts an edge with `active-connections` evidence);
+- DNS relationships (v0.4: `orbyn deps dns` forward-resolves asset hostnames
+  and links assets whose hostnames point at each other — low-confidence
+  alias evidence, not a runtime dependency);
+- firewall/network flow logs (planned);
+- eBPF (planned);
+- service configuration (planned);
+- user-confirmed relationships (`orbyn deps add` / `orbyn deps confirm`).
 
-Every edge should retain source and confidence. Guesses should look like
-guesses, not divine revelation. `src/graph/` provides an in-memory graph over
-persisted `Dependency` edges with forward/reverse lookups.
+Every edge retains its evidence source and confidence; manual confirmation
+raises confidence to 1.0. Guesses look like guesses: unconfirmed edges render
+dotted in Mermaid output. Raw connection observations are persisted in
+`asset_connections` so the evidence behind each edge stays inspectable
+(`orbyn connections <id-or-ip>`). `src/graph/` provides an in-memory graph
+over persisted `Dependency` edges with forward/reverse lookups.
 
 ### 6. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
 `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`,
-`jobs`, `annotate`, `import`, `export`, `graph`, `assess`) fetches data
-through the `Store` trait, computes results, and delegates rendering to
-`src/output/`.
+`connections`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`,
+`assess`) fetches data through the `Store` trait, computes results, and
+delegates rendering to `src/output/`.
 
 Inventory enrichment is a read/write CLI surface:
 

@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
-use orbyn::assessment::{assess, AssessmentReport, Finding, Severity};
+use orbyn::assessment::{run_assessment, AssessmentInput};
 use orbyn::collectors::credentials::CredentialProfile;
 use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
@@ -13,7 +13,9 @@ use orbyn::collectors::ssh::LinuxCollector;
 use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
 use orbyn::config::Config;
-use orbyn::domain::{Asset, Criticality, DiscoveryJob, JobOutcome, JobStatus, Observation};
+use orbyn::domain::{
+    Asset, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
+};
 use orbyn::output::{Format, Inventory};
 use orbyn::parsing::split_csv_line;
 use orbyn::store::sqlite::SqliteStore;
@@ -162,6 +164,20 @@ enum Command {
         format: Format,
     },
 
+    /// List active connections observed on an asset (by ID or IP).
+    Connections {
+        /// Asset ID or IP address.
+        asset: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// Curate dependency edges (add / confirm / remove / DNS evidence).
+    Deps {
+        #[command(subcommand)]
+        action: DepsAction,
+    },
+
     /// List discovery job history.
     Jobs {
         /// Maximum number of jobs to return.
@@ -193,13 +209,65 @@ enum Command {
     Graph {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
+        /// Render the graph as a Mermaid flowchart instead of a table.
+        #[arg(long, conflicts_with = "format")]
+        mermaid: bool,
+        /// Restrict the view to edges touching this asset (by ID or IP).
+        #[arg(long)]
+        asset: Option<String>,
     },
 
     /// Run a migration assessment over discovered assets.
     Assess {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
+        /// List the rule catalog (id + description) instead of assessing.
+        #[arg(long, conflicts_with = "format")]
+        rules: bool,
     },
+}
+
+/// Sub-actions of `orbyn deps`.
+#[derive(Debug, Subcommand)]
+enum DepsAction {
+    /// Add a manual (confirmed) dependency edge between two assets.
+    Add {
+        /// Source asset ID or IP (the dependent side).
+        source: String,
+        /// Target asset ID or IP (the depended-on side).
+        target: String,
+        /// Protocol label, e.g. tcp.
+        #[arg(long, default_value = "tcp")]
+        proto: String,
+        /// Remote port.
+        #[arg(long)]
+        port: u16,
+    },
+    /// Confirm observed dependency edges between two assets.
+    Confirm {
+        source: String,
+        target: String,
+        /// Narrow to one protocol; omit for all.
+        #[arg(long)]
+        proto: Option<String>,
+        /// Narrow to one port; omit for all.
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Delete dependency edges between two assets.
+    Remove {
+        source: String,
+        target: String,
+        /// Narrow to one protocol; omit for all.
+        #[arg(long)]
+        proto: Option<String>,
+        /// Narrow to one port; omit for all.
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Derive relationship edges from DNS: forward-resolve asset hostnames
+    /// and link assets when a hostname points at another asset's IP.
+    Dns,
 }
 
 #[tokio::main]
@@ -350,33 +418,49 @@ async fn main() -> anyhow::Result<()> {
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
         }
-        Command::Graph { format } => {
+        Command::Graph {
+            format,
+            mermaid,
+            asset,
+        } => {
             let store = SqliteStore::open(&config.db_path).await?;
-            let edges = store.list_dependencies().await?;
-            print!("{}", orbyn::output::dependencies(&edges, format));
-        }
-        Command::Assess { format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let mut edges = store.list_dependencies().await?;
             let assets = store.list_assets().await?;
-
-            let findings: Vec<Finding> = assets
-                .iter()
-                .filter(|a| a.os_name.is_none())
-                .map(|a| Finding {
-                    rule_id: "os.missing".into(),
-                    severity: Severity::Info,
-                    message: "no operating system details discovered for this asset".into(),
-                    evidence: vec![format!("asset {} scanned by Nmap", a.ip)],
-                    asset_id: Some(a.id.clone()),
-                })
-                .collect();
-
-            let report = AssessmentReport {
-                assets_assessed: assets.len(),
-                overall_score: assess(&findings),
-                findings,
-            };
-            print!("{}", orbyn::output::report(&report, format));
+            if let Some(key) = asset {
+                let asset = resolve_asset(&store, &key).await?;
+                edges.retain(|d| d.source_asset_id == asset.id || d.target_asset_id == asset.id);
+            }
+            if mermaid {
+                print!("{}", orbyn::output::mermaid(&edges, &assets));
+            } else {
+                print!("{}", orbyn::output::dependencies(&edges, &assets, format));
+            }
+        }
+        Command::Connections { asset, format } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let asset = resolve_asset(&store, &asset).await?;
+            let conns = store.list_connections(&asset.id).await?;
+            print!("{}", orbyn::output::connections(&conns, format));
+        }
+        Command::Deps { action } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            deps(&store, action).await?;
+        }
+        Command::Assess { format, rules } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            if rules {
+                print!(
+                    "{}",
+                    orbyn::output::rules_catalog(
+                        orbyn::assessment::rules::catalog(),
+                        orbyn::assessment::RULES_VERSION
+                    )
+                );
+            } else {
+                let input = assessment_input(&store).await?;
+                let report = run_assessment(&input);
+                print!("{}", orbyn::output::report(&report, format));
+            }
         }
     }
 
@@ -428,6 +512,10 @@ async fn discover(
                 .iter()
                 .filter(|o| matches!(o, Observation::RunningService(_)))
                 .count();
+            let connections = observations
+                .iter()
+                .filter(|o| matches!(o, Observation::Connection(_)))
+                .count();
             store.store_observations(observations).await?;
             store
                 .finish_job(
@@ -442,8 +530,8 @@ async fn discover(
                 .await?;
             tracing::info!(job = %job.id, assets, services, "discovery complete");
             eprintln!(
-                "Discovery job {} complete: {} assets, {} services, {} filesystems, {} running services.",
-                job.id, assets, services, filesystems, running
+                "Discovery job {} complete: {} assets, {} services, {} filesystems, {} running services, {} connections.",
+                job.id, assets, services, filesystems, running, connections
             );
             Ok(())
         }
@@ -456,15 +544,45 @@ async fn discover(
     }
 }
 
-/// Resolve an asset reference that may be an id or an IP address.
-async fn resolve_asset(store: &SqliteStore, key: &str) -> Result<Asset> {
-    match store.get_asset(key).await? {
-        Some(asset) => Ok(asset),
-        None => store
-            .get_asset_by_ip(key)
-            .await?
-            .ok_or_else(|| anyhow!("no asset matches '{key}'")),
+/// Gather the full inventory snapshot the assessment engine evaluates.
+async fn assessment_input(store: &SqliteStore) -> Result<AssessmentInput> {
+    let assets = store.list_assets().await?;
+    let mut services = Vec::new();
+    let mut filesystems = Vec::new();
+    let mut capacities = Vec::new();
+    let mut connections = Vec::new();
+    for asset in &assets {
+        services.extend(store.list_services(&asset.id).await?);
+        filesystems.extend(store.list_filesystems(&asset.id).await?);
+        if let Some(capacity) = store.get_capacity(&asset.id).await? {
+            capacities.push(capacity);
+        }
+        connections.extend(store.list_connections(&asset.id).await?);
     }
+    let dependencies = store.list_dependencies().await?;
+    Ok(AssessmentInput {
+        assets,
+        services,
+        filesystems,
+        capacities,
+        dependencies,
+        connections,
+    })
+}
+
+/// Resolve an asset reference that may be an id, an IP address, or a
+/// hostname (exact, case-insensitive).
+async fn resolve_asset(store: &SqliteStore, key: &str) -> Result<Asset> {
+    if let Some(asset) = store.get_asset(key).await? {
+        return Ok(asset);
+    }
+    if let Some(asset) = store.get_asset_by_ip(key).await? {
+        return Ok(asset);
+    }
+    if let Some(asset) = store.get_asset_by_hostname(key).await? {
+        return Ok(asset);
+    }
+    Err(anyhow!("no asset matches '{key}'"))
 }
 
 /// Fetch every asset facet from the store and render the composite detail.
@@ -483,6 +601,126 @@ async fn render_asset_detail(store: &SqliteStore, asset: &Asset, format: Format)
         &running,
         format,
     ))
+}
+
+/// Resolve both endpoints of a dependency pair, rejecting self-edges.
+async fn resolve_dep_pair(
+    store: &SqliteStore,
+    source: &str,
+    target: &str,
+) -> Result<(Asset, Asset)> {
+    let source = resolve_asset(store, source).await?;
+    let target = resolve_asset(store, target).await?;
+    if source.id == target.id {
+        anyhow::bail!(
+            "source and target resolve to the same asset ({})",
+            source.id
+        );
+    }
+    Ok((source, target))
+}
+
+/// Handle `orbyn deps <action>`.
+async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
+    match action {
+        DepsAction::Add {
+            source,
+            target,
+            proto,
+            port,
+        } => {
+            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+            let via = format!("{proto}/{port}");
+            store
+                .store_observation(Observation::Dependency(Dependency {
+                    source_asset_id: source.id.clone(),
+                    target_asset_id: target.id.clone(),
+                    proto,
+                    port,
+                    evidence_source: "manual".into(),
+                    confidence: 1.0,
+                    confirmed: true,
+                }))
+                .await?;
+            // If the edge already existed as observed evidence, mark it confirmed.
+            store
+                .confirm_dependency(&source.id, &target.id, None, None)
+                .await?;
+            eprintln!(
+                "Dependency added: {} -> {} ({}).",
+                source
+                    .hostname
+                    .clone()
+                    .unwrap_or_else(|| source.ip.to_string()),
+                target
+                    .hostname
+                    .clone()
+                    .unwrap_or_else(|| target.ip.to_string()),
+                via
+            );
+        }
+        DepsAction::Confirm {
+            source,
+            target,
+            proto,
+            port,
+        } => {
+            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+            let confirmed = store
+                .confirm_dependency(&source.id, &target.id, proto.as_deref(), port)
+                .await?;
+            if confirmed == 0 {
+                anyhow::bail!(
+                    "no observed dependency between {} and {} to confirm; \
+                     use `orbyn deps add` to create one",
+                    source.id,
+                    target.id
+                );
+            }
+            eprintln!("Confirmed {confirmed} edge(s).");
+        }
+        DepsAction::Remove {
+            source,
+            target,
+            proto,
+            port,
+        } => {
+            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+            let removed = store
+                .remove_dependency(&source.id, &target.id, proto.as_deref(), port)
+                .await?;
+            eprintln!("Removed {removed} edge(s).");
+        }
+        DepsAction::Dns => {
+            let assets = store.list_assets().await?;
+            let mut resolutions = Vec::new();
+            let mut failed = 0usize;
+            for asset in &assets {
+                let Some(hostname) = &asset.hostname else {
+                    continue;
+                };
+                match orbyn::collectors::dns::resolve_host(hostname).await {
+                    Ok(ips) => resolutions.push((hostname.clone(), ips)),
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(hostname = %hostname, error = %e, "DNS resolution failed");
+                    }
+                }
+            }
+            let edges = orbyn::collectors::dns::dns_edges(&assets, &resolutions);
+            let count = edges.len();
+            for edge in edges {
+                store
+                    .store_observation(Observation::Dependency(edge))
+                    .await?;
+            }
+            if failed > 0 {
+                eprintln!("{failed} hostname(s) could not be resolved; skipped.");
+            }
+            eprintln!("DNS evidence produced {count} relationship edge(s).");
+        }
+    }
+    Ok(())
 }
 
 /// An asset row accepted by `orbyn import`.

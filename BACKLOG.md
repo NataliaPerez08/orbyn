@@ -52,10 +52,22 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Dependency edge schema.
 - [x] **P1** Evidence source and confidence model.
 - [x] **P1** Dependency persistence + graph CLI.
-- [ ] **P1** Active connection collector.
+- [x] **P1** Active connection collector (SSH/Windows probes, reconciled into edges).
 - [ ] **P2** Firewall/flow-log importer.
-- [ ] **P2** Mermaid graph export.
+- [x] **P2** Mermaid graph export.
 - [ ] **P3** eBPF-based telemetry.
+
+## Assessment
+
+- [x] **P1** Rule engine over the normalized domain (versioned catalog).
+- [x] **P1** Migration complexity score (per-asset + overall band).
+- [x] **P1** Legacy/unsupported OS checks.
+- [x] **P1** Service and dependency risk rules.
+- [x] **P1** Application grouping primitives (connected components).
+- [x] **P1** Explainable findings and report output.
+- [ ] **P2** Additional rule packs (databases, middleware banners, certificates).
+- [ ] **P2** Assessment diffing between runs.
+- [ ] **P3** User-defined rules / rule pack loading.
 
 ## CPU/RAM and right-sizing
 

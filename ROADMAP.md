@@ -57,23 +57,35 @@ adapter over the same credential profile / command-transport abstraction.
 
 ## v0.4 — Dependency mapping
 
-- Active connection observations.
-- DNS relationship evidence.
+**Status:** implemented.
+
+- Active connection observations (SSH `ss`/`netstat` and Windows
+  `Get-NetTCPConnection` probes; remote endpoints reconciled into edges).
+- DNS relationship evidence (`orbyn deps dns`; forward resolution of asset
+  hostnames, low-confidence alias evidence).
 - Dependency graph model.
-- Confidence/evidence model.
-- Manual relationship confirmation.
-- Graph export (JSON/Mermaid) via the CLI.
+- Confidence/evidence model (every edge carries its source and confidence;
+  unconfirmed edges render dotted in Mermaid output).
+- Manual relationship confirmation (`orbyn deps add/confirm/remove`).
+- Graph export (JSON/CSV/Mermaid) via the CLI, with `--asset` scoped views.
 
 **Exit criterion:** Orbyn can identify and visualize meaningful asset-to-asset dependencies.
 
 ## v0.5 — Migration assessment
 
-- Rule engine.
-- Migration complexity score.
-- Legacy/unsupported OS checks.
-- Service and dependency risk.
-- Application grouping primitives.
-- Explainable findings and report output.
+**Status:** implemented.
+
+- Rule engine (versioned catalog; `orbyn assess --rules` lists it).
+- Migration complexity score (per-asset 0-100, averaged overall with a
+  low/medium/high band; severity weights Info 2 / Warning 10 / High 25).
+- Legacy/unsupported OS checks (EOL table for Ubuntu/CentOS/RHEL/Debian/SLES/
+  Windows Server with vendor-support notes as evidence).
+- Service and dependency risk (insecure/management exposure, dependency hubs,
+  external endpoints, unconfirmed edges, missing capacity, near-full disks).
+- Application grouping primitives (union-find over runtime/manual dependency
+  edges; DNS alias evidence excluded).
+- Explainable findings and report output (every finding carries rule id,
+  severity, rationale and evidence; reports render as table/JSON/CSV).
 
 **Exit criterion:** inventory becomes an actionable migration assessment.
 

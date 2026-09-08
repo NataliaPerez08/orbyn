@@ -5,8 +5,8 @@
 
 use chrono::Utc;
 use orbyn::domain::{
-    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobOutcome,
-    JobStatus, Observation, RunningService, Service,
+    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
+    JobOutcome, JobStatus, Observation, RunningService, Service,
 };
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
@@ -425,4 +425,162 @@ async fn host_facts_round_trip() {
         1,
         "running services must reconcile by (asset, name)"
     );
+}
+
+#[tokio::test]
+async fn connections_reconcile_into_dependency_edges() {
+    let path = format!("{}.conn", sample_db_path());
+    let _ = std::fs::remove_file(&path);
+    let store = SqliteStore::open(std::path::Path::new(&path))
+        .await
+        .expect("open test db");
+
+    // Inventory: api (10.0.0.1) and db (10.0.0.2).
+    store
+        .store_observations(sample_observations())
+        .await
+        .expect("seed");
+
+    // api holds an established connection to db:5432 and to an unmanaged host.
+    let now = Utc::now();
+    let conns = vec![
+        Observation::Asset(Asset {
+            id: "asset-api".into(),
+            ip: "10.0.0.1".parse().unwrap(),
+            hostname: Some("api-01".into()),
+            device_class: Some("server".into()),
+            os_name: None,
+            os_version: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: now,
+            last_seen: now,
+        }),
+        Observation::Connection(Connection {
+            asset_id: "asset-api".into(),
+            proto: "tcp".into(),
+            local_ip: Some("10.0.0.1".parse().unwrap()),
+            local_port: Some(54322),
+            remote_ip: "10.0.0.2".parse().unwrap(),
+            remote_port: 5433,
+            process: Some("postgres".into()),
+        }),
+        Observation::Connection(Connection {
+            asset_id: "asset-api".into(),
+            proto: "tcp".into(),
+            local_ip: Some("10.0.0.1".parse().unwrap()),
+            local_port: Some(49200),
+            remote_ip: "203.0.113.9".parse().unwrap(),
+            remote_port: 443,
+            process: None,
+        }),
+    ];
+    store
+        .store_observations(conns)
+        .await
+        .expect("store connections");
+
+    // Both connections are persisted as observations...
+    let listed = store
+        .list_connections("asset-api")
+        .await
+        .expect("list connections");
+    assert_eq!(listed.len(), 2);
+
+    // ...but only the one targeting a known asset becomes an edge.
+    let deps = store.list_dependencies().await.expect("list deps");
+    assert_eq!(
+        deps.len(),
+        2,
+        "seed dependency + reconciled connection edge"
+    );
+    let observed = deps
+        .iter()
+        .find(|d| d.evidence_source == "active-connections" && d.port == 5433)
+        .expect("reconciled edge");
+    assert_eq!(observed.source_asset_id, "asset-api");
+    assert_eq!(observed.target_asset_id, "asset-db");
+    assert_eq!(observed.port, 5433);
+    assert!(!observed.confirmed);
+
+    // Re-observing must reconcile, not duplicate.
+    let again = Connection {
+        asset_id: "asset-api".into(),
+        proto: "tcp".into(),
+        local_ip: None,
+        local_port: None,
+        remote_ip: "10.0.0.2".parse().unwrap(),
+        remote_port: 5433,
+        process: None,
+    };
+    store
+        .store_observation(Observation::Connection(again))
+        .await
+        .expect("re-observe");
+    let deps = store.list_dependencies().await.expect("list deps");
+    assert_eq!(
+        deps.iter().filter(|d| d.port == 5433).count(),
+        1,
+        "connection edges must reconcile, not duplicate"
+    );
+}
+
+#[tokio::test]
+async fn confirm_and_remove_dependencies() {
+    let path = format!("{}.deps", sample_db_path());
+    let _ = std::fs::remove_file(&path);
+    let store = SqliteStore::open(std::path::Path::new(&path))
+        .await
+        .expect("open test db");
+    store
+        .store_observations(sample_observations())
+        .await
+        .expect("seed");
+
+    // Two edges between the same pair.
+    let now = Utc::now();
+    let mk = |port: u16| {
+        Observation::Dependency(Dependency {
+            source_asset_id: "asset-api".into(),
+            target_asset_id: "asset-db".into(),
+            proto: "tcp".into(),
+            port,
+            evidence_source: "active-connections".into(),
+            confidence: 0.9,
+            confirmed: false,
+        })
+    };
+    let _ = now;
+    store
+        .store_observations(vec![mk(5432), mk(5433)])
+        .await
+        .expect("edges");
+
+    // Confirm only port 5432.
+    let confirmed = store
+        .confirm_dependency("asset-api", "asset-db", Some("tcp"), Some(5432))
+        .await
+        .expect("confirm");
+    assert_eq!(confirmed, 1);
+    let deps = store.list_dependencies().await.expect("deps");
+    let edge = deps.iter().find(|d| d.port == 5432).unwrap();
+    assert!(edge.confirmed);
+    assert_eq!(edge.confidence, 1.0);
+    assert!(!deps.iter().find(|d| d.port == 5433).unwrap().confirmed);
+
+    // Confirm the rest. The already-confirmed row matches the WHERE clause
+    // again, so rows_affected counts both touches.
+    let confirmed = store
+        .confirm_dependency("asset-api", "asset-db", None, None)
+        .await
+        .expect("confirm all");
+    assert_eq!(confirmed, 2);
+    let removed = store
+        .remove_dependency("asset-api", "asset-db", None, None)
+        .await
+        .expect("remove all");
+    assert_eq!(removed, 2);
+    assert!(store.list_dependencies().await.unwrap().is_empty());
 }

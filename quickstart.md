@@ -101,9 +101,21 @@ orbyn import --format csv --file inventory.csv
 
 ## 8. Dependency graph & assessment
 
+Host-level collection (step 5) records active connections; Orbyn turns them
+into dependency edges whenever the remote endpoint is a known asset.
+
 ```bash
-orbyn graph
-orbyn assess
+orbyn graph                    # labeled edges with evidence + confidence
+orbyn graph --mermaid          # Mermaid flowchart (dotted = unconfirmed)
+orbyn graph --asset 10.0.0.2   # everything touching one asset
+orbyn connections 10.0.0.5     # raw connection evidence
+
+orbyn deps confirm web-01 db-01 --port 5432   # confirm what was observed
+orbyn deps add cache-01 db-01 --port 5432     # add a manual edge
+orbyn deps dns                                 # DNS relationship evidence
+
+orbyn assess                    # explainable findings + complexity scores
+orbyn assess --rules            # the rule catalog and its version
 ```
 
 ## Troubleshooting

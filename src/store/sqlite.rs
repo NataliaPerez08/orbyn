@@ -10,8 +10,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 
 use crate::domain::{
-    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobOutcome,
-    JobStatus, Observation, RunningService, Service,
+    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
+    JobOutcome, JobStatus, Observation, RunningService, Service,
 };
 use crate::store::traits::AssetAnnotations;
 
@@ -168,6 +168,34 @@ struct RunningServiceRow {
     name: String,
     state: Option<String>,
     description: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct ConnectionRow {
+    asset_id: String,
+    proto: String,
+    local_ip: Option<String>,
+    local_port: Option<i64>,
+    remote_ip: String,
+    remote_port: i64,
+    process: Option<String>,
+}
+
+impl ConnectionRow {
+    fn into_connection(self) -> Connection {
+        Connection {
+            asset_id: self.asset_id,
+            proto: self.proto,
+            local_ip: self.local_ip.and_then(|ip| ip.parse().ok()),
+            local_port: self.local_port.map(|p| p as u16),
+            remote_ip: self
+                .remote_ip
+                .parse()
+                .unwrap_or_else(|_| "0.0.0.0".parse().unwrap()),
+            remote_port: self.remote_port as u16,
+            process: self.process,
+        }
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -424,6 +452,56 @@ impl crate::store::traits::Store for SqliteStore {
                     .await
                     .context("inserting running service")?;
                 }
+                Observation::Connection(conn) => {
+                    let remote_ip = conn.remote_ip.to_string();
+                    let now = chrono::Utc::now().to_rfc3339();
+                    sqlx::query(
+                        "INSERT INTO asset_connections \
+                           (asset_id, proto, local_ip, local_port, remote_ip, remote_port, process, first_seen, last_seen) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) \
+                         ON CONFLICT(asset_id, proto, remote_ip, remote_port) DO UPDATE SET \
+                           local_ip = COALESCE(excluded.local_ip, asset_connections.local_ip), \
+                           local_port = COALESCE(excluded.local_port, asset_connections.local_port), \
+                           process = COALESCE(excluded.process, asset_connections.process), \
+                           last_seen = excluded.last_seen",
+                    )
+                    .bind(&conn.asset_id)
+                    .bind(&conn.proto)
+                    .bind(conn.local_ip.map(|ip| ip.to_string()))
+                    .bind(conn.local_port.map(|p| p as i64))
+                    .bind(&remote_ip)
+                    .bind(conn.remote_port as i64)
+                    .bind(&conn.process)
+                    .bind(&now)
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting connection")?;
+
+                    // Reconcile the remote endpoint into a dependency edge
+                    // whenever it matches a known asset.
+                    let target_id: Option<String> =
+                        sqlx::query_scalar("SELECT id FROM assets WHERE ip = ?1")
+                            .bind(&remote_ip)
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .context("resolving connection target")?;
+                    if let Some(target) = target_id {
+                        if target != conn.asset_id {
+                            sqlx::query(
+                                "INSERT OR IGNORE INTO dependencies \
+                                   (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
+                                 VALUES (?1, ?2, ?3, ?4, 'active-connections', 0.9, 0)",
+                            )
+                            .bind(&conn.asset_id)
+                            .bind(&target)
+                            .bind(&conn.proto)
+                            .bind(conn.remote_port as i64)
+                            .execute(&mut *tx)
+                            .await
+                            .context("inserting dependency from connection")?;
+                        }
+                    }
+                }
                 Observation::MetricSample(_) => {
                     tracing::warn!("observation type not yet persisted");
                 }
@@ -469,6 +547,19 @@ impl crate::store::traits::Store for SqliteStore {
         .fetch_optional(&self.pool)
         .await
         .context("fetching asset by ip")?;
+        Ok(row.map(AssetRow::into_asset))
+    }
+
+    async fn get_asset_by_hostname(&self, hostname: &str) -> Result<Option<Asset>> {
+        let row = sqlx::query_as::<_, AssetRow>(
+            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+                    environment, owner, criticality, tags, first_seen, last_seen \
+             FROM assets WHERE hostname = ?1 COLLATE NOCASE",
+        )
+        .bind(hostname)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching asset by hostname")?;
         Ok(row.map(AssetRow::into_asset))
     }
 
@@ -535,6 +626,67 @@ impl crate::store::traits::Store for SqliteStore {
             .into_iter()
             .map(FilesystemRow::into_filesystem)
             .collect())
+    }
+
+    async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>> {
+        let rows = sqlx::query_as::<_, ConnectionRow>(
+            "SELECT asset_id, proto, local_ip, local_port, remote_ip, remote_port, process \
+             FROM asset_connections WHERE asset_id = ?1 ORDER BY remote_ip, remote_port",
+        )
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing connections")?;
+        Ok(rows
+            .into_iter()
+            .map(ConnectionRow::into_connection)
+            .collect())
+    }
+
+    async fn confirm_dependency(
+        &self,
+        source: &str,
+        target: &str,
+        proto: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<usize> {
+        let result = sqlx::query(
+            "UPDATE dependencies SET confirmed = 1, confidence = 1.0 \
+             WHERE source_asset_id = ?1 AND target_asset_id = ?2 \
+               AND (?3 IS NULL OR proto = ?3) \
+               AND (?4 IS NULL OR port = ?4)",
+        )
+        .bind(source)
+        .bind(target)
+        .bind(proto)
+        .bind(port.map(|p| p as i64))
+        .execute(&self.pool)
+        .await
+        .context("confirming dependency")?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn remove_dependency(
+        &self,
+        source: &str,
+        target: &str,
+        proto: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<usize> {
+        let result = sqlx::query(
+            "DELETE FROM dependencies \
+             WHERE source_asset_id = ?1 AND target_asset_id = ?2 \
+               AND (?3 IS NULL OR proto = ?3) \
+               AND (?4 IS NULL OR port = ?4)",
+        )
+        .bind(source)
+        .bind(target)
+        .bind(proto)
+        .bind(port.map(|p| p as i64))
+        .execute(&self.pool)
+        .await
+        .context("removing dependency")?;
+        Ok(result.rows_affected() as usize)
     }
 
     async fn list_running_services(&self, asset_id: &str) -> Result<Vec<RunningService>> {

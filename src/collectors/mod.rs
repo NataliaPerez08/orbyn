@@ -8,6 +8,7 @@
 
 pub mod classify;
 pub mod credentials;
+pub mod dns;
 pub mod nmap;
 pub mod snmp;
 pub mod ssh;

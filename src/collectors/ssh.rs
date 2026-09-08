@@ -25,8 +25,8 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::domain::{Asset, Capacity, Filesystem, Observation, RunningService};
-use crate::parsing::split_sections;
+use crate::domain::{Asset, Capacity, Connection, Filesystem, Observation, RunningService};
+use crate::parsing::{parse_addr_port, split_sections};
 
 use super::credentials::CredentialProfile;
 use super::types::{Collector, CpuFacts, ScanTarget};
@@ -39,7 +39,8 @@ pub const LINUX_PROBE: &str = "echo '###os'; cat /etc/os-release; \
      echo '###mem'; grep ^MemTotal /proc/meminfo; \
      echo '###disk'; df -kPT -x tmpfs -x devtmpfs; \
      echo '###svc'; systemctl --no-legend --no-pager --plain \
-       list-units --type=service --state=running 2>/dev/null";
+       list-units --type=service --state=running 2>/dev/null; \
+     echo '###conn'; ss -tnp state established 2>/dev/null || netstat -tn 2>/dev/null";
 
 /// Executes a fixed command on a remote host through the `ssh` binary.
 ///
@@ -177,6 +178,7 @@ pub struct LinuxHostFacts {
     pub ram_total_mb: Option<u64>,
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
+    pub connections: Vec<Connection>,
 }
 
 /// Parse the full Linux probe output into facts.
@@ -191,6 +193,7 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
     let ram_total_mb = parse_meminfo(&section("mem"));
     let filesystems = parse_df(&section("disk"));
     let services = parse_systemctl(&section("svc"));
+    let connections = parse_connections(&section("conn"));
 
     LinuxHostFacts {
         os_name,
@@ -200,6 +203,7 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
         ram_total_mb,
         filesystems,
         services,
+        connections,
     }
 }
 
@@ -245,6 +249,11 @@ pub fn linux_observations(ip: IpAddr, facts: &LinuxHostFacts) -> Vec<Observation
         let mut svc = svc.clone();
         svc.asset_id = id.clone();
         observations.push(Observation::RunningService(svc));
+    }
+    for conn in &facts.connections {
+        let mut conn = conn.clone();
+        conn.asset_id = id.clone();
+        observations.push(Observation::Connection(conn));
     }
     observations
 }
@@ -418,6 +427,74 @@ fn parse_systemctl(lines: &[String]) -> Vec<RunningService> {
     out
 }
 
+/// Parse active TCP connections from `ss -tnp state established` output,
+/// falling back to `netstat -tn` format.
+///
+/// Loopback remote endpoints and self-connections (remote == local address)
+/// are dropped: they never become dependency evidence.
+fn parse_connections(lines: &[String]) -> Vec<Connection> {
+    let is_netstat = lines
+        .iter()
+        .any(|l| l.trim_start().starts_with("tcp") && l.split_whitespace().count() >= 6);
+    let mut out = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("State")
+            || trimmed.starts_with("Proto")
+            || trimmed.starts_with("Active Internet")
+        {
+            continue;
+        }
+        let fields: Vec<&str> = trimmed.split_whitespace().collect();
+        let (local, peer, process) = if is_netstat {
+            // tcp 0 0 local peer ESTABLISHED
+            if fields.len() < 6 || fields[5] != "ESTABLISHED" {
+                continue;
+            }
+            (fields[3], fields[4], None)
+        } else {
+            // ESTAB 0 0 local peer [users:(("proc",pid=..,fd=..))]
+            if fields[0] != "ESTAB" || fields.len() < 5 {
+                continue;
+            }
+            let process = if fields.len() > 5 {
+                first_quoted(&fields[5..].join(" "))
+            } else {
+                None
+            };
+            (fields[3], fields[4], process)
+        };
+
+        let Some((local_ip, local_port)) = parse_addr_port(local) else {
+            continue;
+        };
+        let Some((remote_ip, remote_port)) = parse_addr_port(peer) else {
+            continue;
+        };
+        if remote_ip.is_loopback() || remote_ip == local_ip {
+            continue;
+        }
+        out.push(Connection {
+            asset_id: String::new(),
+            proto: "tcp".into(),
+            local_ip: Some(local_ip),
+            local_port: Some(local_port),
+            remote_ip,
+            remote_port,
+            process,
+        });
+    }
+    out
+}
+
+/// Extract the first double-quoted token (`users:(("nginx",pid=1,fd=2))`).
+fn first_quoted(raw: &str) -> Option<String> {
+    let start = raw.find('"')? + 1;
+    let end = raw[start..].find('"')? + start;
+    Some(raw[start..end].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +524,18 @@ Filesystem     Type   1024-blocks      Used Available Capacity Mounted on\n\
 nginx.service                 loaded active running A high performance web server and reverse proxy\n\
 sshd.service                  loaded active running OpenBSD Secure Shell server\n\
 stopped.service               loaded inactive dead   Should not appear\n";
+
+    const CONN_SECTION: &str = "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n\
+ESTAB  0      0      10.0.0.5:443          10.0.0.9:51414           users:((\"nginx\",pid=1234,fd=9))\n\
+ESTAB  0      0      10.0.0.5:54322        10.0.0.7:5432            users:((\"postgres\",pid=977,fd=6))\n\
+ESTAB  0      0      127.0.0.1:54324       127.0.0.1:5432            \n\
+ESTAB  0      0      10.0.0.5:22           10.0.0.5:51234            users:((\"sshd\",pid=1,fd=3))\n";
+
+    const NETSTAT_SECTION: &str = "Active Internet connections (w/o servers)\n\
+Proto Recv-Q Send-Q Local Address           Foreign Address         State\n\
+tcp        0      0 10.0.0.5:443            10.0.0.9:51414          ESTABLISHED\n\
+tcp        0      0 10.0.0.5:22             10.0.0.8:49222          ESTABLISHED\n\
+tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT\n";
 
     #[test]
     fn parses_full_probe() {
@@ -493,26 +582,13 @@ stopped.service               loaded inactive dead   Should not appear\n";
         let observations = linux_observations("10.0.0.5".parse().unwrap(), &facts);
 
         assert!(matches!(observations[0], Observation::Asset(_)));
-        let assets = observations
-            .iter()
-            .filter(|o| matches!(o, Observation::Asset(_)))
-            .count();
-        let capacity = observations
-            .iter()
-            .filter(|o| matches!(o, Observation::Capacity(_)))
-            .count();
-        let filesystems = observations
-            .iter()
-            .filter(|o| matches!(o, Observation::Filesystem(_)))
-            .count();
-        let services = observations
-            .iter()
-            .filter(|o| matches!(o, Observation::RunningService(_)))
-            .count();
-        assert_eq!(assets, 1);
-        assert_eq!(capacity, 1);
-        assert_eq!(filesystems, 2);
-        assert_eq!(services, 2);
+        let count =
+            |pred: &dyn Fn(&Observation) -> bool| observations.iter().filter(|o| pred(o)).count();
+        assert_eq!(count(&|o| matches!(o, Observation::Asset(_))), 1);
+        assert_eq!(count(&|o| matches!(o, Observation::Capacity(_))), 1);
+        assert_eq!(count(&|o| matches!(o, Observation::Filesystem(_))), 2);
+        assert_eq!(count(&|o| matches!(o, Observation::RunningService(_))), 2);
+        assert_eq!(count(&|o| matches!(o, Observation::Connection(_))), 0);
 
         if let Some(Observation::Asset(asset)) = observations.first() {
             assert_eq!(asset.device_class.as_deref(), Some("server"));
@@ -525,6 +601,48 @@ stopped.service               loaded inactive dead   Should not appear\n";
             assert_eq!(cap.ram_total_mb, Some(16001));
             assert_eq!(cap.cpu_threads, Some(8));
         }
+    }
+
+    #[test]
+    fn parses_ss_connections_with_process() {
+        let conns =
+            parse_connections(&CONN_SECTION.lines().map(str::to_string).collect::<Vec<_>>());
+        assert_eq!(
+            conns.len(),
+            2,
+            "loopback and self connections must be dropped"
+        );
+        let to_db = conns.iter().find(|c| c.remote_port == 5432).unwrap();
+        assert_eq!(to_db.remote_ip.to_string(), "10.0.0.7");
+        assert_eq!(to_db.process.as_deref(), Some("postgres"));
+        assert_eq!(to_db.proto, "tcp");
+        assert_eq!(to_db.local_port, Some(54322));
+    }
+
+    #[test]
+    fn parses_netstat_connections() {
+        let conns = parse_connections(
+            &NETSTAT_SECTION
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(conns.len(), 2, "non-established states must be skipped");
+        assert_eq!(conns[0].remote_port, 51414);
+        assert_eq!(conns[0].process, None);
+    }
+
+    #[test]
+    fn full_probe_includes_connections() {
+        let full = format!("{PROBE_OUTPUT}\n###conn\n{CONN_SECTION}");
+        let facts = parse_linux_probe(&full);
+        assert_eq!(facts.connections.len(), 2);
+        let observations = linux_observations("10.0.0.5".parse().unwrap(), &facts);
+        let conns = observations
+            .iter()
+            .filter(|o| matches!(o, Observation::Connection(_)))
+            .count();
+        assert_eq!(conns, 2);
     }
 
     #[test]

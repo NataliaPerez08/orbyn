@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::domain::{
-    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobOutcome,
-    JobStatus, Observation, RunningService, Service,
+    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
+    JobOutcome, JobStatus, Observation, RunningService, Service,
 };
 
 /// Inventory annotation edits applied to an asset.
@@ -41,13 +41,36 @@ pub trait Store: Send + Sync {
     async fn list_assets(&self) -> Result<Vec<Asset>>;
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>>;
     async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>>;
+    async fn get_asset_by_hostname(&self, hostname: &str) -> Result<Option<Asset>>;
     async fn list_services(&self, asset_id: &str) -> Result<Vec<Service>>;
     async fn list_interfaces(&self, asset_id: &str) -> Result<Vec<Interface>>;
     async fn list_filesystems(&self, asset_id: &str) -> Result<Vec<Filesystem>>;
     async fn list_running_services(&self, asset_id: &str) -> Result<Vec<RunningService>>;
     /// Latest recorded CPU/RAM capacity for an asset.
     async fn get_capacity(&self, asset_id: &str) -> Result<Option<Capacity>>;
+    /// Active connections observed on an asset (dependency evidence).
+    async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;
+
+    /// Mark observed edges between two assets as confirmed (confidence 1.0).
+    /// `proto`/`port` narrow the update; `None` means every edge between the
+    /// pair. Returns the number of edges confirmed.
+    async fn confirm_dependency(
+        &self,
+        source: &str,
+        target: &str,
+        proto: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<usize>;
+
+    /// Delete edges between two assets. Returns the number removed.
+    async fn remove_dependency(
+        &self,
+        source: &str,
+        target: &str,
+        proto: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<usize>;
 
     /// Apply inventory annotation edits (environment/owner/criticality/tags).
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()>;

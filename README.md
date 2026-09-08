@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v0.3 host-level discovery, CLI focus.
+> **Status:** Early development — v0.5 migration assessment, CLI focus.
 
 ## Why Orbyn?
 
@@ -136,7 +136,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 The repository currently provides:
 
 * Rust crate scaffold (single binary, CLI-first).
-* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `jobs`, `annotate`, `import`, `export`, `graph`, `assess`.
+* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
 * Asset, service, interface and discovery job domain model, with capacity,
@@ -163,10 +163,32 @@ The repository currently provides:
     no credentials stored or logged.
   * `orbyn capacity`, `orbyn disks`, `orbyn host-services` commands; the
     asset detail view shows every recorded facet.
+* Dependency mapping (v0.4):
+  * Active connection observations from the SSH/Windows host probes
+    (`ss -tnp` / `Get-NetTCPConnection`), reconciled into dependency edges
+    whenever the remote endpoint matches a known asset.
+  * DNS relationship evidence (`orbyn deps dns`).
+  * Manual relationship confirmation and curation (`orbyn deps add`,
+    `orbyn deps confirm`, `orbyn deps remove`).
+  * Labeled graph views: `orbyn graph` (table/JSON/CSV), `--mermaid`
+    flowchart export, and `--asset` scoped views; `orbyn connections` shows
+    the raw evidence.
+* Migration assessment (v0.5):
+  * Versioned rule engine (`rules_version` on every report; bump on rule
+    changes) evaluating the normalized domain — never raw collector output.
+  * Rules: legacy/EOL OS detection, insecure and management service exposure,
+    dependency hubs (blast radius), external/unmanaged coupling, unconfirmed
+    edges, missing CPU/RAM capacity, nearly-full filesystems.
+  * Explainable findings (rule id, severity, message, evidence) with
+    per-asset complexity scores (0-100) and an overall complexity band.
+  * Application grouping primitives: assets coupled by runtime/manual
+    dependency edges are grouped as likely co-migrating applications.
+  * `orbyn assess` (table/JSON/CSV report) and `orbyn assess --rules`
+    (rule catalog).
 * Architecture documentation, roadmap and backlog.
 
-The next functional milestone is dependency mapping (v0.4): active connection
-observations, DNS evidence and the dependency graph model.
+The next functional milestone is the stable CLI product (v1.0): frozen
+command surface, completions, audit trail and release artifacts.
 
 ## Requirements
 
@@ -217,6 +239,13 @@ orbyn interfaces <id-or-ip> [--format ...]
 orbyn capacity <id-or-ip> [--format ...]          CPU/RAM capacity
 orbyn disks <id-or-ip> [--format ...]             Filesystem inventory
 orbyn host-services <id-or-ip> [--format ...]     Running host services (systemd units / Windows services)
+orbyn connections <id-or-ip> [--format ...]       Active connections observed on a host
+orbyn graph [--format ...] [--mermaid] [--asset <id-or-ip>]
+orbyn deps add <src> <tgt> [--proto tcp --port N]     Add a manual dependency
+orbyn deps confirm <src> <tgt> [--proto --port]       Confirm observed edges
+orbyn deps remove <src> <tgt> [--proto --port]        Delete edges
+orbyn deps dns                                        Derive relationship edges from DNS
+orbyn assess [--format ...] [--rules]             Migration assessment report / rule catalog
 orbyn annotate <id-or-ip> --environment prod --owner <team> \
     --criticality high --tag core --remove-tag dr  Enrich inventory metadata
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
@@ -261,11 +290,21 @@ orbyn assets --format json
 orbyn export --format csv --output inventory.csv
 orbyn import --format csv --file inventory.csv
 
-# dependency graph (v0.4)
-orbyn graph
+# dependency graph: edges, evidence and confidence
+orbyn graph                      # labeled table
+orbyn graph --mermaid            # Mermaid flowchart (solid = confirmed)
+orbyn graph --asset 10.0.0.2     # everything touching one asset
+orbyn connections 10.0.0.5       # raw connection evidence
 
-# migration assessment (v0.5)
-orbyn assess
+# curate dependencies
+orbyn deps confirm web-01 db-01 --port 5432
+orbyn deps add cache-01 db-01 --port 5432
+orbyn deps dns                   # DNS relationship evidence
+
+# migration assessment: explainable findings + complexity scores
+orbyn assess                    # findings, per-asset scores, application groups
+orbyn assess --format json      # machine-readable report
+orbyn assess --rules            # the rule catalog and its version
 ```
 
 By default output is a terminal table; `--format json` and `--format csv`
@@ -528,9 +567,9 @@ v0.2    Inventory enrichment       (done)
           ↓
 v0.3    Host discovery via SSH / Windows (done — native WinRM pending)
           ↓
-v0.4    Dependency mapping
+v0.4    Dependency mapping       (done)
           ↓
-v0.5    Migration assessment
+v0.5    Migration assessment     (done)
           ↓
 v1.0    Stable CLI product
           ↓

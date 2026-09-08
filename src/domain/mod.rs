@@ -163,6 +163,21 @@ pub struct Dependency {
     pub confirmed: bool,
 }
 
+/// An active network connection observed on a host (v0.4 dependency
+/// evidence). The store reconciles the remote endpoint into a
+/// [`Dependency`] edge whenever the remote IP matches a known asset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Connection {
+    pub asset_id: String,
+    pub proto: String,
+    pub local_ip: Option<IpAddr>,
+    pub local_port: Option<u16>,
+    pub remote_ip: IpAddr,
+    pub remote_port: u16,
+    /// Owning process name when visible (Linux `ss -p` only).
+    pub process: Option<String>,
+}
+
 /// Hardware/virtual machine allocation for a single asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capacity {
@@ -254,6 +269,7 @@ pub enum Observation {
     Capacity(Capacity),
     Filesystem(Filesystem),
     RunningService(RunningService),
+    Connection(Connection),
     MetricSample(MetricSample),
     Dependency(Dependency),
 }

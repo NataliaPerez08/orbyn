@@ -8,10 +8,11 @@ use std::fmt;
 
 use comfy_table::{Cell, ContentArrangement, Table};
 
+use crate::assessment::rules::Rule;
 use crate::assessment::{AssessmentReport, Severity};
 use crate::domain::{
-    Asset, Capacity, Criticality, Dependency, DiscoveryJob, Filesystem, Interface, JobStatus,
-    RunningService, Service,
+    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
+    JobStatus, RunningService, Service,
 };
 
 /// Output format selected through `--format` on each command.
@@ -463,8 +464,12 @@ pub fn asset_detail(
     }
 }
 
-/// Render the dependency graph (edge list).
-pub fn dependencies(edges: &[Dependency], format: Format) -> String {
+/// Render the dependency graph (edge list) with readable asset labels.
+///
+/// `assets` supplies hostname/IP labels; edges whose endpoints are missing
+/// from the inventory fall back to raw asset ids.
+pub fn dependencies(edges: &[Dependency], assets: &[Asset], format: Format) -> String {
+    let label = |id: &str| asset_label(assets, id);
     match format {
         Format::Json => json(&edges),
         Format::Csv => {
@@ -487,26 +492,28 @@ pub fn dependencies(edges: &[Dependency], format: Format) -> String {
         }
         Format::Table => {
             if edges.is_empty() {
-                return "No dependencies yet. Dependency mapping arrives in v0.4.\n".to_string();
+                return "No dependencies recorded yet.\nRun host-level collection \
+(--collector ssh / --collector windows) or `orbyn deps add`.\n"
+                    .to_string();
             }
             let mut table = table(&[
                 "Source",
                 "->",
                 "Target",
-                "Proto",
-                "Port",
+                "Via",
                 "Evidence",
                 "Confidence",
+                "Confirmed",
             ]);
             for d in edges {
                 table.add_row(vec![
-                    Cell::new(&d.source_asset_id),
+                    Cell::new(label(&d.source_asset_id)),
                     Cell::new("->"),
-                    Cell::new(&d.target_asset_id),
-                    Cell::new(&d.proto),
-                    Cell::new(d.port),
+                    Cell::new(label(&d.target_asset_id)),
+                    Cell::new(edge_via(d)),
                     Cell::new(&d.evidence_source),
                     Cell::new(format!("{:.0}%", d.confidence * 100.0)),
+                    Cell::new(if d.confirmed { "yes" } else { "no" }),
                 ]);
             }
             table.to_string()
@@ -514,12 +521,139 @@ pub fn dependencies(edges: &[Dependency], format: Format) -> String {
     }
 }
 
+/// Render the dependency graph as a Mermaid flowchart.
+///
+/// Confirmed edges render solid; observed-but-unconfirmed edges render
+/// dotted so guesses look like guesses.
+pub fn mermaid(edges: &[Dependency], assets: &[Asset]) -> String {
+    let mut out = String::from("graph TD\n");
+    if edges.is_empty() {
+        return out;
+    }
+    let label = |id: &str| mermaid_label(assets, id);
+    for d in edges {
+        let arrow = if d.confirmed {
+            format!("-->|{}|", mermaid_edge_label(d))
+        } else {
+            format!("-. {}.->", mermaid_edge_label(d))
+        };
+        out.push_str(&format!(
+            "  {}[\"{}\"] {} {}[\"{}\"]\n",
+            mermaid_node_id(&d.source_asset_id),
+            label(&d.source_asset_id),
+            arrow,
+            mermaid_node_id(&d.target_asset_id),
+            label(&d.target_asset_id),
+        ));
+    }
+    out
+}
+
+/// Render the active connections observed on an asset.
+pub fn connections(conns: &[Connection], format: Format) -> String {
+    match format {
+        Format::Json => json(conns),
+        Format::Csv => {
+            let mut out =
+                String::from("asset_id,proto,local_ip,local_port,remote_ip,remote_port,process\n");
+            for c in conns {
+                out.push_str(&format!(
+                    "{},{},{},{},{},{},{}\n",
+                    csv(&c.asset_id),
+                    csv(&c.proto),
+                    csv(&c.local_ip.map(|ip| ip.to_string()).unwrap_or_default()),
+                    c.local_port.map(|p| p.to_string()).unwrap_or_default(),
+                    c.remote_ip,
+                    c.remote_port,
+                    csv(&c.process.clone().unwrap_or_default()),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if conns.is_empty() {
+                return "No active connections observed for this asset.\n".to_string();
+            }
+            let mut table = table(&["Local", "Remote", "Proto", "Process"]);
+            for c in conns {
+                table.add_row(vec![
+                    Cell::new(match c.local_ip {
+                        Some(ip) => format!(
+                            "{ip}:{}",
+                            c.local_port
+                                .map(|p| p.to_string())
+                                .unwrap_or_else(|| "-".into())
+                        ),
+                        None => "-".into(),
+                    }),
+                    Cell::new(format!("{}:{}", c.remote_ip, c.remote_port)),
+                    Cell::new(&c.proto),
+                    Cell::new(c.process.clone().unwrap_or_else(|| "-".into())),
+                ]);
+            }
+            table.to_string()
+        }
+    }
+}
+
+fn asset_label(assets: &[Asset], id: &str) -> String {
+    match assets.iter().find(|a| a.id == id) {
+        Some(asset) => match &asset.hostname {
+            Some(host) => format!("{host} ({})", asset.ip),
+            None => asset.ip.to_string(),
+        },
+        None => id.to_string(),
+    }
+}
+
+fn edge_via(d: &Dependency) -> String {
+    if d.proto == "dns" {
+        "dns".into()
+    } else {
+        format!("{}/{}", d.proto, d.port)
+    }
+}
+
+fn mermaid_edge_label(d: &Dependency) -> String {
+    if d.proto == "dns" {
+        format!("dns {:.0}%", d.confidence * 100.0)
+    } else {
+        format!("{}/{} {:.0}%", d.proto, d.port, d.confidence * 100.0)
+    }
+}
+
+fn mermaid_node_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn mermaid_label(assets: &[Asset], id: &str) -> String {
+    // Escape characters Mermaid treats specially inside quoted labels.
+    asset_label(assets, id).replace(['"', '[', ']'], "_")
+}
+
 /// Render an assessment report.
 pub fn report(report: &AssessmentReport, format: Format) -> String {
     match format {
         Format::Json => json(report),
         Format::Csv => {
-            let mut out = String::from("rule_id,severity,asset_id,message,evidence\n");
+            let mut out =
+                String::from("#summary\nrules_version,assets_assessed,overall_score,complexity\n");
+            out.push_str(&format!(
+                "{},{},{},{}\n",
+                report.rules_version,
+                report.assets_assessed,
+                report.overall_score,
+                report.complexity
+            ));
+            out.push_str("\n#findings\nrule_id,severity,asset_id,message,evidence\n");
             for f in &report.findings {
                 out.push_str(&format!(
                     "{},{},{},{},{}\n",
@@ -527,36 +661,90 @@ pub fn report(report: &AssessmentReport, format: Format) -> String {
                     severity_str(f.severity),
                     csv(&f.asset_id.clone().unwrap_or_default()),
                     csv(&f.message),
-                    csv(&f.evidence.join(";")),
+                    csv(&f.evidence.join("; ")),
                 ));
             }
-            out.push_str(&format!("#overall_score,{}\n", report.overall_score));
+            out.push_str("\n#asset_scores\nasset_id,score,findings\n");
+            for s in &report.asset_scores {
+                out.push_str(&format!("{},{},{}\n", s.asset_id, s.score, s.findings));
+            }
+            out.push_str("\n#application_groups\ngroup_id,assets,edge_count\n");
+            for g in &report.application_groups {
+                out.push_str(&format!(
+                    "{},{},{}\n",
+                    g.id,
+                    csv(&g.asset_ids.join(";")),
+                    g.edge_count
+                ));
+            }
             out
         }
         Format::Table => {
             let mut out = String::new();
-            let mut findings = String::new();
+            out.push_str("Migration assessment\n");
+            out.push_str(&format!(
+                "Rules version : {}\nAssets assessed : {}\nOverall score  : {}/100 ({})\n",
+                report.rules_version,
+                report.assets_assessed,
+                report.overall_score,
+                report.complexity
+            ));
+
+            out.push_str("\nFindings:\n");
             if report.findings.is_empty() {
-                findings.push_str("  (no findings)\n");
+                out.push_str("  (no findings)\n");
             } else {
-                let mut table = table(&["Rule", "Severity", "Asset", "Finding"]);
+                let mut t = table(&["Rule", "Severity", "Asset", "Finding"]);
                 for f in &report.findings {
-                    table.add_row(vec![
+                    t.add_row(vec![
                         Cell::new(&f.rule_id),
                         Cell::new(severity_str(f.severity)),
                         Cell::new(f.asset_id.clone().unwrap_or_else(|| "-".into())),
                         Cell::new(&f.message),
                     ]);
                 }
-                findings = table.to_string();
+                out.push_str(&t.to_string());
             }
-            out.push_str(&format!(
-                "Assets assessed : {}\nOverall score   : {}\n\n{}",
-                report.assets_assessed, report.overall_score, findings
-            ));
+
+            out.push_str("\nAsset complexity:\n");
+            let mut t = table(&["Asset", "Score", "Findings"]);
+            for s in &report.asset_scores {
+                t.add_row(vec![
+                    Cell::new(&s.asset_id),
+                    Cell::new(s.score),
+                    Cell::new(s.findings),
+                ]);
+            }
+            out.push_str(&t.to_string());
+
+            out.push_str("\nApplication groups:\n");
+            if report.application_groups.is_empty() {
+                out.push_str("  (none detected; run dependency collection)\n");
+            } else {
+                let mut t = table(&["Group", "Assets", "Edges"]);
+                for g in &report.application_groups {
+                    t.add_row(vec![
+                        Cell::new(&g.id),
+                        Cell::new(g.asset_ids.join(", ")),
+                        Cell::new(g.edge_count),
+                    ]);
+                }
+                out.push_str(&t.to_string());
+            }
             out
         }
     }
+}
+
+/// Render the assessment rule catalog (`orbyn assess --rules`).
+pub fn rules_catalog(rules: &[Rule], version: &str) -> String {
+    let mut out = format!("Rules version: {version}\n\n");
+    let mut t = table(&["Rule", "Description"]);
+    for rule in rules {
+        t.add_row(vec![Cell::new(rule.id), Cell::new(rule.description)]);
+    }
+    out.push_str(&t.to_string());
+    out
 }
 
 /// An inventory snapshot used by `orbyn export`.

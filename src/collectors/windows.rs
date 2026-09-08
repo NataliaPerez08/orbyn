@@ -18,8 +18,8 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::domain::{Asset, Capacity, Filesystem, Observation, RunningService};
-use crate::parsing::{split_csv_line, split_sections};
+use crate::domain::{Asset, Capacity, Connection, Filesystem, Observation, RunningService};
+use crate::parsing::{normalize_ip, split_csv_line, split_sections};
 
 use super::credentials::CredentialProfile;
 use super::ssh::SshTransport;
@@ -43,6 +43,9 @@ pub const WINDOWS_PROBE: &str = "powershell -NoProfile -Command \"& { \
        | ConvertTo-Csv -NoTypeInformation; \
      '###svc'; Get-Service | Where-Object Status -eq Running \
        | Select-Object Name,DisplayName \
+       | ConvertTo-Csv -NoTypeInformation; \
+     '###conn'; Get-NetTCPConnection | Where-Object State -eq Established \
+       | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort \
        | ConvertTo-Csv -NoTypeInformation \
      }\"";
 
@@ -103,6 +106,7 @@ pub struct WindowsHostFacts {
     pub ram_total_mb: Option<u64>,
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
+    pub connections: Vec<Connection>,
 }
 
 /// Parse the full Windows probe output into facts.
@@ -190,6 +194,32 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         });
     }
 
+    let mut connections = Vec::new();
+    for row in csv_rows(&section("conn")) {
+        let Some(remote_ip) = field(&row, 2).and_then(|v| normalize_ip(&v)) else {
+            continue;
+        };
+        let Some(remote_port) = field(&row, 3).and_then(|v| v.parse::<u16>().ok()) else {
+            continue;
+        };
+        if remote_ip.is_loopback() {
+            continue;
+        }
+        let local_ip = field(&row, 0).and_then(|v| normalize_ip(&v));
+        if local_ip == Some(remote_ip) {
+            continue;
+        }
+        connections.push(Connection {
+            asset_id: String::new(),
+            proto: "tcp".into(),
+            local_ip,
+            local_port: field(&row, 1).and_then(|v| v.parse::<u16>().ok()),
+            remote_ip,
+            remote_port,
+            process: None,
+        });
+    }
+
     WindowsHostFacts {
         os_name,
         os_version,
@@ -198,6 +228,7 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         ram_total_mb,
         filesystems,
         services,
+        connections,
     }
 }
 
@@ -243,6 +274,11 @@ pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observa
         let mut svc = svc.clone();
         svc.asset_id = id.clone();
         observations.push(Observation::RunningService(svc));
+    }
+    for conn in &facts.connections {
+        let mut conn = conn.clone();
+        conn.asset_id = id.clone();
+        observations.push(Observation::Connection(conn));
     }
     observations
 }
@@ -292,7 +328,12 @@ mod tests {
 ###svc\n\
 \"Name\",\"DisplayName\"\n\
 \"W3SVC\",\"World Wide Web Publishing Service\"\n\
-\"MSSQLSERVER\",\"SQL Server (MSSQLSERVER)\"\n";
+\"MSSQLSERVER\",\"SQL Server (MSSQLSERVER)\"\n\
+###conn\n\
+\"LocalAddress\",\"LocalPort\",\"RemoteAddress\",\"RemotePort\"\n\
+\"10.0.0.20\",\"49222\",\"10.0.0.5\",\"443\"\n\
+\"10.0.0.20\",\"49223\",\"10.0.0.9\",\"5432\"\n\
+\"10.0.0.20\",\"49224\",\"127.0.0.1\",\"5432\"\n";
 
     #[test]
     fn parses_full_probe() {
@@ -330,6 +371,17 @@ mod tests {
             facts.services[0].description.as_deref(),
             Some("World Wide Web Publishing Service")
         );
+
+        // loopback remotes are dropped
+        assert_eq!(facts.connections.len(), 2);
+        let to_web = facts
+            .connections
+            .iter()
+            .find(|c| c.remote_port == 443)
+            .unwrap();
+        assert_eq!(to_web.remote_ip.to_string(), "10.0.0.5");
+        assert_eq!(to_web.local_port, Some(49222));
+        assert_eq!(to_web.proto, "tcp");
     }
 
     #[test]
@@ -351,7 +403,7 @@ mod tests {
         let observations = windows_observations("10.0.0.20".parse().unwrap(), &facts);
 
         assert!(matches!(observations[0], Observation::Asset(_)));
-        assert_eq!(observations.len(), 1 + 1 + 2 + 2);
+        assert_eq!(observations.len(), 1 + 1 + 2 + 2 + 2);
 
         if let Some(Observation::Asset(asset)) = observations.first() {
             assert_eq!(asset.device_class.as_deref(), Some("server"));

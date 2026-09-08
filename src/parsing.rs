@@ -5,6 +5,7 @@
 //! being duplicated per collector.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 /// Split a single CSV line into fields, honoring double-quote escaping.
 pub fn split_csv_line(line: &str) -> Vec<String> {
@@ -57,6 +58,30 @@ pub fn split_sections(output: &str) -> HashMap<String, Vec<String>> {
     sections
 }
 
+/// Normalize an IP string, collapsing IPv4-mapped IPv6 (`::ffff:10.0.0.5`)
+/// to the plain IPv4 form so it compares equal against inventory addresses.
+pub fn normalize_ip(raw: &str) -> Option<IpAddr> {
+    match raw.trim().parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => v6.to_ipv4_mapped().map(IpAddr::V4).or(Some(IpAddr::V6(v6))),
+        Ok(v4 @ IpAddr::V4(_)) => Some(v4),
+        Err(_) => None,
+    }
+}
+
+/// Parse `IP:port` endpoint strings as emitted by `ss`/`netstat`, including
+/// bracketed IPv6 (`[2001:db8::1]:443`).
+pub fn parse_addr_port(raw: &str) -> Option<(IpAddr, u16)> {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix('[') {
+        let (ip, port) = rest.split_once(']')?;
+        let port = port.trim_start_matches(':').parse().ok()?;
+        return normalize_ip(ip).map(|ip| (ip, port));
+    }
+    let (ip, port) = raw.rsplit_once(':')?;
+    let port = port.parse().ok()?;
+    normalize_ip(ip).map(|ip| (ip, port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +117,23 @@ mod tests {
     fn crlf_lines_are_trimmed() {
         let sections = split_sections("###os\r\nvalue\r\n");
         assert_eq!(sections["os"], vec!["value"]);
+    }
+
+    #[test]
+    fn parses_endpoint_forms() {
+        assert_eq!(
+            parse_addr_port("10.0.0.5:443"),
+            Some(("10.0.0.5".parse().unwrap(), 443))
+        );
+        assert_eq!(
+            parse_addr_port("[2001:db8::1]:443"),
+            Some(("2001:db8::1".parse().unwrap(), 443))
+        );
+        assert_eq!(
+            parse_addr_port("::ffff:10.0.0.5:5432"),
+            Some(("10.0.0.5".parse().unwrap(), 5432)),
+            "IPv4-mapped endpoints must collapse to IPv4"
+        );
+        assert_eq!(parse_addr_port("not-an-endpoint"), None);
     }
 }
