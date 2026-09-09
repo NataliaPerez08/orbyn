@@ -73,10 +73,11 @@ pub fn render_ansible_inventory(assets: &[Asset], group_by: GroupBy) -> String {
 }
 
 fn host_name(asset: &Asset) -> String {
-    asset
+    let name = asset
         .hostname
         .clone()
-        .unwrap_or_else(|| asset.ip.to_string())
+        .unwrap_or_else(|| asset.ip.to_string());
+    sanitize_name(&name)
 }
 
 /// INI `key=value` host variables derived from the normalized asset.
@@ -222,5 +223,13 @@ mod tests {
         )];
         let out = render_ansible_inventory(&assets, GroupBy::DeviceClass);
         assert!(out.contains("[network-device]"));
+    }
+
+    #[test]
+    fn host_names_sanitize_whitespace() {
+        let assets = vec![asset("a", "10.0.0.1", Some("web 01"), None, None, &[])];
+        let out = render_ansible_inventory(&assets, GroupBy::DeviceClass);
+        assert!(out.contains("web-01 ansible_host=10.0.0.1"));
+        assert!(!out.contains("web 01"));
     }
 }

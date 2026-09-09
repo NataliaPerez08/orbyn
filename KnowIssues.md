@@ -71,9 +71,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     `ssh.rs` `first_quoted` assumes net-snmp-like `users:(("name",pid=…,fd=…))`.
     BusyBox and other `ss` variants may not parse.
 
-13. **Ansible exporter does not sanitize host names** — `bug`
-    `render_ansible_inventory` sanitizes group names but not host names; a
-    hostname containing whitespace breaks the `host key=value` INI line.
+13. **Ansible exporter does not sanitize host names** — `bug` ~~FIXED~~
+    `render_ansible_inventory` now applies `sanitize_name` to host names as
+    well as group names, so a hostname with whitespace no longer breaks the INI
+    line. (Resolved in `src/integrations/ansible.rs`.)
 
 14. **Duplicate hostnames resolve arbitrarily** — `quality`
     `get_asset_by_hostname` uses `COLLATE NOCASE` and returns the first match;
