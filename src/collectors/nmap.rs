@@ -225,7 +225,7 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
             id: crate::domain::interface_id(&id, None, mac.as_deref(), Some(ip)),
             asset_id: id.clone(),
             name: None,
-            mac: mac.as_deref().map(crate::domain::normalize_mac),
+            mac: mac.as_deref().and_then(crate::domain::normalize_mac),
             ip: Some(ip),
             vendor: mac_vendor,
             mtu: None,

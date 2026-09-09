@@ -59,7 +59,7 @@ impl Interface {
             id: interface_id(asset_id, name, mac, ip),
             asset_id: asset_id.to_string(),
             name: name.map(str::to_string),
-            mac: mac.map(normalize_mac),
+            mac: mac.and_then(normalize_mac),
             ip,
             vendor: None,
             mtu: None,
@@ -76,31 +76,35 @@ pub fn interface_id(
     mac: Option<&str>,
     ip: Option<IpAddr>,
 ) -> String {
-    let name = &name.unwrap_or_default().to_lowercase()[..];
-    let mac = &normalize_mac(mac.unwrap_or_default())[..];
-    let ip = &ip.map(|a| a.to_string()).unwrap_or_default()[..];
+    let name = name.unwrap_or_default().to_lowercase();
+    let mac = normalize_mac(mac.unwrap_or_default()).unwrap_or_default();
+    let ip = ip.map(|a| a.to_string()).unwrap_or_default();
     format!("{asset_id}--{name}--{mac}--{ip}")
 }
 
 /// Normalize a MAC address representation to lowercase `xx:xx:xx:xx:xx:xx`.
 ///
 /// Accepts plain hex, dotted, and colon/dash separated forms (as returned by
-/// Nmap, SNMP `ifPhysAddress`, and ARP tables).
-pub fn normalize_mac(raw: &str) -> String {
+/// Nmap, SNMP `ifPhysAddress`, and ARP tables). Returns `None` when the input
+/// does not contain exactly 12 hexadecimal digits, so non-MAC values never
+/// persist in a non-canonical form.
+pub fn normalize_mac(raw: &str) -> Option<String> {
     let cleaned: String = raw
         .chars()
         .filter(|c| c.is_ascii_hexdigit())
-        .collect::<String>()
-        .to_lowercase();
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
     if cleaned.len() != 12 {
-        return raw.to_lowercase();
+        return None;
     }
-    cleaned
-        .as_bytes()
-        .chunks(2)
-        .map(|b| std::str::from_utf8(b).unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join(":")
+    Some(
+        cleaned
+            .as_bytes()
+            .chunks(2)
+            .map(|b| std::str::from_utf8(b).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 /// Business criticality used for inventory annotation.
@@ -280,10 +284,34 @@ mod tests {
 
     #[test]
     fn normalizes_mac_formats() {
-        assert_eq!(normalize_mac("0011:2233:4455"), "00:11:22:33:44:55");
-        assert_eq!(normalize_mac("00-11-22-33-44-55"), "00:11:22:33:44:55");
-        assert_eq!(normalize_mac("00:11:22:33:44:55"), "00:11:22:33:44:55");
-        assert_eq!(normalize_mac("112233445566"), "11:22:33:44:55:66");
+        assert_eq!(
+            normalize_mac("0011:2233:4455"),
+            Some("00:11:22:33:44:55".into())
+        );
+        assert_eq!(
+            normalize_mac("00-11-22-33-44-55"),
+            Some("00:11:22:33:44:55".into())
+        );
+        assert_eq!(
+            normalize_mac("00:11:22:33:44:55"),
+            Some("00:11:22:33:44:55".into())
+        );
+        assert_eq!(
+            normalize_mac("112233445566"),
+            Some("11:22:33:44:55:66".into())
+        );
+    }
+
+    #[test]
+    fn normalize_mac_rejects_non_mac_values() {
+        assert_eq!(normalize_mac(""), None);
+        assert_eq!(normalize_mac("not a mac"), None);
+        assert_eq!(normalize_mac("00:11:22:33:44"), None, "too few octets");
+        assert_eq!(
+            normalize_mac("00:11:22:33:44:55:66:77"),
+            None,
+            "too many octets"
+        );
     }
 
     #[test]

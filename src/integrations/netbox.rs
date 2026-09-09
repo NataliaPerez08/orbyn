@@ -189,7 +189,7 @@ impl NetBoxClient {
     async fn get(&self, path: &str) -> Result<String> {
         let url = format!("{}{path}?limit=0", self.base_url);
         let header_file = match &self.token {
-            Some(token) => Some(write_token_header(token)?),
+            Some(token) => Some(TokenHeader(write_token_header(token)?)),
             None => None,
         };
 
@@ -199,7 +199,7 @@ impl NetBoxClient {
             cmd.arg("--insecure");
         }
         if let Some(file) = &header_file {
-            cmd.arg("-H").arg(format!("@{}", file.display()));
+            cmd.arg("-H").arg(format!("@{}", file.0.display()));
         }
         cmd.arg(&url)
             .stdin(Stdio::null())
@@ -226,14 +226,22 @@ impl NetBoxClient {
             .map_err(|_| anyhow!("curl timed out against {url}"))?
             .context("waiting for curl")?;
 
-        if let Some(file) = header_file {
-            let _ = std::fs::remove_file(file);
-        }
+        // The header file is removed by `TokenHeader::drop` on every path.
 
         if !status.success() {
             return Err(anyhow!("curl exited with {status}: {}", stderr.trim()));
         }
         Ok(stdout)
+    }
+}
+
+/// Removes the token header file when dropped, covering every exit path
+/// (success, spawn/read errors, and timeout) so the token file never leaks.
+struct TokenHeader(PathBuf);
+
+impl Drop for TokenHeader {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -313,5 +321,18 @@ mod tests {
         ]}"#;
         let rows = parse_netbox_devices(json).unwrap();
         assert_eq!(rows[0].device_class.as_deref(), Some("router"));
+    }
+
+    #[test]
+    fn token_header_removes_file_on_drop() {
+        let path = write_token_header("supersecret").unwrap();
+        assert!(path.exists());
+        let guard = TokenHeader(path.clone());
+        assert!(path.exists());
+        drop(guard);
+        assert!(
+            !path.exists(),
+            "token file must be removed when the guard drops"
+        );
     }
 }

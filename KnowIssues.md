@@ -8,11 +8,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 
 ## Security & credentials
 
-1. **NetBox token temp file can leak on error paths** — `bug`
-   In `src/integrations/netbox.rs`, the `0600` token header file is removed only
-   after `curl` runs. If `spawn()` or an output read fails (`?` early-returns),
-   the file is left behind in the temp dir. Wrap cleanup in a guard (e.g. remove
-   in a `Drop`/defer) so every path deletes it.
+1. **NetBox token temp file can leak on error paths** — `bug` ~~FIXED~~
+   The `0600` token header file is now wrapped in a `TokenHeader` guard whose
+   `Drop` removes it on every exit path (success, spawn/read errors, timeout).
+   (Resolved in `src/integrations/netbox.rs`.)
 
 2. **No central secret redaction** — `gap`
    SECURITY.md lists "Secret redaction" as open (BACKLOG). Logs/errors can
@@ -62,10 +61,12 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     `src/collectors/classify.rs` uses loose `contains` matches (e.g. `"ios"`,
     vendor substrings). Conservative but can mislabel uncommon devices.
 
-11. **`normalize_mac` is not strict** — `quality`
-    `domain::normalize_mac` returns the raw lowercase input when it is not 12
-    hex digits, rather than failing or canonicalizing. Non-canonical MACs can
-    persist.
+11. **`normalize_mac` is not strict** — `quality` ~~FIXED~~
+    `domain::normalize_mac` now returns `Option<String>`: `None` when the input
+    does not contain exactly 12 hex digits. Callers (`Interface::new`,
+    `interface_id`, the Nmap collector) drop invalid MACs instead of persisting
+    non-canonical values. (Resolved in `src/domain/mod.rs` +
+    `src/collectors/nmap.rs`.)
 
 12. **`ss`/`netstat` process parsing is format-specific** — `quality`
     `ssh.rs` `first_quoted` assumes net-snmp-like `users:(("name",pid=…,fd=…))`.
