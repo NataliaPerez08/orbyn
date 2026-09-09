@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v0.5 migration assessment, CLI focus.
+> **Status:** Early development — v1.1 integrations, CLI focus.
 
 ## Why Orbyn?
 
@@ -185,6 +185,11 @@ The repository currently provides:
     dependency edges are grouped as likely co-migrating applications.
   * `orbyn assess` (table/JSON/CSV report) and `orbyn assess --rules`
     (rule catalog).
+* Third-party integrations (v1.1):
+  * NetBox source-of-truth importer (`orbyn netbox import`).
+  * Ansible inventory exporter (`orbyn export --format ansible`).
+  * Terraform-friendly export (`orbyn export --format terraform`).
+  * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
 * Architecture documentation, roadmap and backlog.
 
 The next functional milestone is the stable CLI product (v1.0): frozen
@@ -250,7 +255,8 @@ orbyn annotate <id-or-ip> --environment prod --owner <team> \
     --criticality high --tag core --remove-tag dr  Enrich inventory metadata
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
-orbyn export [--format json|csv] [--output <file>]
+orbyn export [--format json|csv|ansible|terraform] [--group-by <key>] [--output <file>]
+orbyn netbox import --url <url> [--token <t>]       Import devices/VMs from NetBox (SoT)
 orbyn graph [--format ...]
 orbyn assess [--format ...]
 ```
@@ -321,6 +327,8 @@ clean for piping.
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | Default SNMP v1/v2c community string |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
+| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client) |
+| `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`) |
 
 ## Repository layout
 
@@ -431,7 +439,7 @@ The underlying asset and dependency model should remain portable.
 | PowerShell | Windows inventory and capacity (over OpenSSH) | v0.3 |
 | WinRM      | Native Windows transport              | Later (same credential profiles) |
 | VMware     | VM and hypervisor inventory           | Later  |
-| NetBox     | Source-of-truth import/export         | Later  |
+| NetBox     | Source-of-truth import (devices/VMs)  | v1.1   |
 | Prometheus | Historical utilization                | v1.2+  |
 | Zabbix     | Historical utilization                | v1.2+  |
 | eBPF       | Runtime dependency observations       | Later  |

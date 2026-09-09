@@ -49,6 +49,17 @@ added; today the product surface is `orbyn` subcommands.
 - [ ] **P2** Virtualization metadata.
 - [x] **P2** Disk/filesystem inventory.
 
+## Integrations (v1.1)
+
+- [x] **P1** NetBox source-of-truth importer (devices + virtual machines via REST).
+- [x] **P1** Ansible inventory exporter (INI, configurable grouping).
+- [x] **P1** Terraform-friendly export (HCL `locals.orbyn_inventory`).
+- [x] **P1** Plugin/collector SDK definition (trait contract + example + PLUGINS.md).
+- [ ] **P2** vCenter collector/importer (deferred: SOAP session client).
+- [ ] **P2** NetBox export (write Orbyn inventory back to NetBox).
+- [ ] **P2** Ansible YAML inventory format.
+- [ ] **P3** Terraform `import` block generation.
+
 ## Dependencies
 
 - [x] **P1** Dependency edge schema.

@@ -177,6 +177,12 @@ Evidence may come from:
 - service configuration (planned);
 - user-confirmed relationships (`orbyn deps add` / `orbyn deps confirm`).
 
+Third-party integrations live in `src/integrations/` (v1.1): NetBox is a
+read-only source-of-truth importer (REST API via `curl`, token in a 0600
+header file), while Ansible (INI inventory) and Terraform (HCL `locals`) are
+pure exporters over the normalized domain. A collector/plugin SDK is documented
+in PLUGINS.md with a runnable `examples/custom_collector.rs`.
+
 Every edge retains its evidence source and confidence; manual confirmation
 raises confidence to 1.0. Guesses look like guesses: unconfirmed edges render
 dotted in Mermaid output. Raw connection observations are persisted in

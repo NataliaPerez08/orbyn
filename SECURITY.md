@@ -27,6 +27,8 @@ or authorization service and must not be used as one.
   profile and never passed through CLI arguments or logs.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
+- API tokens (NetBox) are written to a `0600` temporary header file and passed
+  to `curl` as `-H @file`, never as process arguments, logs, or CLI output.
 
 ## Reporting a vulnerability
 

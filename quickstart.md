@@ -92,7 +92,19 @@ orbyn asset 127.0.0.1
 
 Annotations are preserved across re-discovery.
 
-## 7. Export / import
+## 7. Export / import & integrations
+
+```bash
+orbyn export --format csv --output inventory.csv
+orbyn import --format csv --file inventory.csv
+
+# automation exporters
+orbyn export --format ansible                 # INI inventory (groups)
+orbyn export --format terraform               # HCL locals.orbyn_inventory
+
+# NetBox source-of-truth import
+orbyn netbox import --url https://netbox.example.com --token "$ORBYN_NETBOX_TOKEN"
+```
 
 ```bash
 orbyn export --format csv --output inventory.csv

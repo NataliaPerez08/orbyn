@@ -17,6 +17,9 @@ use orbyn::domain::{
     Asset, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
 };
 use orbyn::import::{parse_import_csv, ImportedAsset};
+use orbyn::integrations::ansible::{render_ansible_inventory, GroupBy};
+use orbyn::integrations::netbox::NetBoxClient;
+use orbyn::integrations::terraform::render_terraform;
 use orbyn::output::{Format, Inventory};
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
@@ -53,6 +56,15 @@ enum DiscoveryCollector {
 enum ImportFormat {
     Json,
     Csv,
+}
+
+/// Export target: Orbyn's own formats, or automation-oriented formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExportFormat {
+    Json,
+    Csv,
+    Ansible,
+    Terraform,
 }
 
 #[derive(Debug, Subcommand)]
@@ -187,10 +199,13 @@ enum Command {
         format: Format,
     },
 
-    /// Export the inventory to JSON (full) or CSV (assets/interfaces/services).
+    /// Export the inventory to JSON/CSV (Orbyn) or Ansible/Terraform formats.
     Export {
-        #[arg(short, long, value_enum, default_value_t = Format::Json)]
-        format: Format,
+        #[arg(short, long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
+        /// Grouping key for the Ansible inventory.
+        #[arg(long, value_enum, default_value_t = GroupBy::DeviceClass)]
+        group_by: GroupBy,
         /// Write to a file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -203,6 +218,12 @@ enum Command {
         /// Input file; defaults to stdin when omitted.
         #[arg(short = 'i', long)]
         file: Option<PathBuf>,
+    },
+
+    /// Pull devices and virtual machines from NetBox (source of truth).
+    Netbox {
+        #[command(subcommand)]
+        action: NetboxAction,
     },
 
     /// Show the dependency graph as an edge list.
@@ -268,6 +289,23 @@ enum DepsAction {
     /// Derive relationship edges from DNS: forward-resolve asset hostnames
     /// and link assets when a hostname points at another asset's IP.
     Dns,
+}
+
+/// Sub-actions of `orbyn netbox`.
+#[derive(Debug, Subcommand)]
+enum NetboxAction {
+    /// Import devices and virtual machines from a NetBox instance.
+    Import {
+        /// NetBox base URL, e.g. https://netbox.example.com.
+        #[arg(long)]
+        url: String,
+        /// NetBox API token (falls back to ORBYN_NETBOX_TOKEN).
+        #[arg(long, env = "ORBYN_NETBOX_TOKEN")]
+        token: Option<String>,
+        /// Skip TLS certificate verification (for self-signed NetBox).
+        #[arg(long)]
+        no_verify: bool,
+    },
 }
 
 #[tokio::main]
@@ -387,23 +425,39 @@ async fn main() -> anyhow::Result<()> {
             let jobs = store.list_jobs(Some(limit)).await?;
             print!("{}", orbyn::output::jobs(&jobs, format));
         }
-        Command::Export { format, output } => {
+        Command::Export {
+            format,
+            group_by,
+            output,
+        } => {
             let store = SqliteStore::open(&config.db_path).await?;
             let assets = store.list_assets().await?;
-            let mut services = Vec::new();
-            let mut interfaces = Vec::new();
-            for asset in &assets {
-                services.extend(store.list_services(&asset.id).await?);
-                interfaces.extend(store.list_interfaces(&asset.id).await?);
-            }
-            let rendered = orbyn::output::inventory(
-                &Inventory {
-                    assets,
-                    services,
-                    interfaces,
-                },
-                format,
-            );
+
+            let rendered = match format {
+                ExportFormat::Ansible => render_ansible_inventory(&assets, group_by),
+                ExportFormat::Terraform => render_terraform(&assets),
+                ExportFormat::Json | ExportFormat::Csv => {
+                    let mut services = Vec::new();
+                    let mut interfaces = Vec::new();
+                    for asset in &assets {
+                        services.extend(store.list_services(&asset.id).await?);
+                        interfaces.extend(store.list_interfaces(&asset.id).await?);
+                    }
+                    let format = match format {
+                        ExportFormat::Json => Format::Json,
+                        ExportFormat::Csv => Format::Csv,
+                        _ => unreachable!(),
+                    };
+                    orbyn::output::inventory(
+                        &Inventory {
+                            assets,
+                            services,
+                            interfaces,
+                        },
+                        format,
+                    )
+                }
+            };
             match output {
                 Some(path) => std::fs::write(&path, rendered)
                     .with_context(|| format!("writing export to {}", path.display()))?,
@@ -415,6 +469,23 @@ async fn main() -> anyhow::Result<()> {
             let input = read_input(file.as_ref())?;
             let count = import_inventory(&store, &input, format).await?;
             eprintln!("Imported {count} assets.");
+            let jobs = store.list_jobs(Some(1)).await?;
+            print!("{}", orbyn::output::jobs(&jobs, Format::Table));
+        }
+        Command::Netbox {
+            action:
+                NetboxAction::Import {
+                    url,
+                    token,
+                    no_verify,
+                },
+        } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let client = NetBoxClient::new(&url, token, no_verify);
+            let mut rows = client.fetch_devices().await?;
+            rows.extend(client.fetch_vms().await?);
+            let count = persist_imported_assets(&store, &rows, "netbox").await?;
+            eprintln!("Imported {count} assets from NetBox.");
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
         }
@@ -745,13 +816,23 @@ async fn import_inventory(store: &SqliteStore, input: &str, format: ImportFormat
         ImportFormat::Csv => parse_import_csv(input)?,
     };
 
+    persist_imported_assets(store, &rows, "import").await
+}
+
+/// Persist a batch of import rows as assets (with annotations), recording an
+/// audit job under the given collector name. Shared by `import` and `netbox`.
+async fn persist_imported_assets(
+    store: &SqliteStore,
+    rows: &[ImportedAsset],
+    collector: &str,
+) -> Result<usize> {
     if rows.is_empty() {
         return Ok(0);
     }
 
     let job = DiscoveryJob {
         id: uuid::Uuid::new_v4().to_string(),
-        collector: "import".into(),
+        collector: collector.into(),
         targets: rows.iter().map(|r| r.ip.clone()).collect(),
         status: JobStatus::Running,
         started_at: Utc::now(),
@@ -763,7 +844,7 @@ async fn import_inventory(store: &SqliteStore, input: &str, format: ImportFormat
     store.create_job(job.clone()).await?;
 
     let mut persisted = 0u32;
-    for row in &rows {
+    for row in rows {
         let ip: std::net::IpAddr = row
             .ip
             .parse()

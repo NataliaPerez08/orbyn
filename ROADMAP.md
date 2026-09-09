@@ -107,14 +107,23 @@ for the core product.
 
 ## v1.1 — Integrations
 
-- NetBox integration.
-- Ansible inventory exporter.
-- Terraform-friendly export format.
-- vCenter collector/importer.
-- Plugin/collector SDK definition.
+**Status:** implemented (NetBox import + Ansible/Terraform exporters + plugin
+SDK). vCenter is deferred to a follow-up (large SOAP/session client; the exit
+criterion only requires one source-of-truth and one automation export).
 
-**Exit criterion:** at least one third-party source-of-truth and one automation
-export are demonstrated in CI without custom code.
+- NetBox integration — read-only source-of-truth importer (`orbyn netbox
+  import`): devices + virtual machines via the REST API through `curl`, token
+  passed via a 0600 header file (never in argv/logs).
+- Ansible inventory exporter (`orbyn export --format ansible`, INI grouping by
+  device class / environment / tags).
+- Terraform-friendly export (`orbyn export --format terraform`, HCL
+  `locals.orbyn_inventory`).
+- vCenter collector/importer — deferred (BACKLOG).
+- Plugin/collector SDK definition — documented `Collector` contract,
+  `examples/custom_collector.rs`, and PLUGINS.md.
+
+**Exit criterion:** demonstrated by the automated end-to-end suite (fake
+`curl` for NetBox) rather than a CI pipeline, which is not yet configured.
 
 ## v1.2 — CPU/RAM utilization
 
