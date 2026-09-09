@@ -163,9 +163,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     The fake collector binaries are bash scripts and the E2E tests are
     `#[cfg(unix)]`; Windows development has no automated coverage.
 
-33. **Naming inconsistency for host services** — `quality`
-    Domain type is `RunningService`, the command is `host-services`, but the
-    table column is labeled "Unit". Pick one vocabulary.
+33. **Naming inconsistency for host services** — `quality` ~~FIXED~~
+    The `running_services` table column was labeled "Unit" while the domain
+    type is `RunningService` and the command is `host-services`. The header is
+    now "Service". (Resolved in `src/output/mod.rs`.)
 
 34. **Import with duplicate IPs is last-wins** — `quality` ~~FIXED~~
     `persist_imported_assets` now deduplicates rows by IP (first occurrence

@@ -301,7 +301,7 @@ pub fn running_services(services: &[RunningService], format: Format) -> String {
             if services.is_empty() {
                 return "No running services recorded for this asset yet.\n".to_string();
             }
-            let mut table = table(&["Unit", "State", "Description"]);
+            let mut table = table(&["Service", "State", "Description"]);
             for s in services {
                 table.add_row(vec![
                     Cell::new(&s.name),
@@ -1022,5 +1022,21 @@ mod tests {
         assert!(out.contains("web-01 (10.0.0.1)"));
         assert!(out.contains("10.0.0.2"));
         assert!(out.contains("no"), "unconfirmed edges show 'no'");
+    }
+
+    #[test]
+    fn running_services_table_uses_service_header() {
+        let services = vec![RunningService {
+            asset_id: "a".into(),
+            name: "nginx.service".into(),
+            state: Some("running".into()),
+            description: Some("web server".into()),
+        }];
+        let out = running_services(&services, Format::Table);
+        assert!(
+            out.contains("Service"),
+            "header is 'Service', not 'Unit': {out}"
+        );
+        assert!(out.contains("nginx.service"));
     }
 }
