@@ -167,9 +167,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     Domain type is `RunningService`, the command is `host-services`, but the
     table column is labeled "Unit". Pick one vocabulary.
 
-34. **Import with duplicate IPs is last-wins** — `quality`
-    `persist_imported_assets` upserts by IP; duplicate rows overwrite silently
-    with no dedup or warning.
+34. **Import with duplicate IPs is last-wins** — `quality` ~~FIXED~~
+    `persist_imported_assets` now deduplicates rows by IP (first occurrence
+    wins) via `orbyn::import::deduplicate` and warns about skipped duplicates.
+    (Resolved in `src/import.rs` + `src/main.rs`.)
 
 35. **Magic strings for DNS evidence** — `quality`
     DNS edges use `proto: "dns"` / `port: 0` and are excluded via literal

@@ -6,7 +6,6 @@
 use anyhow::{bail, Result};
 
 use crate::parsing::split_csv_line;
-
 /// An asset row accepted by `orbyn import` (JSON or CSV).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ImportedAsset {
@@ -143,6 +142,26 @@ fn opt(value: String) -> Option<String> {
     }
 }
 
+/// Deduplicate import rows by IP, keeping the first occurrence and counting
+/// how many duplicates were dropped. Rows whose IP does not parse are kept so
+/// the caller can surface a clear error instead of silently discarding them.
+pub fn deduplicate(rows: Vec<ImportedAsset>) -> (Vec<ImportedAsset>, usize) {
+    use std::collections::HashSet;
+    use std::net::IpAddr;
+
+    let mut seen: HashSet<IpAddr> = HashSet::new();
+    let mut kept = Vec::with_capacity(rows.len());
+    let mut duplicates = 0usize;
+    for row in rows {
+        match crate::parsing::normalize_ip(&row.ip) {
+            Some(ip) if seen.insert(ip) => kept.push(row),
+            Some(_) => duplicates += 1,
+            None => kept.push(row),
+        }
+    }
+    (kept, duplicates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +227,47 @@ mod tests {
         let rows = parse_import_csv(csv).expect("parse");
         assert_eq!(rows[0].hostname.as_deref(), Some("mail,backup"));
         assert_eq!(rows[0].tags, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    fn row(ip: &str) -> ImportedAsset {
+        ImportedAsset {
+            ip: ip.into(),
+            hostname: None,
+            device_class: None,
+            os_name: None,
+            os_version: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn deduplicate_keeps_first_and_counts_duplicates() {
+        let (kept, dup) = deduplicate(vec![
+            row("10.0.0.1"),
+            row("10.0.0.2"),
+            row("10.0.0.1"), // duplicate
+            row("10.0.0.1"), // duplicate
+        ]);
+        assert_eq!(dup, 2);
+        let ips: Vec<&str> = kept.iter().map(|r| r.ip.as_str()).collect();
+        assert_eq!(ips, vec!["10.0.0.1", "10.0.0.2"]);
+    }
+
+    #[test]
+    fn deduplicate_preserves_invalid_ips_for_later_error() {
+        let (kept, dup) = deduplicate(vec![row("not-an-ip"), row("10.0.0.1")]);
+        assert_eq!(dup, 0);
+        assert_eq!(kept.len(), 2, "invalid IP must not be silently dropped");
+    }
+
+    #[test]
+    fn deduplicate_normalizes_ip_forms() {
+        // IPv4-mapped IPv6 normalizes to the same IPv4 address.
+        let (kept, dup) = deduplicate(vec![row("10.0.0.1"), row("::ffff:10.0.0.1")]);
+        assert_eq!(dup, 1);
+        assert_eq!(kept.len(), 1);
     }
 }

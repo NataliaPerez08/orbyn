@@ -826,6 +826,13 @@ async fn persist_imported_assets(
     rows: &[ImportedAsset],
     collector: &str,
 ) -> Result<usize> {
+    let (rows, duplicates) = orbyn::import::deduplicate(rows.to_vec());
+    if duplicates > 0 {
+        tracing::warn!(
+            duplicates,
+            "skipped duplicate import rows that share an IP address"
+        );
+    }
     if rows.is_empty() {
         return Ok(0);
     }

@@ -74,6 +74,31 @@ fn import_accepts_compact_csv_without_section_header() {
 
 #[cfg(unix)]
 #[test]
+fn import_deduplicates_rows_by_ip_with_warning() {
+    let dir = TempDir::new("dedup-import");
+    let json = r#"{"assets":[
+      {"ip":"10.0.0.1","hostname":"first-01","device_class":"server"},
+      {"ip":"10.0.0.1","hostname":"second-01","device_class":"server"}
+    ]}"#;
+    let file = dir.path().join("dup.json");
+    std::fs::write(&file, json).expect("write json");
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["import", "--format", "json", "--file"])
+            .arg(&file),
+    );
+    assert!(out.contains("Imported 1 assets"), "got: {out}");
+    assert!(out.contains("duplicate"), "warning expected: {out}");
+
+    // The first occurrence wins.
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(assets.contains("first-01"));
+    assert!(!assets.contains("second-01"));
+}
+
+#[cfg(unix)]
+#[test]
 fn jobs_history_respects_limit_and_csv() {
     let dir = TempDir::new("jobs");
     let bin = fake_bin(&dir, "nmap", FAKE_NMAP_SCRIPT);
