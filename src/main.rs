@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
@@ -16,8 +16,8 @@ use orbyn::config::Config;
 use orbyn::domain::{
     Asset, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
 };
+use orbyn::import::{parse_import_csv, ImportedAsset};
 use orbyn::output::{Format, Inventory};
-use orbyn::parsing::split_csv_line;
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
 use orbyn::store::Store;
@@ -723,41 +723,23 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
     Ok(())
 }
 
-/// An asset row accepted by `orbyn import`.
-#[derive(Debug, serde::Deserialize)]
-struct ImportedAsset {
-    ip: String,
-    #[serde(default)]
-    hostname: Option<String>,
-    #[serde(default)]
-    device_class: Option<String>,
-    #[serde(default)]
-    os_name: Option<String>,
-    #[serde(default)]
-    os_version: Option<String>,
-    #[serde(default)]
-    environment: Option<String>,
-    #[serde(default)]
-    owner: Option<String>,
-    #[serde(default)]
-    criticality: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-}
-
 /// Persist an imported inventory, recording an audit job for the operation.
 async fn import_inventory(store: &SqliteStore, input: &str, format: ImportFormat) -> Result<usize> {
     let rows: Vec<ImportedAsset> = match format {
         ImportFormat::Json => {
             let raw: Vec<ImportedAsset> = if input.trim_start().starts_with('[') {
-                serde_json::from_str(input)
+                serde_json::from_str(input).with_context(|| {
+                    "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
+                })?
             } else {
-                let wrapper: serde_json::Value = serde_json::from_str(input)?;
+                let wrapper: serde_json::Value = serde_json::from_str(input).with_context(|| {
+                    "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
+                })?;
                 serde_json::from_value(wrapper.get("assets").cloned().unwrap_or_default())
-            }
-            .with_context(|| {
-                "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
-            })?;
+                    .with_context(|| {
+                        "invalid JSON import; 'assets' must be an array of asset objects"
+                    })?
+            };
             raw
         }
         ImportFormat::Csv => parse_import_csv(input)?,
@@ -835,116 +817,6 @@ async fn import_inventory(store: &SqliteStore, input: &str, format: ImportFormat
         .await?;
 
     Ok(persisted as usize)
-}
-
-/// Parse the assets worksheet of an Orbyn CSV export.
-fn parse_import_csv(input: &str) -> Result<Vec<ImportedAsset>> {
-    let mut rows = Vec::new();
-    let mut section = String::new();
-    for line in input.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('#') {
-            section = name.trim().to_lowercase();
-            continue;
-        }
-        if section != "assets" {
-            continue;
-        }
-        if line.starts_with("id,ip") {
-            continue; // column header
-        }
-        let fields = split_csv_line(line);
-        // Accept both the 12-column export and a compact 7-column import form.
-        let (
-            ip,
-            hostname,
-            device_class,
-            os_name,
-            os_version,
-            environment,
-            owner,
-            criticality,
-            tags,
-        ) = match fields.len() {
-            12 => {
-                let mut it = fields.into_iter();
-                let _id = it.next().unwrap();
-                let ip = it.next().unwrap();
-                let hostname = it.next().unwrap();
-                let device_class = it.next().unwrap();
-                let os_name = it.next().unwrap();
-                let os_version = it.next().unwrap();
-                let environment = it.next().unwrap();
-                let owner = it.next().unwrap();
-                let criticality = it.next().unwrap();
-                let tags = it.next().unwrap();
-                let _first_seen = it.next().unwrap();
-                let _last_seen = it.next().unwrap();
-                (
-                    ip,
-                    opt(hostname),
-                    opt(device_class),
-                    opt(os_name),
-                    opt(os_version),
-                    opt(environment),
-                    opt(owner),
-                    opt(criticality),
-                    tags,
-                )
-            }
-            7 => {
-                let mut it = fields.into_iter();
-                let ip = it.next().unwrap();
-                let hostname = it.next().unwrap();
-                let device_class = it.next().unwrap();
-                let environment = it.next().unwrap();
-                let owner = it.next().unwrap();
-                let criticality = it.next().unwrap();
-                let tags = it.next().unwrap();
-                (
-                    ip,
-                    opt(hostname),
-                    opt(device_class),
-                    None,
-                    None,
-                    opt(environment),
-                    opt(owner),
-                    opt(criticality),
-                    tags,
-                )
-            }
-            other => bail!("unexpected CSV column count {other} in import line"),
-        };
-        let tags = tags
-            .split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(str::to_string)
-            .collect();
-        rows.push(ImportedAsset {
-            ip,
-            hostname,
-            device_class,
-            os_name,
-            os_version,
-            environment,
-            owner,
-            criticality,
-            tags,
-        });
-    }
-    Ok(rows)
-}
-
-fn opt(value: String) -> Option<String> {
-    if value.is_empty() || value == "-" {
-        None
-    } else {
-        Some(value)
-    }
 }
 
 fn read_input(file: Option<&PathBuf>) -> Result<String> {

@@ -13,6 +13,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P0** Add CLI framework (clap) and config resolution (env + `--db`).
 - [x] **P1** Add repository interfaces between domain and SQLite.
 - [x] **P1** Add output format layer (table / JSON / CSV).
+- [x] **P1** Add test suite: unit + integration (store/schema) + end-to-end
+  (real binary against fake collector binaries).
 - [ ] **P1** Add CI: fmt, clippy, test, build.
 - [ ] **P1** Add release workflow (binary artifacts + checksums).
 - [ ] **P1** Add shell completion scripts (bash/zsh/fish).

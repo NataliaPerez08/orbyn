@@ -21,3 +21,30 @@ impl Config {
         Self { db_path }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flag_wins_over_default() {
+        let config = Config::resolve(Some(PathBuf::from("/tmp/flagged.db")));
+        assert_eq!(config.db_path, PathBuf::from("/tmp/flagged.db"));
+    }
+
+    #[test]
+    fn defaults_to_local_db_when_no_flag() {
+        // ORBYN_DB is not set in a clean environment; if a dev shell exports
+        // it, that only affects the env branch, which we do not assert here.
+        let config = Config::resolve(None);
+        let is_default = config.db_path.as_os_str() == "./data/orbyn.db";
+        let is_env = std::env::var_os("ORBYN_DB")
+            .map(|v| config.db_path.as_os_str() == v)
+            .unwrap_or(false);
+        assert!(
+            is_default || is_env,
+            "unexpected db_path {}",
+            config.db_path.display()
+        );
+    }
+}

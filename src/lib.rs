@@ -9,6 +9,7 @@ pub mod collectors;
 pub mod config;
 pub mod domain;
 pub mod graph;
+pub mod import;
 pub mod metrics;
 pub mod output;
 pub mod parsing;

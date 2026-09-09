@@ -872,3 +872,155 @@ fn severity_str(severity: Severity) -> &'static str {
         Severity::High => "high",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    fn asset(id: &str, ip: &str, hostname: Option<&str>) -> Asset {
+        Asset {
+            id: id.into(),
+            ip: ip.parse().unwrap(),
+            hostname: hostname.map(str::to_string),
+            device_class: None,
+            os_name: None,
+            os_version: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+        }
+    }
+
+    fn dep(source: &str, target: &str, port: u16, confirmed: bool, evidence: &str) -> Dependency {
+        Dependency {
+            source_asset_id: source.into(),
+            target_asset_id: target.into(),
+            proto: "tcp".into(),
+            port,
+            evidence_source: evidence.into(),
+            confidence: 0.9,
+            confirmed,
+        }
+    }
+
+    #[test]
+    fn human_kb_boundaries() {
+        assert_eq!(human_kb(512), "512K");
+        assert_eq!(human_kb(10 * 1024), "10.0M");
+        assert_eq!(human_kb(50 * 1024 * 1024), "50.0G");
+        assert_eq!(human_kb(1024 * 1024 * 1024), "1024.0G");
+    }
+
+    #[test]
+    fn mermaid_sanitizes_node_ids_and_labels() {
+        let assets = vec![asset("10-0-0-5", "10.0.0.5", Some("web-01"))];
+        let edges = vec![dep(
+            "10-0-0-5",
+            "10-0-0-9",
+            5432,
+            true,
+            "active-connections",
+        )];
+        let out = mermaid(&edges, &assets);
+        assert!(out.starts_with("graph TD\n"));
+        assert!(out.contains("10_0_0_5"));
+        assert!(!out.contains("10-0-0-5"));
+        assert!(out.contains("web-01 (10.0.0.5)"));
+    }
+
+    #[test]
+    fn mermaid_dotted_for_unconfirmed_solid_for_confirmed() {
+        let assets = vec![asset("a", "10.0.0.1", None), asset("b", "10.0.0.2", None)];
+        let confirmed = dep("a", "b", 443, true, "manual");
+        let observed = dep("b", "a", 80, false, "active-connections");
+        let out = mermaid(&[confirmed, observed], &assets);
+        assert!(out.contains("-->|tcp/443"), "confirmed edge must be solid");
+        assert!(out.contains("-. tcp/80"), "observed edge must be dotted");
+    }
+
+    #[test]
+    fn mermaid_empty_graph_is_header_only() {
+        assert_eq!(mermaid(&[], &[]), "graph TD\n");
+    }
+
+    #[test]
+    fn dns_edges_render_as_dns_label() {
+        let mut edge = dep("a", "b", 0, false, "dns");
+        edge.proto = "dns".into();
+        edge.port = 0;
+        assert_eq!(edge_via(&edge), "dns");
+        assert!(mermaid_edge_label(&edge).starts_with("dns "));
+    }
+
+    #[test]
+    fn duration_label_running_and_finished() {
+        let started = Utc::now();
+        let running = DiscoveryJob {
+            id: "j".into(),
+            collector: "nmap".into(),
+            targets: vec![],
+            status: JobStatus::Running,
+            started_at: started,
+            finished_at: None,
+            error: None,
+            assets_found: None,
+            services_found: None,
+        };
+        assert_eq!(duration_label(&running), "-");
+
+        let finished = DiscoveryJob {
+            finished_at: Some(started + Duration::seconds(65)),
+            ..running.clone()
+        };
+        assert_eq!(duration_label(&finished), "1m 05s");
+
+        let quick = DiscoveryJob {
+            finished_at: Some(started + Duration::seconds(3)),
+            ..running
+        };
+        assert_eq!(duration_label(&quick), "3s");
+    }
+
+    #[test]
+    fn csv_quotes_fields_with_special_chars() {
+        assert_eq!(csv("plain"), "plain");
+        assert_eq!(csv("has,comma"), "\"has,comma\"");
+        assert_eq!(csv("has\"quote"), "\"has\"\"quote\"");
+        assert_eq!(csv("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    #[test]
+    fn assets_table_reports_empty_state() {
+        let out = assets(&[], Format::Table);
+        assert!(out.contains("No assets discovered"));
+    }
+
+    #[test]
+    fn capacity_empty_state() {
+        assert!(capacity(None, Format::Table).contains("No capacity recorded"));
+        // CSV renders only the header when no capacity
+        let csv = capacity(None, Format::Csv);
+        assert!(csv.starts_with("asset_id,cpu_model,"));
+        assert_eq!(csv.lines().count(), 1);
+    }
+
+    #[test]
+    fn dependencies_table_uses_hostname_labels() {
+        let assets = vec![
+            asset("a", "10.0.0.1", Some("web-01")),
+            asset("b", "10.0.0.2", None),
+        ];
+        let out = dependencies(
+            &[dep("a", "b", 5432, false, "active-connections")],
+            &assets,
+            Format::Table,
+        );
+        assert!(out.contains("web-01 (10.0.0.1)"));
+        assert!(out.contains("10.0.0.2"));
+        assert!(out.contains("no"), "unconfirmed edges show 'no'");
+    }
+}

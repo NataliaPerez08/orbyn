@@ -63,3 +63,56 @@ impl Graph {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dep(source: &str, target: &str, port: u16) -> Dependency {
+        Dependency {
+            source_asset_id: source.into(),
+            target_asset_id: target.into(),
+            proto: "tcp".into(),
+            port,
+            evidence_source: "active-connections".into(),
+            confidence: 0.9,
+            confirmed: false,
+        }
+    }
+
+    #[test]
+    fn forward_and_reverse_lookups() {
+        let graph = Graph::build(vec![
+            dep("web", "api", 443),
+            dep("api", "db", 5432),
+            dep("worker", "db", 5432),
+        ]);
+
+        let dependents = graph.dependents_of("api");
+        assert_eq!(dependents.len(), 1);
+        assert_eq!(dependents[0].target_asset_id, "db");
+
+        let dependants = graph.dependants_upon("db");
+        assert_eq!(dependants.len(), 2);
+        let mut sources: Vec<&str> = dependants
+            .iter()
+            .map(|d| d.source_asset_id.as_str())
+            .collect();
+        sources.sort();
+        assert_eq!(sources, vec!["api", "worker"]);
+    }
+
+    #[test]
+    fn unknown_asset_has_no_neighbours() {
+        let graph = Graph::build(vec![dep("a", "b", 1)]);
+        assert!(graph.dependents_of("missing").is_empty());
+        assert!(graph.dependants_upon("missing").is_empty());
+    }
+
+    #[test]
+    fn empty_graph() {
+        let graph = Graph::build(vec![]);
+        assert!(graph.dependents_of("x").is_empty());
+        assert!(graph.dependants_upon("x").is_empty());
+    }
+}

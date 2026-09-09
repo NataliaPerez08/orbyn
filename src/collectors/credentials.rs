@@ -47,3 +47,28 @@ impl Default for CredentialProfile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_fields() {
+        let profile =
+            CredentialProfile::new("deploy", 2222, Some(PathBuf::from("/tmp/id_ed25519")));
+        assert_eq!(profile.username, "deploy");
+        assert_eq!(profile.port, 2222);
+        assert_eq!(
+            profile.identity_file,
+            Some(PathBuf::from("/tmp/id_ed25519"))
+        );
+    }
+
+    #[test]
+    fn default_is_agent_auth_on_port_22() {
+        let profile = CredentialProfile::default();
+        assert_eq!(profile.username, "");
+        assert_eq!(profile.port, 22);
+        assert_eq!(profile.identity_file, None);
+    }
+}
