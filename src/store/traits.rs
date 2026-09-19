@@ -52,6 +52,11 @@ pub trait Store: Send + Sync {
     async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;
 
+    /// Re-derive dependency edges from every recorded connection against the
+    /// current asset inventory, so an edge does not depend on the collection
+    /// order (a connection observed before its target asset landed still maps).
+    async fn reconcile_dependencies(&self) -> Result<()>;
+
     /// Mark observed edges between two assets as confirmed (confidence 1.0).
     /// `proto`/`port` narrow the update; `None` means every edge between the
     /// pair. Returns the number of edges confirmed.

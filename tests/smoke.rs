@@ -387,7 +387,8 @@ async fn host_facts_round_trip() {
     assert_eq!(running[0].name, "nginx.service");
 
     // Re-observing reconciles instead of duplicating, and a capacity refresh
-    // with partial data keeps previously collected fields.
+    // overwrites measured fields: fields a scan no longer detects become
+    // "unknown now" (NULL) instead of silently keeping stale values.
     let mut refresh = host_fact_observations();
     for obs in &mut refresh {
         if let Observation::Capacity(cap) = obs {
@@ -408,7 +409,8 @@ async fn host_facts_round_trip() {
     assert_eq!(capacity.ram_total_mb, Some(32768));
     assert_eq!(
         capacity.cpu_model.as_deref(),
-        Some("Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz")
+        None,
+        "undetected field is recorded as unknown, not stale"
     );
 
     assert_eq!(

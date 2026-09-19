@@ -480,11 +480,32 @@ async fn main() -> anyhow::Result<()> {
                     no_verify,
                 },
         } => {
+            if no_verify {
+                tracing::warn!(
+                    "--no-verify disables TLS certificate verification for NetBox"
+                );
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed NetBox instance; \
+                     connections can be silently intercepted."
+                );
+            }
             let store = SqliteStore::open(&config.db_path).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            if let Some(token) = &token {
+                redactor.add_value(token);
+            }
             let client = NetBoxClient::new(&url, token, no_verify);
-            let mut rows = client.fetch_devices().await?;
-            rows.extend(client.fetch_vms().await?);
-            let count = persist_imported_assets(&store, &rows, "netbox").await?;
+            let mut rows = client
+                .fetch_devices()
+                .await
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+            rows.extend(client.fetch_vms().await.map_err(|e| {
+                anyhow!(redactor.redact(&format!("{e:#}")))
+            })?);
+            let count = persist_imported_assets(&store, &rows, "netbox")
+                .await
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
             eprintln!("Imported {count} assets from NetBox.");
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
@@ -607,10 +628,15 @@ async fn discover(
             Ok(())
         }
         Err(e) => {
+            let redactor = orbyn::redact::Redactor::from_env();
+            let redacted = redactor.redact(&format!("{e:#}"));
             store
-                .finish_job(&job.id, JobStatus::Failed, Some(e.to_string()), None)
+                .finish_job(&job.id, JobStatus::Failed, Some(redacted.clone()), None)
                 .await?;
-            Err(anyhow!("discovery job {} failed: {e:#}", job.id))
+            Err(anyhow!(
+                "discovery job {} failed: {redacted}",
+                job.id
+            ))
         }
     }
 }

@@ -9,37 +9,41 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 ## Security & credentials
 
 1. **NetBox token temp file can leak on error paths** — `bug` ~~FIXED~~
-   The `0600` token header file is now wrapped in a `TokenHeader` guard whose
-   `Drop` removes it on every exit path (success, spawn/read errors, timeout).
+   The token is now streamed to curl through stdin (`-H @-`); no temp header
+   file is written on any platform, so there is no file that could leak.
    (Resolved in `src/integrations/netbox.rs`.)
 
-2. **No central secret redaction** — `gap`
-   SECURITY.md lists "Secret redaction" as open (BACKLOG). Logs/errors can
-   include hostnames and tool stderr; there is no generic redaction layer.
+2. **No central secret redaction** — `gap` ~~FIXED~~
+   A `Redactor` replaces known secret values (NetBox token, SNMP community)
+   before they are written to logs, stderr, or persisted job records; the
+   discovery and NetBox error paths are wired through it. (Resolved in
+   `src/redact.rs` + `src/main.rs`.)
 
 3. **Password authentication unsupported by design** — `gap`
    SSH/Windows collectors only support agent / identity-file auth
    (`CredentialProfile`). Password-based environments must front auth with
    `ssh-agent`. Intentional, but worth knowing.
 
-4. **`--no-verify` disables TLS verification** — `quality`
-   `orbyn netbox import --no-verify` maps to `curl --insecure`. Convenient for
-   self-signed NetBox but a footgun; nothing prevents silently connecting over
-   an untrusted channel.
+4. **`--no-verify` disables TLS verification** — `quality` ~~FIXED~~
+   Using it now prints a prominent warning that TLS verification is disabled
+   and only trusted self-signed instances should be targeted. (Resolved in
+   `src/main.rs`.)
 
-5. **Token file permissions only restricted on Unix** — `quality`
-   `write_token_header` sets `0600` under `#[cfg(unix)]`; on Windows the temp
-   file uses default ACLs.
+5. **Token file permissions only restricted on Unix** — `quality` ~~FIXED~~
+   Obsolete: the NetBox token is passed to curl through stdin (`-H @-`) and no
+   token temp file is written, so file-permission differences cannot apply.
+   (Resolved in `src/integrations/netbox.rs`.)
 
 ---
 
 ## Correctness & data quality
 
-6. **Dependency edges are order-dependent** — `bug`
-   Connections are reconciled into `Dependency` edges only at store time
-   (`store_observations`). If a host is collected before its neighbor is in the
-   inventory, no edge is created and it is never re-resolved later. Workflow
-   must scan the subnet (nmap) before host-level collection (ssh/windows).
+6. **Dependency edges are order-dependent** — `bug` ~~FIXED~~
+   Every `store_observations` batch (and `store.reconcile_dependencies`)
+   re-derives edges from all recorded connections against the full asset
+   inventory in one SQL pass, so an edge appears even when the target asset
+   only lands in the inventory later in the same run. (Resolved in
+   `src/store/sqlite.rs`.)
 
 7. **EOL OS table is static** — `quality`
    `src/assessment/rules.rs` hardcodes the EOL table. OSes reach end-of-life
@@ -47,11 +51,11 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    Consider data-driven rules or a clear cadence for updating
    `RULES_VERSION`.
 
-8. **Capacity merge keeps stale values** — `bug`
-   `store_observations` upserts `asset_capacity` with
-   `COALESCE(excluded.x, existing.x)`. A later scan that *failed* to detect a
-   field (e.g. CPU model) keeps the old value, indistinguishable from "value
-   unchanged". There is no way to record "unknown now".
+8. **Capacity merge keeps stale values** — `bug` ~~FIXED~~
+   `store_observations` now overwrites every measured capacity field with the
+   latest observation: a field a later scan no longer detects is recorded as
+   NULL ("unknown now") instead of silently keeping the stale value. (Resolved
+   in `src/store/sqlite.rs`.)
 
 9. **SNMP `sysDescr` stored as OS name** — `quality`
    The SNMP collector puts the full `sysDescr` string into `os_name`

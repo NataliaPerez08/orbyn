@@ -14,4 +14,5 @@ pub mod integrations;
 pub mod metrics;
 pub mod output;
 pub mod parsing;
+pub mod redact;
 pub mod store;

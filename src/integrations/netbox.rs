@@ -5,11 +5,10 @@
 //! NetBox.
 //!
 //! The API is queried through the `curl` binary (consistent with the rest of
-//! the collector surface). The API token is written to a `0600` temporary
-//! header file and passed as `-H @file`, so it never appears in process
-//! arguments, logs, or CLI output.
+//! the collector surface). The API token is streamed to curl through stdin as
+//! an `Authorization` header (`-H @-`), so it never appears in process
+//! arguments, logs, disk, or CLI output.
 
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -188,27 +187,45 @@ impl NetBoxClient {
 
     async fn get(&self, path: &str) -> Result<String> {
         let url = format!("{}{path}?limit=0", self.base_url);
-        let header_file = match &self.token {
-            Some(token) => Some(TokenHeader(write_token_header(token)?)),
-            None => None,
-        };
+        let has_token = self.token.is_some();
 
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-sS");
         if self.insecure {
             cmd.arg("--insecure");
         }
-        if let Some(file) = &header_file {
-            cmd.arg("-H").arg(format!("@{}", file.0.display()));
+        if has_token {
+            // Read the Authorization header from stdin (`-H @-`) so the token
+            // never hits the filesystem or the process argument list.
+            cmd.arg("-H").arg("@-");
         }
         cmd.arg(&url)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         let mut child = cmd
             .spawn()
             .context("failed to start curl; is it installed?")?;
+
+        match &self.token {
+            Some(token) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    stdin
+                        .write_all(token_header_line(token).as_bytes())
+                        .await
+                        .context("writing NetBox token header to curl stdin")?;
+                    stdin.shutdown().await.ok();
+                }
+            }
+            None => {
+                // Close stdin so an unexpectedly header-reading curl still
+                // reaches EOF instead of blocking.
+                child.stdin.take();
+            }
+        }
+
         let mut stdout = String::new();
         let mut stderr = String::new();
         if let Some(mut out) = child.stdout.take() {
@@ -226,8 +243,6 @@ impl NetBoxClient {
             .map_err(|_| anyhow!("curl timed out against {url}"))?
             .context("waiting for curl")?;
 
-        // The header file is removed by `TokenHeader::drop` on every path.
-
         if !status.success() {
             return Err(anyhow!("curl exited with {status}: {}", stderr.trim()));
         }
@@ -235,29 +250,9 @@ impl NetBoxClient {
     }
 }
 
-/// Removes the token header file when dropped, covering every exit path
-/// (success, spawn/read errors, and timeout) so the token file never leaks.
-struct TokenHeader(PathBuf);
-
-impl Drop for TokenHeader {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Write `Authorization: Token <t>` to a 0600 temporary file, returning its path.
-fn write_token_header(token: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("orbyn-netbox-token-{}", uuid::Uuid::new_v4()));
-    let contents = format!("Authorization: Token {token}\n");
-    std::fs::write(&path, contents).context("writing NetBox token header file")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .context("restricting NetBox token file permissions")?;
-    }
-    Ok(path)
+/// The Authorization header line curl reads from stdin via `-H @-`.
+fn token_header_line(token: &str) -> String {
+    format!("Authorization: Token {token}\n")
 }
 
 #[cfg(test)]
@@ -324,15 +319,10 @@ mod tests {
     }
 
     #[test]
-    fn token_header_removes_file_on_drop() {
-        let path = write_token_header("supersecret").unwrap();
-        assert!(path.exists());
-        let guard = TokenHeader(path.clone());
-        assert!(path.exists());
-        drop(guard);
-        assert!(
-            !path.exists(),
-            "token file must be removed when the guard drops"
+    fn token_header_line_is_exact() {
+        assert_eq!(
+            token_header_line("supersecret"),
+            "Authorization: Token supersecret\n"
         );
     }
 }

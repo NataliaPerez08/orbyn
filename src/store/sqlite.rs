@@ -297,6 +297,17 @@ impl SqliteStore {
     }
 }
 
+/// Re-create dependency edges from every recorded connection against the
+/// current asset inventory. Run after each persisted observation batch and
+/// exposed for re-scanning so no edge is missing because of collection order.
+const RECONCILE_DEPENDENCIES_SQL: &str = "
+    INSERT OR IGNORE INTO dependencies \
+       (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
+     SELECT c.asset_id, a.id, c.proto, c.remote_port, 'active-connections', 0.9, 0 \
+     FROM asset_connections c \
+     JOIN assets a ON a.ip = c.remote_ip \
+     WHERE c.asset_id != a.id";
+
 #[async_trait::async_trait]
 impl crate::store::traits::Store for SqliteStore {
     fn database_type(&self) -> &'static str {
@@ -388,16 +399,21 @@ impl crate::store::traits::Store for SqliteStore {
                     .context("inserting dependency")?;
                 }
                 Observation::Capacity(capacity) => {
+                    // #8: overwrite every measured field with the latest
+                    // observation instead of COALESCE-ing against the previous
+                    // row. A later scan that no longer detects a field (e.g.
+                    // CPU model) records NULL here, so "unknown now" is never
+                    // conflated with "value unchanged".
                     sqlx::query(
                         "INSERT INTO asset_capacity \
                            (asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at) \
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
                          ON CONFLICT(asset_id) DO UPDATE SET \
-                           cpu_model = COALESCE(excluded.cpu_model, asset_capacity.cpu_model), \
-                           cpu_sockets = COALESCE(excluded.cpu_sockets, asset_capacity.cpu_sockets), \
-                           cpu_cores = COALESCE(excluded.cpu_cores, asset_capacity.cpu_cores), \
-                           cpu_threads = COALESCE(excluded.cpu_threads, asset_capacity.cpu_threads), \
-                           ram_total_mb = COALESCE(excluded.ram_total_mb, asset_capacity.ram_total_mb), \
+                           cpu_model = excluded.cpu_model, \
+                           cpu_sockets = excluded.cpu_sockets, \
+                           cpu_cores = excluded.cpu_cores, \
+                           cpu_threads = excluded.cpu_threads, \
+                           ram_total_mb = excluded.ram_total_mb, \
                            collected_at = excluded.collected_at",
                     )
                     .bind(&capacity.asset_id)
@@ -476,37 +492,21 @@ impl crate::store::traits::Store for SqliteStore {
                     .execute(&mut *tx)
                     .await
                     .context("inserting connection")?;
-
-                    // Reconcile the remote endpoint into a dependency edge
-                    // whenever it matches a known asset.
-                    let target_id: Option<String> =
-                        sqlx::query_scalar("SELECT id FROM assets WHERE ip = ?1")
-                            .bind(&remote_ip)
-                            .fetch_optional(&mut *tx)
-                            .await
-                            .context("resolving connection target")?;
-                    if let Some(target) = target_id {
-                        if target != conn.asset_id {
-                            sqlx::query(
-                                "INSERT OR IGNORE INTO dependencies \
-                                   (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
-                                 VALUES (?1, ?2, ?3, ?4, 'active-connections', 0.9, 0)",
-                            )
-                            .bind(&conn.asset_id)
-                            .bind(&target)
-                            .bind(&conn.proto)
-                            .bind(conn.remote_port as i64)
-                            .execute(&mut *tx)
-                            .await
-                            .context("inserting dependency from connection")?;
-                        }
-                    }
                 }
                 Observation::MetricSample(_) => {
                     tracing::warn!("observation type not yet persisted");
                 }
             }
         }
+
+        // #6: re-resolve every recorded connection into a dependency edge
+        // against the current asset inventory. Reconciliation runs once for the
+        // whole batch (not per connection), so an edge is created even when the
+        // target asset only lands in the inventory later in the same run.
+        sqlx::query(RECONCILE_DEPENDENCIES_SQL)
+            .execute(&mut *tx)
+            .await
+            .context("reconciling dependency edges")?;
 
         tx.commit().await.context("committing transaction")?;
         Ok(())
@@ -575,6 +575,14 @@ impl crate::store::traits::Store for SqliteStore {
             .into_iter()
             .map(DependencyRow::into_dependency)
             .collect())
+    }
+
+    async fn reconcile_dependencies(&self) -> Result<()> {
+        sqlx::query(RECONCILE_DEPENDENCIES_SQL)
+            .execute(&self.pool)
+            .await
+            .context("reconciling dependency edges")?;
+        Ok(())
     }
 
     async fn list_services(&self, asset_id: &str) -> Result<Vec<Service>> {
