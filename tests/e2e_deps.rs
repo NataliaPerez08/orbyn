@@ -3,6 +3,7 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 /// Seed two assets and an ssh-discovered host with active connections so

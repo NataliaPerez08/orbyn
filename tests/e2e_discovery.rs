@@ -3,6 +3,7 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 #[cfg(unix)]

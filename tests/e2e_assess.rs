@@ -3,10 +3,12 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 /// A JSON inventory with an EOL OS, plus a linux host discovered via ssh that
 /// has a nearly-full disk and an external dependency.
+#[cfg(unix)]
 const SEED_JSON: &str = r#"{"assets":[
   {"ip":"10.0.0.2","hostname":"db-01","device_class":"server","environment":"prod","os_name":"Ubuntu 18.04.6 LTS","criticality":"critical"},
   {"ip":"10.0.0.9","hostname":"cache-01","device_class":"server","os_name":"Ubuntu 22.04.4 LTS"}
@@ -14,6 +16,7 @@ const SEED_JSON: &str = r#"{"assets":[
 
 /// A Linux probe with a near-full root filesystem and a connection to db-01
 /// plus an external endpoint.
+#[cfg(unix)]
 const SSH_NEAR_FULL: &str = r#"#!/usr/bin/env bash
 cat <<'OUT'
 ###os

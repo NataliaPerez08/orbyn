@@ -3,8 +3,10 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
+#[cfg(unix)]
 const THREE_ASSETS_JSON: &str = r#"{"assets":[
   {"ip":"10.0.0.1","hostname":"api-01","device_class":"server","environment":"prod","owner":"platform","criticality":"high","tags":["core","api"]},
   {"ip":"10.0.0.2","hostname":"db-01","device_class":"server","environment":"prod","os_name":"Ubuntu 22.04.4 LTS","criticality":"critical"},

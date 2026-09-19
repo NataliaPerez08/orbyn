@@ -927,11 +927,11 @@ fn init_logging(verbose: u8) {
         1 => "orbyn=info",
         _ => "orbyn=debug",
     };
+    let filter = std::env::var("ORBYN_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_else(|_| default_filter.to_string());
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| default_filter.into()),
-        )
+        .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
 }

@@ -3,9 +3,11 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 /// A fake `curl` that dispatches NetBox endpoints to fixtures.
+#[cfg(unix)]
 const FAKE_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
 for a in "$@"; do
   case "$a" in
@@ -28,6 +30,7 @@ JSON
 done
 "#;
 
+#[cfg(unix)]
 const THREE_ASSETS_JSON: &str = r#"{"assets":[
   {"ip":"10.0.0.1","hostname":"web-01","device_class":"server","environment":"prod","owner":"platform","criticality":"high","tags":["core","api"]},
   {"ip":"10.0.0.2","hostname":"db-01","device_class":"server","environment":"prod"},
