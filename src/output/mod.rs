@@ -14,6 +14,7 @@ use crate::domain::{
     Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
     JobStatus, RunningService, Service,
 };
+use crate::metrics::{SampleConfidence, WindowStats};
 
 /// Output format selected through `--format` on each command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -229,6 +230,102 @@ pub fn capacity(cap: Option<&Capacity>, format: Format) -> String {
                 )
             }
         },
+    }
+}
+
+/// Render a utilization window: avg/p95/p99/peak + evidence confidence.
+pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
+    match format {
+        Format::Json => json(&stats),
+        Format::Csv => {
+            let mut out = String::from("metric,statistic,value\n");
+            if let Some(s) = stats {
+                let rows = [
+                    (
+                        "cpu_usage_percent",
+                        s.cpu_avg_percent,
+                        s.cpu_p95_percent,
+                        s.cpu_p99_percent,
+                        s.cpu_peak_percent,
+                    ),
+                    (
+                        "ram_used_mb",
+                        s.ram_avg_mb,
+                        s.ram_p95_mb,
+                        s.ram_p99_mb,
+                        s.ram_peak_mb,
+                    ),
+                ];
+                for (name, avg, p95, p99, peak) in rows {
+                    out.push_str(&format!(
+                        "{name},avg,{}\n{name},p95,{}\n{name},p99,{}\n{name},peak,{}\n",
+                        fmt_opt_float(avg),
+                        fmt_opt_float(p95),
+                        fmt_opt_float(p99),
+                        fmt_opt_float(peak),
+                    ));
+                }
+                out.push_str(&format!(
+                    "confidence,,{}\nsample_count,0,{}\n",
+                    s.confidence, s.sample_count
+                ));
+            }
+            out
+        }
+        Format::Table => match stats {
+            None => "No metric samples recorded for this asset yet.\n".to_string(),
+            Some(s) => {
+                let mb = |v: Option<f64>| {
+                    v.map(|mb| {
+                        if mb >= 1024.0 {
+                            format!("{:.2} GiB", mb / 1024.0)
+                        } else {
+                            format!("{mb:.0} MB")
+                        }
+                    })
+                    .unwrap_or_else(|| "-".into())
+                };
+                let pct =
+                    |v: Option<f64>| v.map(|v| format!("{v:.2}%")).unwrap_or_else(|| "-".into());
+                format!(
+                    "Utilization window: {} samples\n\
+                     CPU usage : avg {}   p95 {}   p99 {}   peak {}\n\
+                     RAM used  : avg {}   p95 {}   p99 {}   peak {}\n\
+                     Confidence: {} (evidence quality)\n",
+                    s.sample_count,
+                    pct(s.cpu_avg_percent),
+                    pct(s.cpu_p95_percent),
+                    pct(s.cpu_p99_percent),
+                    pct(s.cpu_peak_percent),
+                    mb(s.ram_avg_mb),
+                    mb(s.ram_p95_mb),
+                    mb(s.ram_p99_mb),
+                    mb(s.ram_peak_mb),
+                    display_confidence(s.confidence),
+                )
+            }
+        },
+    }
+}
+
+fn display_confidence(c: SampleConfidence) -> &'static str {
+    match c {
+        SampleConfidence::High => "high",
+        SampleConfidence::Medium => "medium",
+        SampleConfidence::Low => "low (keep collecting samples)",
+    }
+}
+
+pub fn fmt_opt_float(v: Option<f64>) -> String {
+    match v {
+        Some(v) => {
+            let mut s = format!("{v:.2}");
+            if s.ends_with(".00") {
+                s.truncate(s.len() - 3);
+            }
+            s
+        }
+        None => String::new(),
     }
 }
 

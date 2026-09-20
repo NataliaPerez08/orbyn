@@ -184,6 +184,18 @@ enum Command {
         format: Format,
     },
 
+    /// Show a resource utilization window (avg/p95/p99/peak + confidence) for
+    /// an asset (by ID or IP).
+    Metrics {
+        /// Asset ID or IP address.
+        asset: String,
+        /// Only use the most recent N samples.
+        #[arg(long)]
+        samples: Option<usize>,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
     /// Curate dependency edges (add / confirm / remove / DNS evidence).
     Deps {
         #[command(subcommand)]
@@ -567,6 +579,17 @@ async fn main() -> anyhow::Result<()> {
             let asset = resolve_asset(&store, &asset).await?;
             let conns = store.list_connections(&asset.id).await?;
             print!("{}", orbyn::output::connections(&conns, format));
+        }
+        Command::Metrics {
+            asset,
+            samples,
+            format,
+        } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let asset = resolve_asset(&store, &asset).await?;
+            let collected = store.list_metric_samples(&asset.id, samples).await?;
+            let stats = orbyn::metrics::summarize(&collected);
+            print!("{}", orbyn::output::metrics(stats.as_ref(), format));
         }
         Command::Deps { action } => {
             let store = SqliteStore::open(&config.db_path).await?;

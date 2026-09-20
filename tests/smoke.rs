@@ -135,6 +135,76 @@ async fn store_round_trip() {
 }
 
 #[tokio::test]
+async fn metric_samples_round_trip_and_summarize() {
+    let _ = std::fs::remove_file(format!("{}.metrics", sample_db_path()));
+    let store = SqliteStore::open(std::path::Path::new(&format!(
+        "{}.metrics",
+        sample_db_path()
+    )))
+    .await
+    .expect("open test db");
+
+    let api_id = "asset-api".to_string();
+    let samples: Vec<Observation> = [10.0, 20.0, 40.0, 30.0]
+        .iter()
+        .map(|cpu| {
+            Observation::MetricSample(orbyn::domain::MetricSample {
+                asset_id: api_id.clone(),
+                sampled_at: Utc::now(),
+                cpu_usage_percent: Some(*cpu),
+                ram_used_mb: Some((1024.0 * *cpu) as u64),
+                ram_available_mb: Some(4096),
+                swap_used_mb: None,
+                load_1m: Some(0.5),
+                load_5m: Some(0.4),
+                load_15m: Some(0.3),
+            })
+        })
+        .collect();
+
+    store
+        .store_observations(vec![Observation::Asset(Asset {
+            id: api_id.clone(),
+            ip: "10.0.0.1".parse().unwrap(),
+            hostname: None,
+            device_class: None,
+            os_name: None,
+            os_version: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+        })])
+        .await
+        .expect("seed asset");
+    store
+        .store_observations(samples)
+        .await
+        .expect("persist samples");
+
+    let stored = store
+        .list_metric_samples(&api_id, None)
+        .await
+        .expect("list samples");
+    assert_eq!(stored.len(), 4, "all four samples persisted");
+
+    let stats = orbyn::metrics::summarize(&stored).expect("window over stored samples");
+    assert_eq!(stats.sample_count, 4);
+    assert_eq!(stats.cpu_p95_percent, Some(40.0));
+    assert_eq!(stats.cpu_p99_percent, Some(40.0));
+    assert_eq!(stats.ram_peak_mb, Some(40960.0));
+    assert_eq!(stats.confidence, orbyn::metrics::SampleConfidence::Low);
+
+    let recent = store
+        .list_metric_samples(&api_id, Some(2))
+        .await
+        .expect("limited list");
+    assert_eq!(recent.len(), 2);
+}
+
+#[tokio::test]
 async fn re_observation_reconciles_interfaces() {
     let _ = std::fs::remove_file(format!("{}.iface", sample_db_path()));
     let store = SqliteStore::open(std::path::Path::new(&format!("{}.iface", sample_db_path())))

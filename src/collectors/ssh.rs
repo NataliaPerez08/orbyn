@@ -25,13 +25,20 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::domain::{Asset, Capacity, Connection, Filesystem, Observation, RunningService};
+use crate::domain::{
+    Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
+};
 use crate::parsing::{parse_addr_port, split_sections};
 
 use super::credentials::CredentialProfile;
 use super::types::{Collector, CpuFacts, ScanTarget};
 
 /// One read-only probe round trip. Sections are delimited by `###name` lines.
+///
+/// The `###metric` block samples CPU/RAM/swap/load three times ~2s apart, using
+/// `/proc/stat` deltas (average CPU since the previous read), `/proc/meminfo`
+/// and `/proc/loadavg`. No external tools besides `sed`/`awk`/`cut`/`tr`/`sleep`
+/// are required, so it works on minimal hosts.
 pub const LINUX_PROBE: &str = "echo '###os'; cat /etc/os-release; \
      echo '###kernel'; uname -r; \
      echo '###hostname'; hostname; \
@@ -40,7 +47,18 @@ pub const LINUX_PROBE: &str = "echo '###os'; cat /etc/os-release; \
      echo '###disk'; df -kPT -x tmpfs -x devtmpfs; \
      echo '###svc'; systemctl --no-legend --no-pager --plain \
        list-units --type=service --state=running 2>/dev/null; \
-     echo '###conn'; ss -tnp state established 2>/dev/null || netstat -tn 2>/dev/null";
+     echo '###conn'; ss -tnp state established 2>/dev/null || netstat -tn 2>/dev/null; \
+     echo '###metric'; \
+     if [ -r /proc/stat ] && [ -r /proc/meminfo ]; then \
+       for __i in 1 2 3; do \
+         __c1=$(sed -n 's/^cpu  //p' /proc/stat); sleep 2; \
+         __c2=$(sed -n 's/^cpu  //p' /proc/stat); \
+         __cpu=$(printf '%s\n%s\n' \"$__c1\" \"$__c2\" | awk '{ if(NR==1){for(i=1;i<=NF;i++)a[i]=$i} else {for(i=1;i<=NF;i++)d[i]=$i-a[i]; t=0; for(i=1;i<=NF;i++)t+=d[i]; idle=d[4]+d[5]; printf \"%.1f\",(t-idle)*100/t } }'); \
+         __mem=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^SwapTotal:/{st=$2} /^SwapFree:/{sf=$2} END{printf \"%d|%d|%d|%d\",t,a,st,sf}' /proc/meminfo); \
+         __load=$(cut -d' ' -f1-3 /proc/loadavg | tr ' ' ','); \
+         echo \"${__cpu}|${__mem}|${__load}\"; \
+       done; \
+     fi";
 
 /// Executes a fixed command on a remote host through the `ssh` binary.
 ///
@@ -179,7 +197,25 @@ pub struct LinuxHostFacts {
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
     pub connections: Vec<Connection>,
+    /// Utilization snapshots in probe order (each roughly `snapshot_interval`
+    /// seconds apart).
+    pub metrics: Vec<SnapshotFacts>,
 }
+
+/// One utilization snapshot captured on the remote host.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SnapshotFacts {
+    pub cpu_usage_percent: Option<f32>,
+    pub ram_used_mb: Option<u64>,
+    pub ram_available_mb: Option<u64>,
+    pub swap_used_mb: Option<u64>,
+    pub load_1m: Option<f32>,
+    pub load_5m: Option<f32>,
+    pub load_15m: Option<f32>,
+}
+
+/// Approximate spacing between snapshots in the probe (`sleep 2` per sample).
+pub const SNAPSHOT_INTERVAL_SECS: i64 = 2;
 
 /// Parse the full Linux probe output into facts.
 pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
@@ -194,6 +230,7 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
     let filesystems = parse_df(&section("disk"));
     let services = parse_systemctl(&section("svc"));
     let connections = parse_connections(&section("conn"));
+    let metrics = parse_snapshots(&section("metric"));
 
     LinuxHostFacts {
         os_name,
@@ -204,7 +241,70 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
         filesystems,
         services,
         connections,
+        metrics,
     }
+}
+
+/// Parse `###metric` lines of the shape
+/// `cpu|mem_total_kb|mem_avail_kb|swap_total_kb|swap_free_kb|load1,load5,load15`.
+/// Malformed lines yield `None` fields or are skipped entirely when they carry
+/// nothing usable.
+pub fn parse_snapshots(lines: &[String]) -> Vec<SnapshotFacts> {
+    let mut out = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(6, '|');
+        let cpu: Option<f32> = parts.next().and_then(|v| v.trim().parse().ok());
+        let t: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let a: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let st: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let sf: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let load: Option<Vec<f32>> = parts.next().and_then(|v| {
+            let fields: Vec<f32> = v
+                .trim()
+                .split(',')
+                .filter_map(|x| x.trim().parse().ok())
+                .collect();
+            if fields.len() == 3 {
+                Some(fields)
+            } else {
+                None
+            }
+        });
+
+        let ram_used_mb = match (t, a) {
+            (Some(total), Some(avail)) if total >= avail && avail > 0 => {
+                Some((total - avail) / 1024)
+            }
+            _ => None,
+        };
+        let swap_used_mb = match (st, sf) {
+            (Some(total), Some(free)) if total > 0 && total >= free => Some((total - free) / 1024),
+            _ => None,
+        };
+
+        if cpu.is_none() && ram_used_mb.is_none() && load.is_none() {
+            continue;
+        }
+
+        let (l1, l5, l15) = match &load {
+            Some(v) => (Some(v[0]), Some(v[1]), Some(v[2])),
+            None => (None, None, None),
+        };
+        out.push(SnapshotFacts {
+            cpu_usage_percent: cpu,
+            ram_used_mb,
+            ram_available_mb: a.map(|kb| kb / 1024),
+            swap_used_mb,
+            load_1m: l1,
+            load_5m: l5,
+            load_15m: l15,
+        });
+    }
+    out
 }
 
 /// Build normalized observations from parsed facts. The asset observation
@@ -254,6 +354,25 @@ pub fn linux_observations(ip: IpAddr, facts: &LinuxHostFacts) -> Vec<Observation
         let mut conn = conn.clone();
         conn.asset_id = id.clone();
         observations.push(Observation::Connection(conn));
+    }
+    for (i, snap) in facts.metrics.iter().enumerate() {
+        // Timestamps are synthesized: the host sampled every ~2 s, so give each
+        // snapshot an offset backwards from "now" preserving its order.
+        let sampled_at = now
+            - chrono::Duration::seconds(
+                SNAPSHOT_INTERVAL_SECS * (facts.metrics.len() - 1 - i) as i64,
+            );
+        observations.push(Observation::MetricSample(MetricSample {
+            asset_id: id.clone(),
+            sampled_at,
+            cpu_usage_percent: snap.cpu_usage_percent,
+            ram_used_mb: snap.ram_used_mb,
+            ram_available_mb: snap.ram_available_mb,
+            swap_used_mb: snap.swap_used_mb,
+            load_1m: snap.load_1m,
+            load_5m: snap.load_5m,
+            load_15m: snap.load_15m,
+        }));
     }
     observations
 }
@@ -525,6 +644,10 @@ nginx.service                 loaded active running A high performance web serve
 sshd.service                  loaded active running OpenBSD Secure Shell server\n\
 stopped.service               loaded inactive dead   Should not appear\n";
 
+    const METRIC_SECTION: &str = "23.4|16384532|12170892|2097152|1048576|0.52,0.41,0.30\n\
+18.1|16384532|13000000|2097152|1200000|0.75,0.50,0.31\n\
+bogus|not-a-number\n";
+
     const CONN_SECTION: &str = "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n\
 ESTAB  0      0      10.0.0.5:443          10.0.0.9:51414           users:((\"nginx\",pid=1234,fd=9))\n\
 ESTAB  0      0      10.0.0.5:54322        10.0.0.7:5432            users:((\"postgres\",pid=977,fd=6))\n\
@@ -643,6 +766,49 @@ tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT\n
             .filter(|o| matches!(o, Observation::Connection(_)))
             .count();
         assert_eq!(conns, 2);
+    }
+
+    #[test]
+    fn parses_metric_snapshots() {
+        let snaps = parse_snapshots(
+            &METRIC_SECTION
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(snaps.len(), 2, "the malformed line must be dropped");
+        assert_eq!(snaps[0].cpu_usage_percent, Some(23.4));
+        assert_eq!(snaps[0].ram_used_mb, Some(4114)); // (16384532-12170892)/1024
+        assert_eq!(snaps[0].ram_available_mb, Some(11885));
+        assert_eq!(snaps[0].swap_used_mb, Some(1024));
+        assert_eq!(snaps[0].load_1m, Some(0.52));
+        assert_eq!(snaps[0].load_15m, Some(0.30));
+        assert_eq!(snaps[1].cpu_usage_percent, Some(18.1));
+    }
+
+    #[test]
+    fn snapshots_become_metric_observations() {
+        let full = format!("{PROBE_OUTPUT}###metric\n{METRIC_SECTION}");
+        let facts = parse_linux_probe(&full);
+        assert_eq!(facts.metrics.len(), 2);
+
+        let observations = linux_observations("10.0.0.5".parse().unwrap(), &facts);
+        let metrics: Vec<&Observation> = observations
+            .iter()
+            .filter(|o| matches!(o, Observation::MetricSample(_)))
+            .collect();
+        assert_eq!(metrics.len(), 2);
+
+        if let Observation::MetricSample(first) = metrics[0] {
+            assert_eq!(first.asset_id, "10-0-0-5");
+            assert_eq!(first.cpu_usage_percent, Some(23.4));
+        }
+        // Oldest snapshot first, then a newer one with a later timestamp.
+        if let (Observation::MetricSample(a), Observation::MetricSample(b)) =
+            (&metrics[0], &metrics[1])
+        {
+            assert!(a.sampled_at <= b.sampled_at);
+        }
     }
 
     #[test]

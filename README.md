@@ -136,11 +136,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 The repository currently provides:
 
 * Rust crate scaffold (single binary, CLI-first).
-* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
+* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `metrics`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
 * Asset, service, interface and discovery job domain model, with capacity,
-  dependency and metric-sample tables reserved for upcoming milestones.
+  dependency and metric-sample persistence for right-sizing.
 * Collector framework with target validation (unrestricted scopes rejected).
 * Nmap collector adapter (executes `nmap`, parses XML output, records
   discovery jobs, classifies device type, captures the responding MAC and
@@ -163,6 +163,12 @@ The repository currently provides:
     no credentials stored or logged.
   * `orbyn capacity`, `orbyn disks`, `orbyn host-services` commands; the
     asset detail view shows every recorded facet.
+* Right-sizing foundation (v0.5):
+  * SSH probes snapshot CPU/RAM/swap/load three times (~2s apart) into
+    `metric_sample` observations persisted per asset.
+  * `orbyn metrics <id-or-ip>` summarizes a utilization window with
+    avg/p95/p99/peak CPU and RAM plus a `SampleConfidence` label based on
+    sample count and validity.
 * Dependency mapping (v0.4):
   * Active connection observations from the SSH/Windows host probes
     (`ss -tnp` / `Get-NetTCPConnection`), reconciled into dependency edges
@@ -258,6 +264,8 @@ orbyn capacity <id-or-ip> [--format ...]          CPU/RAM capacity
 orbyn disks <id-or-ip> [--format ...]             Filesystem inventory
 orbyn host-services <id-or-ip> [--format ...]     Running host services (systemd units / Windows services)
 orbyn connections <id-or-ip> [--format ...]       Active connections observed on a host
+orbyn metrics <id-or-ip> [--samples N] [--format ...]
+                                                 Utilization window: avg/p95/p99/peak + confidence
 orbyn graph [--format ...] [--mermaid] [--asset <id-or-ip>]
 orbyn deps add <src> <tgt> [--proto tcp --port N]     Add a manual dependency
 orbyn deps confirm <src> <tgt> [--proto --port]       Confirm observed edges

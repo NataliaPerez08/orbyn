@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 use crate::domain::{
     Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobOutcome, JobStatus, Observation, RunningService, Service,
+    JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
 
 /// Inventory annotation edits applied to an asset.
@@ -48,6 +48,13 @@ pub trait Store: Send + Sync {
     async fn list_running_services(&self, asset_id: &str) -> Result<Vec<RunningService>>;
     /// Latest recorded CPU/RAM capacity for an asset.
     async fn get_capacity(&self, asset_id: &str) -> Result<Option<Capacity>>;
+    /// Resource utilization samples recorded for an asset (oldest first,
+    /// newest by default). A window can be limited to the most recent `limit`.
+    async fn list_metric_samples(
+        &self,
+        asset_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<MetricSample>>;
     /// Active connections observed on an asset (dependency evidence).
     async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;

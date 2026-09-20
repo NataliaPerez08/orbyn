@@ -11,7 +11,7 @@ use sqlx::{FromRow, Row, SqlitePool};
 
 use crate::domain::{
     Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobOutcome, JobStatus, Observation, RunningService, Service,
+    JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
 use crate::store::traits::AssetAnnotations;
 
@@ -131,6 +131,35 @@ impl CapacityRow {
             cpu_threads: self.cpu_threads.map(|v| v as u32),
             ram_total_mb: self.ram_total_mb.map(|v| v as u64),
             collected_at: parse_ts(&self.collected_at),
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct MetricSampleRow {
+    asset_id: String,
+    sampled_at: String,
+    cpu_usage_percent: Option<f64>,
+    ram_used_mb: Option<i64>,
+    ram_available_mb: Option<i64>,
+    swap_used_mb: Option<i64>,
+    load_1m: Option<f64>,
+    load_5m: Option<f64>,
+    load_15m: Option<f64>,
+}
+
+impl MetricSampleRow {
+    fn into_sample(self) -> MetricSample {
+        MetricSample {
+            asset_id: self.asset_id,
+            sampled_at: parse_ts(&self.sampled_at),
+            cpu_usage_percent: self.cpu_usage_percent.map(|v| v as f32),
+            ram_used_mb: self.ram_used_mb.map(|v| v as u64),
+            ram_available_mb: self.ram_available_mb.map(|v| v as u64),
+            swap_used_mb: self.swap_used_mb.map(|v| v as u64),
+            load_1m: self.load_1m.map(|v| v as f32),
+            load_5m: self.load_5m.map(|v| v as f32),
+            load_15m: self.load_15m.map(|v| v as f32),
         }
     }
 }
@@ -493,8 +522,26 @@ impl crate::store::traits::Store for SqliteStore {
                     .await
                     .context("inserting connection")?;
                 }
-                Observation::MetricSample(_) => {
-                    tracing::warn!("observation type not yet persisted");
+                Observation::MetricSample(sample) => {
+                    sqlx::query(
+                        "INSERT INTO metric_samples \
+                           (id, asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                            ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    )
+                    .bind(uuid::Uuid::new_v4().to_string())
+                    .bind(&sample.asset_id)
+                    .bind(sample.sampled_at.to_rfc3339())
+                    .bind(sample.cpu_usage_percent.map(f64::from))
+                    .bind(sample.ram_used_mb.map(|v| v as i64))
+                    .bind(sample.ram_available_mb.map(|v| v as i64))
+                    .bind(sample.swap_used_mb.map(|v| v as i64))
+                    .bind(sample.load_1m.map(f64::from))
+                    .bind(sample.load_5m.map(f64::from))
+                    .bind(sample.load_15m.map(f64::from))
+                    .execute(&mut *tx)
+                    .await
+                    .context("inserting metric sample")?;
                 }
             }
         }
@@ -649,6 +696,28 @@ impl crate::store::traits::Store for SqliteStore {
             .into_iter()
             .map(ConnectionRow::into_connection)
             .collect())
+    }
+
+    async fn list_metric_samples(
+        &self,
+        asset_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<MetricSample>> {
+        const SELECT_METRICS: &str =
+            "SELECT asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                        ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m \
+                 FROM metric_samples WHERE asset_id = ?1 ORDER BY sampled_at DESC";
+        let sql = match limit {
+            Some(n) => format!("{SELECT_METRICS} LIMIT {n}"),
+            None => SELECT_METRICS.to_string(),
+        };
+        let mut rows = sqlx::query_as::<_, MetricSampleRow>(&sql)
+            .bind(asset_id)
+            .fetch_all(&self.pool)
+            .await
+            .context("listing metric samples")?;
+        rows.reverse(); // oldest first for windowed aggregation
+        Ok(rows.into_iter().map(MetricSampleRow::into_sample).collect())
     }
 
     async fn confirm_dependency(

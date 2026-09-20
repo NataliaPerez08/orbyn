@@ -118,6 +118,32 @@ fn ssh_discovery_collects_host_facts_and_edges() {
     assert!(conns.contains("203.0.113.9,443"));
     assert!(!conns.contains("127.0.0.1"), "loopback must be filtered");
 
+    // utilization window from the three sampled snapshots
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5"]));
+    assert!(
+        metrics.contains("Utilization window: 3 samples"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("peak 80.00%"),
+        "cpu avg/p95/p99/peak: {metrics}"
+    );
+    assert!(metrics.contains("RAM used  :"), "{metrics}");
+    assert!(
+        metrics.contains("low"),
+        "confidence for 3 samples must be low: {metrics}"
+    );
+    let metrics_json = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5", "--format", "json"]));
+    assert!(
+        metrics_json.contains("\"cpu_p95_percent\": 80.0"),
+        "{metrics_json}"
+    );
+    let metrics_csv = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5", "--format", "csv"]));
+    assert!(
+        metrics_csv.contains("cpu_usage_percent,avg,59.17"),
+        "{metrics_csv}"
+    );
+
     // dependency edges: only the two managed targets, not the external one
     let graph = run_ok(orbyn(&dir).args(["graph", "--format", "csv"]));
     assert!(
@@ -164,6 +190,14 @@ fn windows_discovery_parses_powershell_csv() {
     let svcs = run_ok(orbyn(&dir).args(["host-services", "10.0.0.20"]));
     assert!(svcs.contains("W3SVC"));
     assert!(svcs.contains("MSSQLSERVER"));
+
+    // utilization window from the sampled snapshots
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.20"]));
+    assert!(
+        metrics.contains("Utilization window: 3 samples"),
+        "{metrics}"
+    );
+    assert!(metrics.contains("peak 75.00%"), "{metrics}");
 }
 
 #[cfg(unix)]

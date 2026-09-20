@@ -111,9 +111,12 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 18. **vCenter collector/importer** — `gap` (deferred)
     Requires a SOAP/session client; intentionally deferred to a follow-up.
 
-19. **Metric samples are not persisted** — `gap`
-    `store_observations` logs `"observation type not yet persisted"` for
-    `Observation::MetricSample`. CPU/RAM utilization and right-sizing are v1.2.
+19. **Metric samples are only collected on demand** — ~`gap`~ **FIXED**
+    ~`store_observations` logs `"observation type not yet persisted"` for
+    `Observation::MetricSample`. CPU/RAM utilization and right-sizing are v1.2.~
+    Snapshot sampling ships as part of discovery (3 samples per SSH probe);
+    `orbyn metrics` aggregates avg/p95/p99/peak with a confidence label.
+    Periodic *scheduling* of metric collection remains a follow-up.
 
 20. **NetBox import is minimal** — `gap`
     Only devices + virtual-machines (primary IP) are imported. Interfaces/MACs

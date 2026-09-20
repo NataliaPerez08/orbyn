@@ -18,11 +18,13 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::domain::{Asset, Capacity, Connection, Filesystem, Observation, RunningService};
+use crate::domain::{
+    Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
+};
 use crate::parsing::{normalize_ip, split_csv_line, split_sections};
 
 use super::credentials::CredentialProfile;
-use super::ssh::SshTransport;
+use super::ssh::{SnapshotFacts, SshTransport, SNAPSHOT_INTERVAL_SECS};
 use super::types::{Collector, CpuFacts, ScanTarget};
 
 /// One read-only PowerShell probe round trip. Sections are delimited by
@@ -46,8 +48,19 @@ pub const WINDOWS_PROBE: &str = "powershell -NoProfile -Command \"& { \
        | ConvertTo-Csv -NoTypeInformation; \
      '###conn'; Get-NetTCPConnection | Where-Object State -eq Established \
        | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort \
-       | ConvertTo-Csv -NoTypeInformation \
-     }\"";
+       | ConvertTo-Csv -NoTypeInformation; \
+     '###metric'; for ($i = 0; $i -lt 3; $i++) { \
+       $cpu = [math]::Round((Get-CimInstance Win32_Processor \
+         | Measure-Object LoadPercentage -Average).Average, 1); \
+       $os = Get-CimInstance Win32_OperatingSystem; \
+       $pg = (Get-CimInstance Win32_PageFileUsage \
+         | Measure-Object CurrentUsage -Sum).Sum; \
+       if ($null -eq $pg) { $pg = 0 }; \
+       [Console]::WriteLine(('{0}|{1}|{2}|{3}' -f \
+         $cpu, $os.TotalVisibleMemorySize, $os.FreePhysicalMemory, $pg)); \
+       if ($i -lt 2) { Start-Sleep -Seconds 2 } \
+     } \
+      }\"";
 
 /// Windows host collector over SSH (OpenSSH Server on the Windows host).
 pub struct WindowsCollector {
@@ -107,6 +120,8 @@ pub struct WindowsHostFacts {
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
     pub connections: Vec<Connection>,
+    /// Utilization snapshots in probe order.
+    pub metrics: Vec<SnapshotFacts>,
 }
 
 /// Parse the full Windows probe output into facts.
@@ -220,6 +235,8 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         });
     }
 
+    let metrics = parse_windows_metric_lines(&section("metric"));
+
     WindowsHostFacts {
         os_name,
         os_version,
@@ -229,7 +246,46 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         filesystems,
         services,
         connections,
+        metrics,
     }
+}
+
+/// Parse `###metric` lines of the shape `cpu_load|total_kb|free_kb|page_used_mb`.
+/// CPU load is the instantaneous average processor load percentage, so there
+/// are no load-average fields on Windows.
+fn parse_windows_metric_lines(lines: &[String]) -> Vec<SnapshotFacts> {
+    let mut out = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split('|');
+        let cpu: Option<f32> = parts.next().and_then(|v| v.trim().parse().ok());
+        let total_kb: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let free_kb: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+        let page_mb: Option<u64> = parts.next().and_then(|v| v.trim().parse().ok());
+
+        let ram_used_mb = match (total_kb, free_kb) {
+            (Some(total), Some(free)) if total >= free => Some((total - free) / 1024),
+            _ => None,
+        };
+
+        if cpu.is_none() && ram_used_mb.is_none() {
+            continue;
+        }
+
+        out.push(SnapshotFacts {
+            cpu_usage_percent: cpu,
+            ram_used_mb,
+            ram_available_mb: free_kb.map(|kb| kb / 1024),
+            swap_used_mb: page_mb.filter(|v| *v > 0),
+            load_1m: None,
+            load_5m: None,
+            load_15m: None,
+        });
+    }
+    out
 }
 
 /// Build normalized observations from parsed facts. The asset observation
@@ -279,6 +335,23 @@ pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observa
         let mut conn = conn.clone();
         conn.asset_id = id.clone();
         observations.push(Observation::Connection(conn));
+    }
+    for (i, snap) in facts.metrics.iter().enumerate() {
+        let sampled_at = now
+            - chrono::Duration::seconds(
+                SNAPSHOT_INTERVAL_SECS * (facts.metrics.len() - 1 - i) as i64,
+            );
+        observations.push(Observation::MetricSample(MetricSample {
+            asset_id: id.clone(),
+            sampled_at,
+            cpu_usage_percent: snap.cpu_usage_percent,
+            ram_used_mb: snap.ram_used_mb,
+            ram_available_mb: snap.ram_available_mb,
+            swap_used_mb: snap.swap_used_mb,
+            load_1m: None,
+            load_5m: None,
+            load_15m: None,
+        }));
     }
     observations
 }
@@ -333,7 +406,10 @@ mod tests {
 \"LocalAddress\",\"LocalPort\",\"RemoteAddress\",\"RemotePort\"\n\
 \"10.0.0.20\",\"49222\",\"10.0.0.5\",\"443\"\n\
 \"10.0.0.20\",\"49223\",\"10.0.0.9\",\"5432\"\n\
-\"10.0.0.20\",\"49224\",\"127.0.0.1\",\"5432\"\n";
+\"10.0.0.20\",\"49224\",\"127.0.0.1\",\"5432\"\n\
+###metric\n\
+45.5|16777216|8388608|512\n\
+12.0|16777216|12582912|512\n";
 
     #[test]
     fn parses_full_probe() {
@@ -403,11 +479,36 @@ mod tests {
         let observations = windows_observations("10.0.0.20".parse().unwrap(), &facts);
 
         assert!(matches!(observations[0], Observation::Asset(_)));
-        assert_eq!(observations.len(), 1 + 1 + 2 + 2 + 2);
+        // asset + capacity + 2 disks + 2 services + 2 connections + 2 metrics
+        assert_eq!(observations.len(), 10);
 
         if let Some(Observation::Asset(asset)) = observations.first() {
             assert_eq!(asset.device_class.as_deref(), Some("server"));
             assert_eq!(asset.hostname.as_deref(), Some("WIN-APP01"));
+        }
+    }
+
+    #[test]
+    fn parses_windows_metric_snapshots() {
+        let facts = parse_windows_probe(PROBE_OUTPUT);
+        assert_eq!(facts.metrics.len(), 2);
+        assert_eq!(facts.metrics[0].cpu_usage_percent, Some(45.5));
+        assert_eq!(facts.metrics[0].ram_used_mb, Some(8192)); // (16777216-8388608)/1024
+        assert_eq!(facts.metrics[0].ram_available_mb, Some(8192));
+        assert_eq!(facts.metrics[0].swap_used_mb, Some(512));
+        assert_eq!(facts.metrics[0].load_1m, None);
+        assert_eq!(facts.metrics[1].ram_used_mb, Some(4096));
+
+        let observations = windows_observations("10.0.0.20".parse().unwrap(), &facts);
+        let metrics: Vec<&Observation> = observations
+            .iter()
+            .filter(|o| matches!(o, Observation::MetricSample(_)))
+            .collect();
+        assert_eq!(metrics.len(), 2);
+        if let (Observation::MetricSample(a), Observation::MetricSample(b)) =
+            (&metrics[0], &metrics[1])
+        {
+            assert!(a.sampled_at <= b.sampled_at);
         }
     }
 

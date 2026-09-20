@@ -89,10 +89,10 @@ added; today the product surface is `orbyn` subcommands.
 
 - [x] **P1** Linux CPU/RAM capacity collector.
 - [x] **P1** Windows CPU/RAM capacity collector (PowerShell-over-SSH).
-- [ ] **P1** Resource snapshot collector.
-- [ ] **P1** Periodic metric sampling.
-- [ ] **P1** p95/p99 aggregation.
-- [ ] **P1** Observation quality/confidence model.
+- [x] **P1** Resource snapshot collector (Linux + Windows ssh probes emit 3 samples).
+- [x] **P1** Periodic metric sampling (samples persisted as observations to `metric_samples`).
+- [x] **P1** p95/p99 aggregation (`orbyn metrics`, avg/p95/p99/peak).
+- [x] **P1** Observation quality/confidence model (`SampleConfidence` on count + validity).
 - [ ] **P2** Prometheus importer.
 - [ ] **P2** Zabbix importer.
 - [ ] **P2** Right-sizing rules with evidence.
