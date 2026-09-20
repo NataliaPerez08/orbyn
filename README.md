@@ -222,6 +222,19 @@ cp .env.example .env
 cargo run -- --help
 ```
 
+## Shell completions
+
+Generate a script for your shell and source it (bash / zsh / fish):
+
+```bash
+orbyn completions bash > /etc/bash_completion.d/orbyn    # bash
+orbyn completions zsh  > "$fpath[1]/_orbyn"               # zsh
+orbyn completions fish > ~/.config/fish/completions/orbyn.fish  # fish
+```
+
+For bash/zsh, add `source <(orbyn completions bash)` (or the zsh equivalent)
+to your rc file if you prefer not to install system-wide.
+
 The SQLite database is created and migrated automatically at:
 
 ```text
@@ -257,6 +270,7 @@ orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
 orbyn export [--format json|csv|ansible|terraform] [--group-by <key>] [--output <file>]
 orbyn netbox import --url <url> [--token <t>]       Import devices/VMs from NetBox (SoT)
+orbyn completions bash|zsh|fish                      Generate a shell completion script
 orbyn graph [--format ...]
 orbyn assess [--format ...]
 ```

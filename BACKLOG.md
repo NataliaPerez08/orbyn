@@ -20,7 +20,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Add CI: fmt, clippy, test, build (GitHub Actions, `.github/workflows/ci.yml`).
 - [x] **P1** Add release workflow (binary artifacts + checksums; tag-triggered
   matrix for Linux/macOS/Windows in `.github/workflows/release.yml`).
-- [ ] **P1** Add shell completion scripts (bash/zsh/fish).
+- [x] **P1** Add shell completion scripts (bash/zsh/fish) via `orbyn completions <shell>`.
 - [ ] **P2** Add Docker image.
 
 ## Discovery v0.1

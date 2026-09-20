@@ -1,9 +1,9 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use orbyn::assessment::{run_assessment, AssessmentInput};
 use orbyn::collectors::credentials::CredentialProfile;
@@ -246,6 +246,21 @@ enum Command {
         #[arg(long, conflicts_with = "format")]
         rules: bool,
     },
+
+    /// Generate a shell completion script (bash, zsh, or fish).
+    Completions {
+        /// Target shell.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
+
+/// Shell backends supported by `orbyn completions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Shell {
+    Bash,
+    Zsh,
+    Fish,
 }
 
 /// Sub-actions of `orbyn deps`.
@@ -347,6 +362,24 @@ async fn main() -> anyhow::Result<()> {
             discover(&store, &scan_target, collector.as_ref()).await?;
             let assets = store.list_assets().await?;
             print!("{}", orbyn::output::assets(&assets, format));
+        }
+        Command::Completions { shell } => {
+            let shell = match shell {
+                Shell::Bash => clap_complete::Shell::Bash,
+                Shell::Zsh => clap_complete::Shell::Zsh,
+                Shell::Fish => clap_complete::Shell::Fish,
+            };
+            let mut cmd = Cli::command();
+            let mut buf = Vec::new();
+            clap_complete::generate(shell, &mut cmd, "orbyn", &mut buf);
+            // Broken pipe (e.g. `orbyn completions zsh | head`) must not panic.
+            std::io::stdout().write_all(&buf).or_else(|e| {
+                if e.kind() == std::io::ErrorKind::BrokenPipe {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
         }
         Command::Assets { format } => {
             let store = SqliteStore::open(&config.db_path).await?;
@@ -958,4 +991,28 @@ fn init_logging(verbose: u8) {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completions_render_for_every_shell() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let clap_shell = match shell {
+                Shell::Bash => clap_complete::Shell::Bash,
+                Shell::Zsh => clap_complete::Shell::Zsh,
+                Shell::Fish => clap_complete::Shell::Fish,
+            };
+            let mut cmd = Cli::command();
+            let mut buf = Vec::new();
+            clap_complete::generate(clap_shell, &mut cmd, "orbyn", &mut buf);
+            let script = String::from_utf8(buf).expect("utf-8 completion script");
+            assert!(
+                script.contains("discover") && script.contains("assess"),
+                "shell {shell:?} script covers subcommands: {script}"
+            );
+        }
+    }
 }
