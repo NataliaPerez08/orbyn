@@ -17,8 +17,9 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Add output format layer (table / JSON / CSV).
 - [x] **P1** Add test suite: unit + integration (store/schema) + end-to-end
   (real binary against fake collector binaries).
-- [ ] **P1** Add CI: fmt, clippy, test, build.
-- [ ] **P1** Add release workflow (binary artifacts + checksums).
+- [x] **P1** Add CI: fmt, clippy, test, build (GitHub Actions, `.github/workflows/ci.yml`).
+- [x] **P1** Add release workflow (binary artifacts + checksums; tag-triggered
+  matrix for Linux/macOS/Windows in `.github/workflows/release.yml`).
 - [ ] **P1** Add shell completion scripts (bash/zsh/fish).
 - [ ] **P2** Add Docker image.
 

@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/orbyn${{ matrix.ext }}"
+          asset="orbyn-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.ext }}"
+          cp "$bin" "$asset"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "$asset.zip" "$asset" >/dev/null
+            sha256sum "$asset.zip" > "$asset.zip.sha256"
+          else
+            tar -czf "$asset.tar.gz" "$asset"
+            sha256sum "$asset.tar.gz" > "$asset.tar.gz.sha256"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbyn-${{ matrix.target }}
+          path: |
+            orbyn-*.${{ matrix.ext }}.tar.gz
+            orbyn-*.${{ matrix.ext }}.zip
+            *.sha256
+          if-no-files-found: error
+
+  release:
+    name: create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: orbyn-*
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          draft: true
+          body: |
+            Orbyn ${{ github.ref_name }}.
+
+            Install:
+            ```bash
+            # Linux (x86_64)
+            tar -xzf orbyn-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+            sudo install -m 0755 orbyn-${{ github.ref_name }}-x86_64-unknown-linux-gnu /usr/local/bin/orbyn
+            ```
+            Checksums are in the `*.sha256` files. Verify with:
+            ```bash
+            sha256sum -c orbyn-${{ github.ref_name }}-*.sha256
+            ```
+          files: |
+            orbyn-*
