@@ -481,9 +481,7 @@ async fn main() -> anyhow::Result<()> {
                 },
         } => {
             if no_verify {
-                tracing::warn!(
-                    "--no-verify disables TLS certificate verification for NetBox"
-                );
+                tracing::warn!("--no-verify disables TLS certificate verification for NetBox");
                 eprintln!(
                     "WARNING: --no-verify disables TLS certificate verification.\n\
                      Only use this against a trusted self-signed NetBox instance; \
@@ -500,9 +498,12 @@ async fn main() -> anyhow::Result<()> {
                 .fetch_devices()
                 .await
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            rows.extend(client.fetch_vms().await.map_err(|e| {
-                anyhow!(redactor.redact(&format!("{e:#}")))
-            })?);
+            rows.extend(
+                client
+                    .fetch_vms()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?,
+            );
             let count = persist_imported_assets(&store, &rows, "netbox")
                 .await
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
@@ -633,10 +634,7 @@ async fn discover(
             store
                 .finish_job(&job.id, JobStatus::Failed, Some(redacted.clone()), None)
                 .await?;
-            Err(anyhow!(
-                "discovery job {} failed: {redacted}",
-                job.id
-            ))
+            Err(anyhow!("discovery job {} failed: {redacted}", job.id))
         }
     }
 }

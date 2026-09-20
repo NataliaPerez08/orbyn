@@ -7,7 +7,9 @@ added; today the product surface is `orbyn` subcommands.
 
 ## Foundation
 
-- [ ] **P0** Replace placeholder module path with the final GitHub organization/repository.
+- [x] **P0** Set final GitHub organization/repository (`NataliaPerez08/orbyn`) as the
+  crate repository, README clone URL and git remote (no Go module path remains
+  after the Rust port).
 - [x] **P0** Add database schema versioning/migration runner (sqlx migrations).
 - [x] **P0** Add structured logging (tracing, stderr, `-v`/`-vv`).
 - [x] **P0** Add CLI framework (clap) and config resolution (env + `--db`).
@@ -101,6 +103,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P0** Prevent unrestricted `0.0.0.0/0` scans by default.
 - [x] **P0** Ensure scan targets are passed as process arguments, never shell strings.
 - [x] **P1** Credential storage design (v0.3 decision: no credential storage; ssh-agent/identity-file credential profiles, no secrets held or logged).
-- [ ] **P1** Secret redaction.
+- [x] **P1** Secret redaction (value-based `Redactor` in `src/redact.rs`, applied to
+  discovery/NetBox errors before logging and job audit records).
 - [ ] **P1** Threat model.
 - [ ] **P2** RBAC (only if a web/server layer is introduced).
