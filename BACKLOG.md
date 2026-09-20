@@ -106,5 +106,5 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Credential storage design (v0.3 decision: no credential storage; ssh-agent/identity-file credential profiles, no secrets held or logged).
 - [x] **P1** Secret redaction (value-based `Redactor` in `src/redact.rs`, applied to
   discovery/NetBox errors before logging and job audit records).
-- [ ] **P1** Threat model.
+- [x] **P1** Threat model (STRIDE, `THREAT_MODEL.md`, linked from SECURITY.md).
 - [ ] **P2** RBAC (only if a web/server layer is introduced).

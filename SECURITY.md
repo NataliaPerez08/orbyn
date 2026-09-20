@@ -39,7 +39,11 @@ public reports.
 
 ## Threat model
 
-A formal threat model is planned (see BACKLOG.md). The highest-risk component
-is the collector boundary: it interacts with user-provided targets and
-credentials. Code review of collectors, subprocess argument handling, and
-log redaction are the priority review areas.
+A STRIDE-based threat model is maintained in
+[`THREAT_MODEL.md`](THREAT_MODEL.md). The highest-risk component is the
+**collector boundary**: it interacts with user-provided targets, external
+binaries, remote hosts and credentials. Code review of collectors, subprocess
+argument handling (argument vectors, never shell strings) and log redaction are
+the priority review areas, and every change to `src/collectors/`,
+`src/integrations/`, `src/config.rs` or `src/redact.rs` should pass the review
+checklist there.

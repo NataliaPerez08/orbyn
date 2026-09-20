@@ -34,6 +34,12 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    token temp file is written, so file-permission differences cannot apply.
    (Resolved in `src/integrations/netbox.rs`.)
 
+6. **SNMP community string visible in `snmpwalk` argv** — `gap`
+   `src/collectors/snmp.rs` passes `-c <community>` as a process argument, so any
+   local process (or `ps` output) can read it. The `Redactor` keeps it out of
+   logs/DB, but argv exposure remains. (From THREAT_MODEL.md, R-1: switch to
+   `snmpwalk -c @FILE` so the string never enters the argument list.)
+
 ---
 
 ## Correctness & data quality
@@ -132,9 +138,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 25. **No PostgreSQL backend** — `gap`
     The `Store` trait exists but only `SqliteStore` is implemented.
 
-26. **No CI pipeline** — `gap`
-    v1.1's exit criterion mentions CI; there is no workflow configured, and the
-    criterion is currently satisfied only by the automated E2E suite.
+26. **No CI pipeline** — `gap` ~~FIXED~~
+    `.github/workflows/ci.yml` runs `fmt`, `clippy -D warnings`, `build`,
+    `test` and a release build on push/PR; `.github/workflows/release.yml`
+    publishes tag builds with checksums.
 
 ---
 
