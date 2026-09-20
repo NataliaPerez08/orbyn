@@ -55,6 +55,8 @@ Hecho:
 19. **#27 N+1 en assess/export** — queries bulk.
 20. **#28 NetBox sin paginación** — iterar `next`.
 21. **#29 Discovery sin concurrencia** — workers + rate limit + scheduling.
-22. **#26 Sin CI** — GitHub Actions (fmt, clippy, build, test, E2E Linux).
+22. **#26 Sin CI** — ~~FIXED~~ GitHub Actions now run fmt, clippy, locked build,
+    locked test and a release build; tag releases package checksummed artifacts
+    with build provenance.
 23. **#17 WinRM**, **#18 vCenter**, **#22 export table**, **#23 YAML Ansible**,
     **#24 Terraform completo**, **#25 PostgreSQL** (candidatos a roadmaps).

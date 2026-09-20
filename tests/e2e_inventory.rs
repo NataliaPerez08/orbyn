@@ -142,6 +142,42 @@ fn machine_readable_formats_parse_as_json() {
 
 #[cfg(unix)]
 #[test]
+fn audit_records_successful_and_failed_mutations() {
+    let dir = TempDir::new("audit");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    run_ok_combined(orbyn(&dir).args([
+        "annotate",
+        "api-01",
+        "--owner",
+        "platform",
+        "--add-tag",
+        "audited",
+    ]));
+
+    // There is no observed edge yet, so this mutation records a failed event.
+    let failure =
+        run_fail(orbyn(&dir).args(["deps", "confirm", "api-01", "db-01", "--port", "5432"]));
+    assert!(failure.contains("no observed dependency"), "got: {failure}");
+
+    let audit = run_ok(orbyn(&dir).args(["audit", "--format", "json"]));
+    let events: serde_json::Value = serde_json::from_str(&audit).expect("audit JSON");
+    let events = events.as_array().expect("audit event array");
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .any(|event| { event["action"] == "annotate" && event["status"] == "succeeded" }));
+    assert!(events
+        .iter()
+        .any(|event| { event["action"] == "deps.confirm" && event["status"] == "failed" }));
+
+    let csv = run_ok(orbyn(&dir).args(["audit", "--format", "csv"]));
+    assert!(csv.starts_with("id,action,target,status,"));
+    assert_eq!(csv.lines().count(), 3, "header + 2 audit events");
+}
+
+#[cfg(unix)]
+#[test]
 fn error_paths_report_clean_failures() {
     let dir = TempDir::new("errors");
     import_json(&dir, THREE_ASSETS_JSON);

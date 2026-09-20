@@ -1,0 +1,5 @@
+[advisories]
+# rsa is an optional SQLx backend dependency retained in Cargo.lock even though
+# Orbyn enables SQLite only. No fixed rsa release exists for RUSTSEC-2023-0071;
+# revisit this exception if the dependency graph or SQLx backend changes.
+ignore = ["RUSTSEC-2023-0071"]

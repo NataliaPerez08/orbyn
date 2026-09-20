@@ -1,4 +1,4 @@
-.PHONY: build check test lint fmt fmt-check run clean
+.PHONY: build check test lint fmt fmt-check audit run clean
 
 build:
 	cargo build
@@ -17,6 +17,9 @@ fmt:
 
 fmt-check:
 	cargo fmt --check
+
+audit:
+	cargo audit
 
 run:
 	cargo run -- --help

@@ -91,6 +91,9 @@ adapter over the same credential profile / command-transport abstraction.
 
 ## v1.0 — Stable CLI product
 
+**Status:** implementation complete; release candidate pending the first tagged
+release publication.
+
 - Stable CLI v1 (subcommand surface frozen with `orbyn <cmd> --help`).
 - Command completion scripts (bash/zsh/fish).
 - Audit trail surfaced through the CLI.
@@ -98,6 +101,31 @@ adapter over the same credential profile / command-transport abstraction.
 - Upgrade/migration mechanism for the database.
 - Security review.
 - Reproducible release artifacts.
+
+### v1.0 completion plan
+
+- [x] Production installation documentation for Linux, macOS and Windows,
+   including dependencies, configuration, completions, verification, upgrade and
+   uninstall procedures.
+- [x] Database upgrade verification: existing SQLite databases must migrate
+   automatically when opened, with a documented backup and rollback procedure
+   and integration coverage for an older schema.
+- [x] Complete operational audit trail for mutating CLI operations, surfaced by an
+   `orbyn audit` command while preserving discovery job history.
+- [x] Release hardening: pin the Rust toolchain, build from `Cargo.lock`, verify
+   artifact naming and checksums, and publish build provenance where supported.
+- [x] Final security and documentation review, including dependency audit and
+   consistency between `SECURITY.md`, `THREAT_MODEL.md` and the implementation.
+
+**v1.0 completion checklist:**
+
+- A user can install Orbyn without Rust or development tooling.
+- An existing database upgrades without undocumented manual steps.
+- Operational audit events are queryable from the CLI.
+- CI validates formatting, linting, tests and release builds.
+- Release artifacts have stable names, checksums and a pinned toolchain.
+- Security documentation matches the current credential and subprocess
+  handling.
 
 **Exit criterion:** a CLI can be installed, upgraded and operated without
 development tooling or undocumented manual steps.
@@ -113,7 +141,8 @@ criterion only requires one source-of-truth and one automation export).
 
 - NetBox integration — read-only source-of-truth importer (`orbyn netbox
   import`): devices + virtual machines via the REST API through `curl`, token
-  passed via a 0600 header file (never in argv/logs).
+  streamed through stdin to `curl` (never written to a file or exposed in
+  argv/logs).
 - Ansible inventory exporter (`orbyn export --format ansible`, INI grouping by
   device class / environment / tags).
 - Terraform-friendly export (`orbyn export --format terraform`, HCL

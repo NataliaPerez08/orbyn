@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** Early development — v1.1 integrations, CLI focus.
+> **Status:** v1.0 release candidate — CLI focus; v1.1 integrations included.
 
 ## Why Orbyn?
 
@@ -136,7 +136,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
 The repository currently provides:
 
 * Rust crate scaffold (single binary, CLI-first).
-* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `metrics`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
+* CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `metrics`, `jobs`, `audit`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
 * SQLite persistence via `sqlx` with versioned migrations.
 * Asset, service, interface and discovery job domain model, with capacity,
@@ -198,8 +198,9 @@ The repository currently provides:
   * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
 * Architecture documentation, roadmap and backlog.
 
-The next functional milestone is the stable CLI product (v1.0): frozen
-command surface, completions, audit trail and release artifacts.
+The v1.0 CLI surface, completions, audit trail and release packaging are
+implemented. The remaining release gate is publication of the first tagged
+release.
 
 ## Requirements
 
@@ -218,6 +219,9 @@ Windows hosts need the OpenSSH Server optional feature and PowerShell 3+
 credential profile abstraction (see ROADMAP.md).
 
 ## Install & run locally
+
+For installing a released binary without Rust or Cargo, see
+[INSTALL.md](INSTALL.md).
 
 ```bash
 git clone https://github.com/NataliaPerez08/orbyn.git
@@ -273,8 +277,9 @@ orbyn deps remove <src> <tgt> [--proto --port]        Delete edges
 orbyn deps dns                                        Derive relationship edges from DNS
 orbyn assess [--format ...] [--rules]             Migration assessment report / rule catalog
 orbyn annotate <id-or-ip> --environment prod --owner <team> \
-    --criticality high --tag core --remove-tag dr  Enrich inventory metadata
+    --criticality high --add-tag core --remove-tag dr  Enrich inventory metadata
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
+orbyn audit [--limit 50] [--format ...]           Mutating CLI operations and their outcomes
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
 orbyn export [--format json|csv|ansible|terraform] [--group-by <key>] [--output <file>]
 orbyn netbox import --url <url> [--token <t>]       Import devices/VMs from NetBox (SoT)
@@ -308,7 +313,7 @@ orbyn host-services 10.0.0.10  # running systemd units / Windows services
 
 # enrich the inventory (metadata is preserved across re-discovery)
 orbyn annotate 10.0.0.10 --environment prod --owner platform \
-    --criticality high --tag core --tag api
+    --criticality high --add-tag core --add-tag api
 
 # discovery history and change tracking
 orbyn jobs

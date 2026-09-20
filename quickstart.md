@@ -49,6 +49,7 @@ orbyn asset 127.0.0.1        # full record: annotations, services, interfaces
 orbyn services 127.0.0.1
 orbyn interfaces 127.0.0.1
 orbyn jobs                   # discovery history / audit trail
+orbyn audit                  # mutating CLI operations and outcomes
 ```
 
 ## 4. Real discovery (against authorized targets only)
@@ -86,7 +87,7 @@ stores or logs credentials. Native WinRM transport is planned (ROADMAP.md).
 
 ```bash
 orbyn annotate 127.0.0.1 --environment prod --owner platform \
-    --criticality high --tag core --tag api
+    --criticality high --add-tag core --add-tag api
 orbyn asset 127.0.0.1
 ```
 

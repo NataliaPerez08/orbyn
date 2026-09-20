@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 
@@ -44,7 +44,7 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
@@ -60,6 +60,15 @@ jobs:
             sha256sum "$asset.tar.gz" > "$asset.tar.gz.sha256"
           fi
 
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            sha256sum -c "$asset.zip.sha256"
+            test -s "$asset.zip"
+          else
+            sha256sum -c "$asset.tar.gz.sha256"
+            test -s "$asset.tar.gz"
+          fi
+          rm "$asset"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -74,12 +83,21 @@ jobs:
     name: create release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: orbyn-*
           merge-multiple: true
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'orbyn-*'
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

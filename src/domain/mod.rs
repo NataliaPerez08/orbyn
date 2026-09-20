@@ -234,6 +234,7 @@ pub struct MetricSample {
 
 /// Lifecycle of a discovery job.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Pending,
     Running,
@@ -262,6 +263,19 @@ pub struct DiscoveryJob {
     pub assets_found: Option<u32>,
     /// Services persisted by this job (None until the job finishes).
     pub services_found: Option<u32>,
+}
+
+/// Audit record for a mutating CLI operation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditEvent {
+    pub id: String,
+    pub action: String,
+    pub target: String,
+    pub status: JobStatus,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub details: Option<String>,
+    pub error: Option<String>,
 }
 
 /// A typed observation produced by a collector before normalization.

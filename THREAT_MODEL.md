@@ -6,7 +6,8 @@ no remote surface and no multi-user store. The document says *what* could go
 wrong, *where* the trust boundaries are, and which countermeasures are already
 in place versus which are open recommendations.
 
-Method: STRIDE per trust boundary, plus a data-flow map. Reviewed as of v0.6.
+Method: STRIDE per trust boundary, plus a data-flow map. Reviewed for the v1.0
+release on 2026-09-20.
 
 ---
 
@@ -47,7 +48,7 @@ Assets that matter:
 | Discovery/import credentials (NetBox token, SNMP community) | process memory; env & `.env`; argv of `snmpwalk` |
 | SSH identity (path only, never key bytes) | `CredentialProfile.identity_file` |
 | Inventory truth (assets, services, deps, annotations) | SQLite db + stdout exports |
-| Audit history (jobs, failures, reasons) | SQLite db |
+| Audit history (jobs, mutating operations, failures, reasons) | SQLite db |
 | Scan scope authorized by the operator | target args on the command line |
 
 ---
@@ -121,7 +122,8 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 | R-3 | Reject `--no-verify` when a custom CA/certificate pin is feasible; keep the prominent warning otherwise | Small |
 | R-4 | Treat URL credentials (`https://user:pass@host`) as forbidden target/URL input | Small |
 | R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Medium |
-| R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Medium |
+| R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved in v1.0 workflow; verify on the first tagged release |
+| R-7 | RustSec `rsa` Marvin advisory | Accepted exception: `rsa` is an optional, unused SQLx backend dependency in the lockfile; no fixed release exists. Revisit if backend features change. |
 
 ## 5. Review checklist
 

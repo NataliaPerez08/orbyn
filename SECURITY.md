@@ -27,8 +27,13 @@ or authorization service and must not be used as one.
   profile and never passed through CLI arguments or logs.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
-- API tokens (NetBox) are written to a `0600` temporary header file and passed
-  to `curl` as `-H @file`, never as process arguments, logs, or CLI output.
+- API tokens (NetBox) are streamed to `curl` through stdin (`-H @-`), never
+  written to a temporary file or exposed through process arguments, logs, or
+  CLI output.
+- Dependency audits run through RustSec. The only current advisory exception is
+  `RUSTSEC-2023-0071` for `rsa`, an optional SQLx backend dependency retained in
+  the lockfile but not enabled by Orbyn's SQLite-only feature set; no fixed
+  upstream release exists.
 
 ## Reporting a vulnerability
 

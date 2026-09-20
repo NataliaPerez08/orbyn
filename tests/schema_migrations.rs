@@ -7,6 +7,7 @@
 use orbyn::domain::{Asset, Interface, Observation};
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::Store;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 fn db_path(tag: &str) -> String {
     std::env::var("ORBYN_TEST_DB")
@@ -56,6 +57,7 @@ async fn migrations_create_all_expected_tables() {
         "asset_filesystems",
         "asset_running_services",
         "asset_connections",
+        "audit_events",
         "_sqlx_migrations",
     ] {
         assert!(
@@ -77,6 +79,7 @@ async fn migrations_create_expected_indexes() {
         "idx_asset_connections_asset",
         "idx_dependencies_source",
         "idx_dependencies_target",
+        "idx_audit_events_started",
     ] {
         assert!(
             indexes.iter().any(|i| i == expected),
@@ -102,6 +105,63 @@ async fn migrations_are_idempotent_on_reopen() {
         .await
         .expect("second open must be idempotent");
     assert_eq!(table_names(&second).await, tables);
+}
+
+#[tokio::test]
+async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
+    let tag = "schema-upgrade";
+    let path = db_path(tag);
+    let _ = std::fs::remove_file(&path);
+
+    // Simulate a database created by the initial release before later
+    // migrations were added. It intentionally has no _sqlx_migrations table.
+    let options = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("open legacy database");
+    sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+        .execute(&pool)
+        .await
+        .expect("create initial schema");
+    sqlx::query(
+        "INSERT INTO assets (id, ip, hostname, first_seen, last_seen)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind("legacy-asset")
+    .bind("192.0.2.10")
+    .bind("legacy-host")
+    .bind("2024-01-01T00:00:00Z")
+    .bind("2024-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("insert legacy asset");
+    pool.close().await;
+
+    let upgraded = SqliteStore::open(std::path::Path::new(&path))
+        .await
+        .expect("upgrade legacy database");
+    let asset = upgraded
+        .get_asset("legacy-asset")
+        .await
+        .expect("read upgraded asset")
+        .expect("legacy asset preserved");
+    assert_eq!(asset.ip.to_string(), "192.0.2.10");
+    assert_eq!(asset.hostname.as_deref(), Some("legacy-host"));
+
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(upgraded.pool())
+        .await
+        .expect("count applied migrations");
+    assert_eq!(migration_count, 5, "all current migrations must be applied");
+    assert!(table_names(&upgraded)
+        .await
+        .iter()
+        .any(|name| name == "asset_connections"));
 }
 
 #[tokio::test]

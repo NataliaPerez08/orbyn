@@ -280,7 +280,7 @@ fn get_attr(e: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>> {
         let attr = attr.context("reading XML attribute")?;
         if attr.key.as_ref() == key {
             return Ok(Some(
-                attr.unescape_value()
+                attr.decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, e.decoder())
                     .context("unescaping XML attribute")?
                     .into_owned(),
             ));

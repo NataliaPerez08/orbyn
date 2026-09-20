@@ -10,8 +10,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 
 use crate::domain::{
-    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
+    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
+    Interface, JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
 use crate::store::traits::AssetAnnotations;
 
@@ -263,6 +263,33 @@ struct JobRow {
     error: Option<String>,
     assets_found: Option<i64>,
     services_found: Option<i64>,
+}
+
+#[derive(Debug, FromRow)]
+struct AuditEventRow {
+    id: String,
+    action: String,
+    target: String,
+    status: String,
+    started_at: String,
+    finished_at: Option<String>,
+    details: Option<String>,
+    error: Option<String>,
+}
+
+impl AuditEventRow {
+    fn into_event(self) -> AuditEvent {
+        AuditEvent {
+            id: self.id,
+            action: self.action,
+            target: self.target,
+            status: parse_status(&self.status),
+            started_at: parse_ts(&self.started_at),
+            finished_at: self.finished_at.as_deref().map(parse_ts),
+            details: self.details,
+            error: self.error,
+        }
+    }
 }
 
 impl JobRow {
@@ -914,6 +941,60 @@ impl crate::store::traits::Store for SqliteStore {
         .context("finishing discovery job")?;
         Ok(())
     }
+
+    async fn create_audit_event(&self, event: AuditEvent) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO audit_events \
+               (id, action, target, status, started_at, finished_at, details, error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&event.id)
+        .bind(&event.action)
+        .bind(&event.target)
+        .bind(status_as_str(event.status))
+        .bind(event.started_at.to_rfc3339())
+        .bind(event.finished_at.map(|ts| ts.to_rfc3339()))
+        .bind(&event.details)
+        .bind(&event.error)
+        .execute(&self.pool)
+        .await
+        .context("creating audit event")?;
+        Ok(())
+    }
+
+    async fn list_audit_events(&self, limit: Option<usize>) -> Result<Vec<AuditEvent>> {
+        let mut sql = String::from(
+            "SELECT id, action, target, status, started_at, finished_at, details, error \
+             FROM audit_events ORDER BY started_at DESC",
+        );
+        if let Some(limit) = limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
+        let rows = sqlx::query_as::<_, AuditEventRow>(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .context("listing audit events")?;
+        Ok(rows.into_iter().map(AuditEventRow::into_event).collect())
+    }
+
+    async fn finish_audit_event(
+        &self,
+        id: &str,
+        status: JobStatus,
+        error: Option<String>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE audit_events SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(status_as_str(status))
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(error)
+        .execute(&self.pool)
+        .await
+        .context("finishing audit event")?;
+        Ok(())
+    }
 }
 
 fn status_as_str(status: JobStatus) -> &'static str {
@@ -922,5 +1003,14 @@ fn status_as_str(status: JobStatus) -> &'static str {
         JobStatus::Running => "running",
         JobStatus::Succeeded => "succeeded",
         JobStatus::Failed => "failed",
+    }
+}
+
+fn parse_status(status: &str) -> JobStatus {
+    match status {
+        "running" => JobStatus::Running,
+        "succeeded" => JobStatus::Succeeded,
+        "failed" => JobStatus::Failed,
+        _ => JobStatus::Pending,
     }
 }

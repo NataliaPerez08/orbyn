@@ -17,6 +17,7 @@ and testing are welcome.
    cargo build
    cargo test
    cargo clippy --all-targets -- -D warnings
+   cargo audit
    ```
 
 ## Code conventions

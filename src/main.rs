@@ -14,7 +14,7 @@ use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
 use orbyn::config::Config;
 use orbyn::domain::{
-    Asset, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
+    Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
 };
 use orbyn::import::{parse_import_csv, ImportedAsset};
 use orbyn::integrations::ansible::{render_ansible_inventory, GroupBy};
@@ -28,7 +28,8 @@ use orbyn::store::Store;
 #[derive(Debug, Parser)]
 #[command(
     name = "orbyn",
-    about = "CLI for infrastructure discovery, dependency mapping, and migration assessment."
+    about = "CLI for infrastructure discovery, dependency mapping, and migration assessment.",
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
     /// Path to the SQLite database (default: ./data/orbyn.db).
@@ -205,6 +206,15 @@ enum Command {
     /// List discovery job history.
     Jobs {
         /// Maximum number of jobs to return.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// List mutating CLI operations recorded in the audit trail.
+    Audit {
+        /// Maximum number of events to return.
         #[arg(long, default_value_t = 50)]
         limit: usize,
         #[arg(long, value_enum, default_value_t = Format::Table)]
@@ -419,7 +429,9 @@ async fn main() -> anyhow::Result<()> {
                 .map(|c| c.parse::<Criticality>())
                 .transpose()
                 .map_err(anyhow::Error::msg)?;
-            store
+            let audit =
+                begin_audit(&store, "annotate", &asset.id, Some("asset annotation")).await?;
+            let result = store
                 .annotate_asset(
                     &asset.id,
                     AssetAnnotations {
@@ -430,7 +442,8 @@ async fn main() -> anyhow::Result<()> {
                         remove_tags: remove_tag,
                     },
                 )
-                .await?;
+                .await;
+            finish_audit_result(&store, audit, result).await?;
             let updated = store.get_asset(&asset.id).await?.expect("asset exists");
             let rendered = render_asset_detail(&store, &updated, format).await?;
             print!("{rendered}");
@@ -469,6 +482,11 @@ async fn main() -> anyhow::Result<()> {
             let store = SqliteStore::open(&config.db_path).await?;
             let jobs = store.list_jobs(Some(limit)).await?;
             print!("{}", orbyn::output::jobs(&jobs, format));
+        }
+        Command::Audit { limit, format } => {
+            let store = SqliteStore::open(&config.db_path).await?;
+            let events = store.list_audit_events(Some(limit)).await?;
+            print!("{}", orbyn::output::audit_events(&events, format));
         }
         Command::Export {
             format,
@@ -771,6 +789,51 @@ async fn resolve_dep_pair(
     Ok((source, target))
 }
 
+async fn begin_audit(
+    store: &SqliteStore,
+    action: &str,
+    target: &str,
+    details: Option<&str>,
+) -> Result<AuditEvent> {
+    let event = AuditEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        action: action.into(),
+        target: target.into(),
+        status: JobStatus::Running,
+        started_at: Utc::now(),
+        finished_at: None,
+        details: details.map(str::to_string),
+        error: None,
+    };
+    store.create_audit_event(event.clone()).await?;
+    Ok(event)
+}
+
+async fn finish_audit_result<T>(
+    store: &SqliteStore,
+    event: AuditEvent,
+    result: Result<T>,
+) -> Result<T> {
+    match result {
+        Ok(value) => {
+            store
+                .finish_audit_event(&event.id, JobStatus::Succeeded, None)
+                .await?;
+            Ok(value)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            if let Err(audit_error) = store
+                .finish_audit_event(&event.id, JobStatus::Failed, Some(message))
+                .await
+            {
+                tracing::error!(error = %audit_error, "could not finish failed audit event");
+            }
+            Err(error)
+        }
+    }
+}
+
 /// Handle `orbyn deps <action>`.
 async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
     match action {
@@ -780,35 +843,47 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
             proto,
             port,
         } => {
-            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
-            let via = format!("{proto}/{port}");
-            store
-                .store_observation(Observation::Dependency(Dependency {
-                    source_asset_id: source.id.clone(),
-                    target_asset_id: target.id.clone(),
-                    proto,
-                    port,
-                    evidence_source: "manual".into(),
-                    confidence: 1.0,
-                    confirmed: true,
-                }))
-                .await?;
-            // If the edge already existed as observed evidence, mark it confirmed.
-            store
-                .confirm_dependency(&source.id, &target.id, None, None)
-                .await?;
-            eprintln!(
-                "Dependency added: {} -> {} ({}).",
-                source
-                    .hostname
-                    .clone()
-                    .unwrap_or_else(|| source.ip.to_string()),
-                target
-                    .hostname
-                    .clone()
-                    .unwrap_or_else(|| target.ip.to_string()),
-                via
-            );
+            let audit = begin_audit(
+                store,
+                "deps.add",
+                &format!("{source} -> {target}"),
+                Some(&format!("{proto}/{port}")),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+                let via = format!("{proto}/{port}");
+                store
+                    .store_observation(Observation::Dependency(Dependency {
+                        source_asset_id: source.id.clone(),
+                        target_asset_id: target.id.clone(),
+                        proto,
+                        port,
+                        evidence_source: "manual".into(),
+                        confidence: 1.0,
+                        confirmed: true,
+                    }))
+                    .await?;
+                // If the edge already existed as observed evidence, mark it confirmed.
+                store
+                    .confirm_dependency(&source.id, &target.id, None, None)
+                    .await?;
+                eprintln!(
+                    "Dependency added: {} -> {} ({}).",
+                    source
+                        .hostname
+                        .clone()
+                        .unwrap_or_else(|| source.ip.to_string()),
+                    target
+                        .hostname
+                        .clone()
+                        .unwrap_or_else(|| target.ip.to_string()),
+                    via
+                );
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store, audit, result).await?;
         }
         DepsAction::Confirm {
             source,
@@ -816,19 +891,31 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
             proto,
             port,
         } => {
-            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
-            let confirmed = store
-                .confirm_dependency(&source.id, &target.id, proto.as_deref(), port)
-                .await?;
-            if confirmed == 0 {
-                anyhow::bail!(
-                    "no observed dependency between {} and {} to confirm; \
-                     use `orbyn deps add` to create one",
-                    source.id,
-                    target.id
-                );
+            let audit = begin_audit(
+                store,
+                "deps.confirm",
+                &format!("{source} -> {target}"),
+                Some("dependency confirmation"),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+                let confirmed = store
+                    .confirm_dependency(&source.id, &target.id, proto.as_deref(), port)
+                    .await?;
+                if confirmed == 0 {
+                    anyhow::bail!(
+                        "no observed dependency between {} and {} to confirm; \
+                         use `orbyn deps add` to create one",
+                        source.id,
+                        target.id
+                    );
+                }
+                eprintln!("Confirmed {confirmed} edge(s).");
+                Ok(())
             }
-            eprintln!("Confirmed {confirmed} edge(s).");
+            .await;
+            finish_audit_result(store, audit, result).await?;
         }
         DepsAction::Remove {
             source,
@@ -836,39 +923,57 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
             proto,
             port,
         } => {
-            let (source, target) = resolve_dep_pair(store, &source, &target).await?;
-            let removed = store
-                .remove_dependency(&source.id, &target.id, proto.as_deref(), port)
-                .await?;
-            eprintln!("Removed {removed} edge(s).");
+            let audit = begin_audit(
+                store,
+                "deps.remove",
+                &format!("{source} -> {target}"),
+                Some("dependency removal"),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let (source, target) = resolve_dep_pair(store, &source, &target).await?;
+                let removed = store
+                    .remove_dependency(&source.id, &target.id, proto.as_deref(), port)
+                    .await?;
+                eprintln!("Removed {removed} edge(s).");
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store, audit, result).await?;
         }
         DepsAction::Dns => {
-            let assets = store.list_assets().await?;
-            let mut resolutions = Vec::new();
-            let mut failed = 0usize;
-            for asset in &assets {
-                let Some(hostname) = &asset.hostname else {
-                    continue;
-                };
-                match orbyn::collectors::dns::resolve_host(hostname).await {
-                    Ok(ips) => resolutions.push((hostname.clone(), ips)),
-                    Err(e) => {
-                        failed += 1;
-                        tracing::warn!(hostname = %hostname, error = %e, "DNS resolution failed");
+            let audit = begin_audit(store, "deps.dns", "inventory", Some("DNS evidence")).await?;
+            let result: Result<()> = async {
+                let assets = store.list_assets().await?;
+                let mut resolutions = Vec::new();
+                let mut failed = 0usize;
+                for asset in &assets {
+                    let Some(hostname) = &asset.hostname else {
+                        continue;
+                    };
+                    match orbyn::collectors::dns::resolve_host(hostname).await {
+                        Ok(ips) => resolutions.push((hostname.clone(), ips)),
+                        Err(e) => {
+                            failed += 1;
+                            tracing::warn!(hostname = %hostname, error = %e, "DNS resolution failed");
+                        }
                     }
                 }
+                let edges = orbyn::collectors::dns::dns_edges(&assets, &resolutions);
+                let count = edges.len();
+                for edge in edges {
+                    store
+                        .store_observation(Observation::Dependency(edge))
+                        .await?;
+                }
+                if failed > 0 {
+                    eprintln!("{failed} hostname(s) could not be resolved; skipped.");
+                }
+                eprintln!("DNS evidence produced {count} relationship edge(s).");
+                Ok(())
             }
-            let edges = orbyn::collectors::dns::dns_edges(&assets, &resolutions);
-            let count = edges.len();
-            for edge in edges {
-                store
-                    .store_observation(Observation::Dependency(edge))
-                    .await?;
-            }
-            if failed > 0 {
-                eprintln!("{failed} hostname(s) could not be resolved; skipped.");
-            }
-            eprintln!("DNS evidence produced {count} relationship edge(s).");
+            .await;
+            finish_audit_result(store, audit, result).await?;
         }
     }
     Ok(())
@@ -1036,6 +1141,40 @@ mod tests {
                 script.contains("discover") && script.contains("assess"),
                 "shell {shell:?} script covers subcommands: {script}"
             );
+        }
+    }
+
+    #[test]
+    fn cli_surface_contains_the_stable_commands() {
+        let command = Cli::command();
+        let names: Vec<&str> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name())
+            .collect();
+        let expected = [
+            "discover",
+            "assets",
+            "asset",
+            "annotate",
+            "services",
+            "interfaces",
+            "capacity",
+            "disks",
+            "host-services",
+            "connections",
+            "metrics",
+            "deps",
+            "jobs",
+            "audit",
+            "export",
+            "import",
+            "netbox",
+            "graph",
+            "assess",
+            "completions",
+        ];
+        for name in expected {
+            assert!(names.contains(&name), "missing stable command: {name}");
         }
     }
 }

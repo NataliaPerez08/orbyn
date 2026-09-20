@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::domain::{
-    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
+    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
+    Interface, JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
 
 /// Inventory annotation edits applied to an asset.
@@ -96,5 +96,14 @@ pub trait Store: Send + Sync {
         status: JobStatus,
         error: Option<String>,
         outcome: Option<JobOutcome>,
+    ) -> Result<()>;
+
+    async fn create_audit_event(&self, event: AuditEvent) -> Result<()>;
+    async fn list_audit_events(&self, limit: Option<usize>) -> Result<Vec<AuditEvent>>;
+    async fn finish_audit_event(
+        &self,
+        id: &str,
+        status: JobStatus,
+        error: Option<String>,
     ) -> Result<()>;
 }

@@ -11,8 +11,8 @@ use comfy_table::{Cell, ContentArrangement, Table};
 use crate::assessment::rules::Rule;
 use crate::assessment::{AssessmentReport, Severity};
 use crate::domain::{
-    Asset, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobStatus, RunningService, Service,
+    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
+    Interface, JobStatus, RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -475,6 +475,55 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
     }
 }
 
+/// Render mutating CLI operations recorded in the operational audit trail.
+pub fn audit_events(events: &[AuditEvent], format: Format) -> String {
+    match format {
+        Format::Json => json(events),
+        Format::Csv => {
+            let mut out =
+                String::from("id,action,target,status,started_at,finished_at,details,error\n");
+            for event in events {
+                out.push_str(&format!(
+                    "{},{},{},{},{},{},{},{}\n",
+                    csv(&event.id),
+                    csv(&event.action),
+                    csv(&event.target),
+                    job_status_str(event.status),
+                    event.started_at.to_rfc3339(),
+                    event
+                        .finished_at
+                        .map(|ts| ts.to_rfc3339())
+                        .unwrap_or_default(),
+                    csv(&event.details.clone().unwrap_or_default()),
+                    csv(&event.error.clone().unwrap_or_default()),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if events.is_empty() {
+                return "No audit events recorded yet.\n".to_string();
+            }
+            let mut table = table(&[
+                "ID", "Action", "Target", "Status", "Started", "Duration", "Details", "Error",
+            ]);
+            for event in events {
+                table.add_row(vec![
+                    Cell::new(&event.id),
+                    Cell::new(&event.action),
+                    Cell::new(&event.target),
+                    Cell::new(job_status_str(event.status)),
+                    Cell::new(event.started_at.format("%Y-%m-%d %H:%M:%S").to_string()),
+                    Cell::new(audit_duration_label(event)),
+                    Cell::new(event.details.clone().unwrap_or_else(|| "-".into())),
+                    Cell::new(event.error.clone().unwrap_or_else(|| "-".into())),
+                ]);
+            }
+            table.to_string()
+        }
+    }
+}
+
 /// Render a rich asset detail view: annotations, interfaces, capacity,
 /// filesystems, network services and running host services.
 #[allow(clippy::too_many_arguments)]
@@ -920,6 +969,20 @@ fn duration_label(job: &DiscoveryJob) -> String {
     match job.finished_at {
         Some(finished) => {
             let secs = (finished - job.started_at).num_seconds().max(0);
+            if secs < 60 {
+                format!("{secs}s")
+            } else {
+                format!("{}m {:02}s", secs / 60, secs % 60)
+            }
+        }
+        None => "-".into(),
+    }
+}
+
+fn audit_duration_label(event: &AuditEvent) -> String {
+    match event.finished_at {
+        Some(finished) => {
+            let secs = (finished - event.started_at).num_seconds().max(0);
             if secs < 60 {
                 format!("{secs}s")
             } else {
