@@ -656,3 +656,42 @@ async fn confirm_and_remove_dependencies() {
     assert_eq!(removed, 2);
     assert!(store.list_dependencies().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn duplicate_hostnames_resolve_by_stable_asset_id() {
+    let path = format!("{}.hostname", sample_db_path());
+    let _ = std::fs::remove_file(&path);
+    let store = SqliteStore::open(std::path::Path::new(&path))
+        .await
+        .expect("open test db");
+    let asset = |id: &str, ip: &str| {
+        Observation::Asset(Asset {
+            id: id.into(),
+            ip: ip.parse().unwrap(),
+            hostname: Some("shared.example.com".into()),
+            device_class: None,
+            os_name: None,
+            os_version: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+        })
+    };
+    store
+        .store_observations(vec![
+            asset("asset-z", "10.0.0.2"),
+            asset("asset-a", "10.0.0.1"),
+        ])
+        .await
+        .expect("seed duplicate hostnames");
+
+    let resolved = store
+        .get_asset_by_hostname("SHARED.EXAMPLE.COM")
+        .await
+        .expect("resolve hostname")
+        .expect("asset for hostname");
+    assert_eq!(resolved.id, "asset-a");
+}

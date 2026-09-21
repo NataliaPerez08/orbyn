@@ -552,9 +552,6 @@ fn parse_systemctl(lines: &[String]) -> Vec<RunningService> {
 /// Loopback remote endpoints and self-connections (remote == local address)
 /// are dropped: they never become dependency evidence.
 fn parse_connections(lines: &[String]) -> Vec<Connection> {
-    let is_netstat = lines
-        .iter()
-        .any(|l| l.trim_start().starts_with("tcp") && l.split_whitespace().count() >= 6);
     let mut out = Vec::new();
     for line in lines {
         let trimmed = line.trim();
@@ -566,15 +563,24 @@ fn parse_connections(lines: &[String]) -> Vec<Connection> {
             continue;
         }
         let fields: Vec<&str> = trimmed.split_whitespace().collect();
-        let (local, peer, process) = if is_netstat {
+        let (local, peer, process) = if fields.first().is_some_and(|field| {
+            field.eq_ignore_ascii_case("tcp") || field.eq_ignore_ascii_case("tcp6")
+        }) {
             // tcp 0 0 local peer ESTABLISHED
-            if fields.len() < 6 || fields[5] != "ESTABLISHED" {
+            if fields.len() < 5
+                || !fields[5..]
+                    .iter()
+                    .any(|field| field.eq_ignore_ascii_case("established"))
+            {
                 continue;
             }
             (fields[3], fields[4], None)
         } else {
             // ESTAB 0 0 local peer [users:(("proc",pid=..,fd=..))]
-            if fields[0] != "ESTAB" || fields.len() < 5 {
+            if fields.len() < 5
+                || !(fields[0].eq_ignore_ascii_case("estab")
+                    || fields[0].eq_ignore_ascii_case("established"))
+            {
                 continue;
             }
             let process = if fields.len() > 5 {
@@ -751,6 +757,15 @@ tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT\n
                 .collect::<Vec<_>>(),
         );
         assert_eq!(conns.len(), 2, "non-established states must be skipped");
+        assert_eq!(conns[0].remote_port, 51414);
+        assert_eq!(conns[0].process, None);
+    }
+
+    #[test]
+    fn parses_established_ss_variant_without_process_metadata() {
+        let lines = vec!["ESTABLISHED 0 0 10.0.0.5:443 10.0.0.9:51414".to_string()];
+        let conns = parse_connections(&lines);
+        assert_eq!(conns.len(), 1);
         assert_eq!(conns[0].remote_port, 51414);
         assert_eq!(conns[0].process, None);
     }

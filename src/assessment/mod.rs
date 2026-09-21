@@ -17,7 +17,7 @@ use crate::domain::{Asset, Capacity, Connection, Dependency, Filesystem, Service
 
 /// Version of the rule catalog. Bump whenever a rule changes behavior so
 /// reports stay comparable across releases.
-pub const RULES_VERSION: &str = "0.5.0";
+pub const RULES_VERSION: &str = "0.6.0";
 
 /// A named assessment rule result: what was found, why it matters, and the
 /// evidence that produced it.

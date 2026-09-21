@@ -74,6 +74,8 @@ pub fn catalog() -> &'static [Rule] {
 /// End-of-life OS patterns. First case-insensitive substring match wins.
 ///
 /// (pattern, severity, vendor-support note)
+pub const EOL_TABLE_VERSION: &str = "2026-09";
+
 const EOL_OS: &[(&str, Severity, &str)] = &[
     (
         "ubuntu 14.04",
@@ -189,7 +191,11 @@ fn rule_os_eol(input: &AssessmentInput, findings: &mut Vec<Finding>) {
                 message: "operating system is at or near end of vendor support; \
                           in-place upgrade or re-platforming is likely required before migration"
                     .into(),
-                evidence: vec![format!("reported OS: {os_name}"), note.to_string()],
+                evidence: vec![
+                    format!("reported OS: {os_name}"),
+                    format!("EOL table version: {EOL_TABLE_VERSION}"),
+                    note.to_string(),
+                ],
                 asset_id: Some(asset.id.clone()),
             });
         }

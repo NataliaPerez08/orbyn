@@ -168,11 +168,124 @@ criterion only requires one source-of-truth and one automation export).
 **Exit criterion:** an asset with one meeting week of utilization can produce an
 explainable (evidence + rule version) right-sizing recommendation.
 
-## v1.3+ — Advanced assessment
+## Post-v1.0 — Evolution phases
 
-- Cloud SKU recommendation adapters.
-- AWS/Azure/GCP/Huawei target catalogs.
-- Cost comparison.
+The following phases are ordered by operational risk and product value. Cloud
+adapters start with Proxmox and AWS to validate the common provider contract in
+private infrastructure and a public cloud before expanding coverage.
+
+### Phase 1 — Security and operational correctness
+
+**Status:** implemented; residual DNS CNAME handling and additional parser
+fixtures remain follow-up work.
+
+**Goal:** remove known security and reliability risks before expanding
+integrations.
+
+- Hide the SNMP community from process arguments.
+- Add pagination and response-size limits to NetBox imports.
+- Add timeouts and bounds to DNS resolution.
+- Make duplicate-hostname resolution deterministic.
+- Prevent collisions in Mermaid node identifiers.
+- Improve compatibility with `ss`/`netstat` output variants.
+- Keep the EOL operating-system table current and versioned.
+
+**Exit criterion:** every critical known risk has an implementation, an
+automated test, or an explicitly accepted exception.
+
+### Phase 2 — Inventory integrity and integrations
+
+**Goal:** ensure import/export cycles do not silently lose inventory data.
+
+- Preserve interfaces and services during `orbyn import`.
+- Add Ansible YAML inventory export.
+- Include complete supported metadata in Terraform export.
+- Add optional export back to NetBox.
+- Add virtualization metadata.
+- Expand round-trip and format compatibility tests.
+
+**Exit criterion:** exporting and importing an inventory preserves every
+supported field without silent loss.
+
+### Phase 3 — Evidence-based right-sizing
+
+**Goal:** produce explainable recommendations with sufficient confidence.
+
+- Implement CPU, RAM, swap and storage right-sizing rules.
+- Define minimum observation windows.
+- Reject recommendations with insufficient or invalid samples.
+- Add Prometheus and Zabbix importers.
+- Include evidence, confidence and rule version in every recommendation.
+- Separate manual snapshots from periodic sampling.
+- Compare utilization across observation windows.
+
+**Exit criterion:** an asset with sufficient utilization data produces a
+reproducible recommendation; an asset without sufficient data produces an
+explicit warning.
+
+### Phase 4 — Scale and operations
+
+**Goal:** support large inventories and long-running discovery operations.
+
+- Remove N+1 queries from assessment and export.
+- Add batch queries to the store.
+- Enforce memory and response-size limits.
+- Add bounded concurrent discovery with rate limiting.
+- Persist complete discovery-job metrics.
+- Add controlled retries for external APIs.
+- Add performance tests with representative inventories.
+- Document operational limits and partial-failure behavior.
+
+**Exit criterion:** assessment, export and import have predictable time and
+resource usage for representative large inventories.
+
+### Phase 5 — Cloud and platform adapters
+
+**Goal:** bring private infrastructure and public clouds into Orbyn's common
+normalized model.
+
+#### Delivery order
+
+1. Proxmox VE.
+2. AWS.
+3. OpenStack.
+4. GCP.
+5. Azure.
+
+#### Common adapter contract
+
+- Read-only operation by default.
+- Credentials obtained from profiles, agents or environment variables and
+  never persisted by Orbyn.
+- Pagination, rate limiting, retries and timeouts.
+- Normalization into assets, services, interfaces, capacity, dependencies and
+  tags.
+- Provider, account/project/subscription, region and observation timestamp
+  provenance.
+- Offline fixtures and end-to-end tests with simulated APIs.
+- Audit events for imports and errors without exposing secrets.
+
+#### Provider coverage
+
+- Proxmox VE: nodes, pools, VMs, containers, disks, interfaces and storage.
+- AWS: accounts, regions, EC2, EBS, VPC, subnets, interfaces and tags.
+- OpenStack: projects, regions, instances, flavors, networks, ports, volumes
+  and images.
+- GCP: organizations/projects, regions/zones, Compute Engine, disks, networks,
+  subnets and labels.
+- Azure: tenants/subscriptions, resource groups, regions, VMs, managed disks,
+  VNets, subnets and tags.
+
+vCenter remains deferred until its transport and integration scope are defined.
+
+**Exit criterion:** each adapter imports a representative read-only inventory,
+preserves provider provenance and feeds the same graph, assessment and export
+pipelines as existing discovery sources.
+
+### Future assessment capabilities
+
+- Cloud SKU recommendation catalogs.
+- Cost comparison across target providers.
 - Application-wave planning.
 - Extended dependency telemetry such as flow logs/eBPF.
 - Optional distributed collectors.

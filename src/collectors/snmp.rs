@@ -10,6 +10,9 @@
 //! - community strings are never logged or echoed to stdout.
 
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
 
@@ -19,6 +22,7 @@ use chrono::Utc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
+use uuid::Uuid;
 
 use crate::domain::{Asset, Interface, Observation};
 
@@ -172,11 +176,21 @@ impl Collector for SnmpCollector {
 
 impl SnmpCollector {
     async fn run_walk(&self, agent: &str, oid: &str) -> Result<String> {
+        let config_dir = write_community_config(&self.community)?;
+        let result = self.run_walk_with_config(agent, oid, &config_dir).await;
+        let _ = std::fs::remove_dir_all(&config_dir);
+        result
+    }
+
+    async fn run_walk_with_config(
+        &self,
+        agent: &str,
+        oid: &str,
+        config_dir: &Path,
+    ) -> Result<String> {
         let mut child = Command::new(&self.binary)
             .arg("-v")
             .arg(self.version.to_string())
-            .arg("-c")
-            .arg(&self.community)
             .arg("-On")
             .arg("-t")
             .arg("3")
@@ -184,6 +198,7 @@ impl SnmpCollector {
             .arg("1")
             .arg(agent)
             .arg(oid)
+            .env("SNMPCONFPATH", config_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -216,6 +231,43 @@ impl SnmpCollector {
         }
         Ok(stdout)
     }
+}
+
+fn write_community_config(community: &str) -> Result<PathBuf> {
+    if community.contains(['\n', '\r', '\0']) {
+        bail!("SNMP community cannot contain newlines or NUL bytes")
+    }
+
+    let dir = std::env::temp_dir().join(format!("orbyn-snmp-{}", Uuid::new_v4()));
+    std::fs::create_dir(&dir)
+        .with_context(|| format!("creating temporary SNMP config directory {}", dir.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(error).context("restricting temporary SNMP config directory");
+        }
+    }
+
+    let path = dir.join("snmp.conf");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .with_context(|| format!("creating temporary SNMP community file {}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .context("restricting temporary SNMP community file permissions")?;
+    }
+
+    file.write_all(format!("defCommunity {community}\n").as_bytes())
+        .context("writing temporary SNMP community file")?;
+    Ok(dir)
 }
 
 /// Facts collected from `snmpwalk -On` text output.
@@ -468,6 +520,23 @@ mod tests {
         );
         assert_eq!(parse_snmp_phys(""), None);
         assert_eq!(parse_snmp_phys("not a mac"), None);
+    }
+
+    #[test]
+    fn community_config_does_not_put_secret_in_path() {
+        let dir = write_community_config("super-secret").expect("community config");
+        assert!(!dir.to_string_lossy().contains("super-secret"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("snmp.conf")).unwrap(),
+            "defCommunity super-secret\n"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn community_file_rejects_config_injection_characters() {
+        assert!(write_community_config("bad\nsecret").is_err());
+        assert!(write_community_config("bad\0secret").is_err());
     }
 
     #[test]

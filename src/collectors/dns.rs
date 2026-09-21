@@ -14,22 +14,35 @@ use std::net::IpAddr;
 use std::net::ToSocketAddrs;
 
 use anyhow::Result;
+use tokio::time::{timeout, Duration};
 
 use crate::domain::{Asset, Dependency};
 
 /// Confidence attached to DNS-derived relationship evidence.
 pub const DNS_CONFIDENCE: f32 = 0.4;
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_DNS_ADDRESSES: usize = 64;
 
 /// Forward-resolve a hostname to its addresses using the system resolver.
 pub async fn resolve_host(host: &str) -> Result<Vec<IpAddr>> {
     let host = host.to_string();
-    tokio::task::spawn_blocking(move || resolve_blocking(&host))
+    let resolution = tokio::task::spawn_blocking(move || resolve_blocking(&host));
+    timeout(DNS_TIMEOUT, resolution)
         .await
+        .map_err(|_| anyhow::anyhow!("DNS resolution timed out"))?
         .map_err(|e| anyhow::anyhow!("DNS resolution task failed: {e}"))?
 }
 
 fn resolve_blocking(host: &str) -> Result<Vec<IpAddr>> {
-    let addrs: Vec<IpAddr> = (host, 0).to_socket_addrs()?.map(|a| a.ip()).collect();
+    let mut addrs = Vec::new();
+    for addr in (host, 0).to_socket_addrs()?.map(|a| a.ip()) {
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
+        if addrs.len() == MAX_DNS_ADDRESSES {
+            break;
+        }
+    }
     Ok(addrs)
 }
 

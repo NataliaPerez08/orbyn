@@ -130,6 +130,9 @@ XML
 
 /// A fake `snmpwalk` dispatching on the walked OID (system vs ifTable).
 pub const FAKE_SNMPWALK_SCRIPT: &str = r#"#!/usr/bin/env bash
+if [[ -n "$ORBYN_SNMP_ARGS_LOG" ]]; then
+  printf '%s\n' "$@" >> "$ORBYN_SNMP_ARGS_LOG"
+fi
 oid="${@: -1}"
 if [[ "$oid" == "1.3.6.1.2.1.1" ]]; then
 cat <<'OUT'

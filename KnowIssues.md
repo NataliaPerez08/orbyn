@@ -34,11 +34,10 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    token temp file is written, so file-permission differences cannot apply.
    (Resolved in `src/integrations/netbox.rs`.)
 
-6. **SNMP community string visible in `snmpwalk` argv** — `gap`
-   `src/collectors/snmp.rs` passes `-c <community>` as a process argument, so any
-   local process (or `ps` output) can read it. The `Redactor` keeps it out of
-   logs/DB, but argv exposure remains. (From THREAT_MODEL.md, R-1: switch to
-   `snmpwalk -c @FILE` so the string never enters the argument list.)
+6. **SNMP community string visible in `snmpwalk` argv** — `gap` ~~FIXED~~
+   The collector now writes a short-lived `0600` `snmp.conf` in a `0700`
+   directory and points `snmpwalk` at it through `SNMPCONFPATH`; the community
+   never enters the process arguments. (Resolved in `src/collectors/snmp.rs`.)
 
 ---
 
@@ -51,11 +50,11 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    only lands in the inventory later in the same run. (Resolved in
    `src/store/sqlite.rs`.)
 
-7. **EOL OS table is static** — `quality`
+7. **EOL OS table is static** — `quality` ~~MITIGATED~~
    `src/assessment/rules.rs` hardcodes the EOL table. OSes reach end-of-life
    continuously; a stale table silently produces stale `os.eol` findings.
-   Consider data-driven rules or a clear cadence for updating
-   `RULES_VERSION`.
+   The table now carries an explicit `EOL_TABLE_VERSION` and findings include
+   that version as evidence. A regular update cadence remains necessary.
 
 8. **Capacity merge keeps stale values** — `bug` ~~FIXED~~
    `store_observations` now overwrites every measured capacity field with the
@@ -78,27 +77,27 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     non-canonical values. (Resolved in `src/domain/mod.rs` +
     `src/collectors/nmap.rs`.)
 
-12. **`ss`/`netstat` process parsing is format-specific** — `quality`
-    `ssh.rs` `first_quoted` assumes net-snmp-like `users:(("name",pid=…,fd=…))`.
-    BusyBox and other `ss` variants may not parse.
+12. **`ss`/`netstat` process parsing is format-specific** — `quality` ~~MITIGATED~~
+    The parser now accepts `ESTAB` and `ESTABLISHED` states and connections
+    without process metadata. Other BusyBox variants may still need fixtures.
 
 13. **Ansible exporter does not sanitize host names** — `bug` ~~FIXED~~
     `render_ansible_inventory` now applies `sanitize_name` to host names as
     well as group names, so a hostname with whitespace no longer breaks the INI
     line. (Resolved in `src/integrations/ansible.rs`.)
 
-14. **Duplicate hostnames resolve arbitrarily** — `quality`
-    `get_asset_by_hostname` uses `COLLATE NOCASE` and returns the first match;
-    two assets sharing a hostname yield an arbitrary result.
+14. **Duplicate hostnames resolve arbitrarily** — `quality` ~~FIXED~~
+    `get_asset_by_hostname` now orders duplicate case-insensitive matches by
+    stable asset id before returning one, making resolution deterministic.
 
-15. **Mermaid node-id sanitization can collide** — `quality`
-    `mermaid_node_id` replaces non-alphanumerics with `_`, so distinct ids
-    (`10.0.0.1` vs `10_0_0_1`) can collapse to the same node label.
+15. **Mermaid node-id sanitization can collide** — `quality` ~~FIXED~~
+    Mermaid IDs retain a readable sanitized prefix and append an encoding of
+    the original id, so distinct ids cannot collapse after sanitization.
 
-16. **DNS evidence is shallow and unbounded** — `gap`
-    `deps dns` forward-resolves each hostname serially via `spawn_blocking`
-    (`getaddrinfo`), no explicit timeout beyond the resolver, no CNAME-chain
-    handling, and matches assets by exact hostname only.
+16. **DNS evidence is shallow and unbounded** — `gap` ~~MITIGATED~~
+    Resolution now has a five-second timeout, de-duplicates results and caps
+    each hostname at 64 addresses. CNAME-chain handling and broader hostname
+    matching remain deferred.
 
 ---
 
@@ -155,9 +154,9 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     (`list_services`, `list_filesystems`, `get_capacity`, `list_connections`).
     Fine locally, slow on large inventories.
 
-28. **NetBox `?limit=0` loads everything at once** — `quality`
-    No pagination/`next` handling; large NetBox instances load fully into
-    memory and may hit server limits.
+28. **NetBox `?limit=0` loads everything at once** — `quality` ~~FIXED~~
+    Imports now follow paginated `next` links with page, record and response
+    size limits. (Resolved in `src/integrations/netbox.rs`.)
 
 29. **Discovery is single-shot, no concurrency** — `gap`
     One target per run; no parallel collectors, scheduling, or rate limiting.

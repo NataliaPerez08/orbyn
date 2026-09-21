@@ -59,14 +59,23 @@ fn discover_rejects_unrestricted_scope() {
 fn snmp_discovery_classifies_network_device() {
     let dir = TempDir::new("snmp");
     let bin = fake_bin(&dir, "snmpwalk", FAKE_SNMPWALK_SCRIPT);
+    let args_log = dir.path().join("snmp-args.log");
 
     let out = run_ok(
         orbyn(&dir)
             .args(["discover", "--target", "10.0.0.8", "--collector", "snmp"])
-            .env("ORBYN_SNMP_BIN", &bin),
+            .env("ORBYN_SNMP_BIN", &bin)
+            .env("ORBYN_SNMP_COMMUNITY", "super-secret-community")
+            .env("ORBYN_SNMP_ARGS_LOG", &args_log),
     );
     assert!(out.contains("switch-core-1"));
     assert!(out.contains("network-device"));
+    let args = std::fs::read_to_string(&args_log).expect("SNMP args log");
+    assert!(!args.contains("super-secret-community"));
+    assert!(
+        !args.contains("-c"),
+        "SNMP community must not be an argument"
+    );
 
     let ifaces = run_ok(orbyn(&dir).args(["interfaces", "10.0.0.8", "--format", "csv"]));
     assert!(ifaces.contains("00:1c:58:9a:bc:34"));

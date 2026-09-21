@@ -13,6 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -24,7 +25,14 @@ use crate::import::ImportedAsset;
 #[derive(Debug, Deserialize)]
 struct NetBoxEnvelope<T> {
     results: Vec<T>,
+    #[serde(default)]
+    next: Option<String>,
 }
+
+const NETBOX_PAGE_SIZE: usize = 100;
+const NETBOX_MAX_PAGES: usize = 10_000;
+const NETBOX_MAX_RECORDS: usize = 1_000_000;
+const NETBOX_MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct NamedRef {
@@ -175,18 +183,50 @@ impl NetBoxClient {
 
     /// Fetch and parse all devices.
     pub async fn fetch_devices(&self) -> Result<Vec<ImportedAsset>> {
-        let json = self.get("/api/dcim/devices/").await?;
-        parse_netbox_devices(&json)
+        let devices: Vec<NetBoxDevice> = self.fetch_pages("/api/dcim/devices/").await?;
+        Ok(devices.into_iter().filter_map(import_device).collect())
     }
 
     /// Fetch and parse all virtual machines.
     pub async fn fetch_vms(&self) -> Result<Vec<ImportedAsset>> {
-        let json = self.get("/api/virtualization/virtual-machines/").await?;
-        parse_netbox_vms(&json)
+        let vms: Vec<NetBoxVm> = self
+            .fetch_pages("/api/virtualization/virtual-machines/")
+            .await?;
+        Ok(vms.into_iter().filter_map(import_vm).collect())
     }
 
-    async fn get(&self, path: &str) -> Result<String> {
-        let url = format!("{}{path}?limit=0", self.base_url);
+    async fn fetch_pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
+        let mut url = format!("{}{path}?limit={NETBOX_PAGE_SIZE}", self.base_url);
+        let mut records = Vec::new();
+
+        for page in 0..NETBOX_MAX_PAGES {
+            let json = self.get_url(&url).await?;
+            let envelope: NetBoxEnvelope<T> = serde_json::from_str(&json)
+                .with_context(|| format!("parsing NetBox response page {}", page + 1))?;
+            records.extend(envelope.results);
+            if records.len() > NETBOX_MAX_RECORDS {
+                return Err(anyhow!(
+                    "NetBox response exceeds the {} record limit",
+                    NETBOX_MAX_RECORDS
+                ));
+            }
+
+            let Some(next) = envelope.next.filter(|next| !next.trim().is_empty()) else {
+                return Ok(records);
+            };
+            if !next.starts_with(&self.base_url) {
+                return Err(anyhow!("NetBox pagination returned an unexpected URL"));
+            }
+            url = next;
+        }
+
+        Err(anyhow!(
+            "NetBox pagination exceeded the {} page limit",
+            NETBOX_MAX_PAGES
+        ))
+    }
+
+    async fn get_url(&self, url: &str) -> Result<String> {
         let has_token = self.token.is_some();
 
         let mut cmd = Command::new(&self.binary);
@@ -199,7 +239,7 @@ impl NetBoxClient {
             // never hits the filesystem or the process argument list.
             cmd.arg("-H").arg("@-");
         }
-        cmd.arg(&url)
+        cmd.arg(url)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -228,10 +268,18 @@ impl NetBoxClient {
 
         let mut stdout = String::new();
         let mut stderr = String::new();
-        if let Some(mut out) = child.stdout.take() {
-            out.read_to_string(&mut stdout)
+        if let Some(out) = child.stdout.take() {
+            let mut limited = out.take(NETBOX_MAX_RESPONSE_BYTES + 1);
+            limited
+                .read_to_string(&mut stdout)
                 .await
                 .context("reading curl stdout")?;
+            if stdout.len() as u64 > NETBOX_MAX_RESPONSE_BYTES {
+                return Err(anyhow!(
+                    "NetBox response exceeds the {} byte limit",
+                    NETBOX_MAX_RESPONSE_BYTES
+                ));
+            }
         }
         if let Some(mut err) = child.stderr.take() {
             err.read_to_string(&mut stderr)
@@ -248,6 +296,46 @@ impl NetBoxClient {
         }
         Ok(stdout)
     }
+}
+
+fn import_device(d: NetBoxDevice) -> Option<ImportedAsset> {
+    let ip = parse_ip(d.primary_ip.as_ref()?.address.as_deref()?)?;
+    let tags: Vec<String> = d.tags.into_iter().map(|t| t.name).collect();
+    Some(ImportedAsset {
+        ip: ip.to_string(),
+        hostname: d.name,
+        device_class: Some(
+            d.role
+                .and_then(|r| r.slug.or(r.name))
+                .unwrap_or_else(|| "device".into()),
+        ),
+        os_name: None,
+        os_version: None,
+        environment: env_from_tags(&tags),
+        owner: d.tenant.and_then(|t| t.name),
+        criticality: None,
+        tags,
+    })
+}
+
+fn import_vm(vm: NetBoxVm) -> Option<ImportedAsset> {
+    let ip = parse_ip(vm.primary_ip.as_ref()?.address.as_deref()?)?;
+    let tags: Vec<String> = vm.tags.into_iter().map(|t| t.name).collect();
+    Some(ImportedAsset {
+        ip: ip.to_string(),
+        hostname: Some(vm.name),
+        device_class: Some(
+            vm.role
+                .and_then(|r| r.slug.or(r.name))
+                .unwrap_or_else(|| "virtual-machine".into()),
+        ),
+        os_name: None,
+        os_version: None,
+        environment: env_from_tags(&tags),
+        owner: vm.tenant.and_then(|t| t.name),
+        criticality: None,
+        tags,
+    })
 }
 
 /// The Authorization header line curl reads from stdin via `-H @-`.

@@ -108,3 +108,65 @@ added; today the product surface is `orbyn` subcommands.
   discovery/NetBox errors before logging and job audit records).
 - [x] **P1** Threat model (STRIDE, `THREAT_MODEL.md`, linked from SECURITY.md).
 - [ ] **P2** RBAC (only if a web/server layer is introduced).
+
+## Post-v1.0 execution phases
+
+### Phase 1 — Security and operational correctness
+
+- [x] **P1** Hide the SNMP community from process arguments.
+- [x] **P1** Add NetBox pagination and response-size limits.
+- [x] **P2** Add DNS timeouts and resolution bounds.
+- [x] **P2** Make duplicate-hostname resolution deterministic.
+- [x] **P2** Prevent Mermaid node-id collisions.
+- [x] **P2** Support additional `ss`/`netstat` output variants.
+- [x] **P2** Version the EOL operating-system table; maintain the update cadence.
+
+### Phase 2 — Inventory integrity and integrations
+
+- [ ] **P1** Preserve interfaces and services during `orbyn import`.
+- [ ] **P2** Add Ansible YAML inventory export.
+- [ ] **P2** Include complete supported metadata in Terraform export.
+- [ ] **P2** Add optional export to NetBox.
+- [ ] **P2** Add virtualization metadata.
+- [ ] **P1** Add import/export round-trip coverage for every supported field.
+
+### Phase 3 — Evidence-based right-sizing
+
+- [ ] **P1** Add CPU, RAM, swap and storage right-sizing rules.
+- [ ] **P1** Define minimum observation windows and insufficient-data behavior.
+- [ ] **P2** Add Prometheus importer.
+- [ ] **P2** Add Zabbix importer.
+- [ ] **P1** Include evidence, confidence and rule version in recommendations.
+- [ ] **P2** Add utilization-window comparison.
+
+### Phase 4 — Scale and operations
+
+- [ ] **P1** Remove N+1 queries from assessment and export.
+- [ ] **P1** Add batch queries to the store.
+- [ ] **P2** Add bounded concurrent discovery and rate limiting.
+- [ ] **P2** Add response and memory limits for large inventories.
+- [ ] **P2** Persist complete discovery-job metrics.
+- [ ] **P2** Add controlled retries for external APIs.
+- [ ] **P2** Add performance tests with representative inventories.
+
+### Phase 5 — Cloud and platform adapters
+
+The first cloud adapter milestone is Proxmox followed by AWS. All adapters
+must be read-only by default, preserve provider provenance, avoid credential
+storage, support pagination/rate limiting/timeouts, and include offline
+fixtures plus end-to-end tests.
+
+- [ ] **P1** Define the common cloud-provider adapter contract.
+- [ ] **P1** Implement Proxmox VE adapter: nodes, pools, VMs, containers, disks,
+  interfaces and storage.
+- [ ] **P1** Implement AWS adapter: accounts, regions, EC2, EBS, VPC, subnets,
+  interfaces and tags.
+- [ ] **P2** Implement OpenStack adapter: projects, regions, instances, flavors,
+  networks, ports, volumes and images.
+- [ ] **P2** Implement GCP adapter: projects, regions/zones, Compute Engine,
+  disks, networks, subnets and labels.
+- [ ] **P2** Implement Azure adapter: tenants/subscriptions, resource groups,
+  regions, VMs, managed disks, VNets, subnets and tags.
+- [ ] **P2** Add provider provenance to assets and discovery jobs.
+- [ ] **P2** Add cloud adapter audit events and secret-redaction coverage.
+- [ ] **P2** Keep vCenter deferred until transport and scope are defined.

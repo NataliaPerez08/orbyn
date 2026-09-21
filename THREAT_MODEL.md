@@ -45,7 +45,7 @@ Assets that matter:
 
 | Asset | Where it lives |
 |---|---|
-| Discovery/import credentials (NetBox token, SNMP community) | process memory; env & `.env`; argv of `snmpwalk` |
+| Discovery/import credentials (NetBox token, SNMP community) | process memory; env & `.env`; temporary restricted config during SNMP execution |
 | SSH identity (path only, never key bytes) | `CredentialProfile.identity_file` |
 | Inventory truth (assets, services, deps, annotations) | SQLite db + stdout exports |
 | Audit history (jobs, mutating operations, failures, reasons) | SQLite db |
@@ -70,9 +70,9 @@ Assets that matter:
 | Threat | STRIDE | Assessment | Mitigation |
 |---|---|---|---|
 | B-1 A compromised nmap/curl/ssh binary runs arbitrary code as the operator | RCE | These tools run with the operator's privileges and their **ssh-agent** and key material reachable. | Supply-chain reality for any CLI that shells out. Recommendations: install these tools from the OS package manager; run discovery from a dedicated low-privilege user whose ssh-agent only exposes the needed keys. |
-| B-2 A malicious/Northbound NetBox server (or on-path attacker) feeds crafted JSON that deserializes into extreme or hostile records | Tampering/DoS | `serde_json` parse is bounded; fields are normalized. | Present: typed structs only. **Residual**: no pagination/large-response cap (#28 in KnowIssues); `--no-verify` disables TLS hostname verification with an explicit warning (`main.rs`). |
-| B-3 A remote SSH host returns poisoned output (e.g. `df`/`systemctl`/`ss` lines) | Tampering | Parsed into typed fields; numbers validated; every observation is reconciled against validated targets. | Present: parsers are tolerant + tests. **Residual**: parser robustness is ongoing (#12 in KnowIssues). |
-| B-4 Community string is visible in the `snmpwalk` argument list | Information disclosure | Yes: `-c <community>` is passed as argv (`snmp.rs:178`). Redactor hides it from logs/DB, but any local process (or `ps`) can read argv. | Present: redaction. **Recommendation**: switch to `snmpwalk -c @FILE` (community from a 0600 file) so the string never appears in argv — tracked in KnowIssues. |
+| B-2 A malicious/Northbound NetBox server (or on-path attacker) feeds crafted JSON that deserializes into extreme or hostile records | Tampering/DoS | `serde_json` parse is bounded; fields are normalized. | Present: typed structs, paginated requests and response-size/record limits. **Residual**: `--no-verify` disables TLS hostname verification with an explicit warning (`main.rs`). |
+| B-3 A remote SSH host returns poisoned output (e.g. `df`/`systemctl`/`ss` lines) | Tampering | Parsed into typed fields; numbers validated; every observation is reconciled against validated targets. | Present: parsers are tolerant + tests. **Residual**: additional BusyBox fixtures remain in KnowIssues. |
+| B-4 Community string is visible in the `snmpwalk` argument list | Information disclosure | No: the community is written to a short-lived restricted `snmp.conf` selected through `SNMPCONFPATH`; it is not passed as argv. | Resolved in Phase 1; regression coverage verifies the process arguments contain neither the secret nor `-c`. |
 | B-5 On-path attacker observes NetBox traffic with `--no-verify` | Spoofing/Elevation | Token is sent over TLS; `--no-verify` skips verification. | Mitigated: loud warning; default verifies. **Residual**: operator decision. |
 | B-6 SSH host-key verification bypass | Spoofing/Elevation | `StrictHostKeyChecking=accept-new` is set (`ssh.rs`): keys are pinned after first connect (TOFU), later connects verify against `known_hosts`. DoS surface is limited by `ConnectTimeout=10` and a 60 s probe timeout. | Present: TOFU. **Residual**: a first-connect MITM is possible when `known_hosts` is empty; document an operator `ssh_config` (managed `KnownHostsFile`) for high-security environments. |
 
@@ -117,11 +117,11 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 
 | ID | Recommendation | Effort |
 |---|---|---|
-| R-1 | Pass the SNMP community via a `0600` header/file (`snmpwalk -c @FILE`) instead of argv | Small |
+| R-1 | Pass the SNMP community through a `0600` temporary `snmp.conf` selected via `SNMPCONFPATH` instead of argv | Resolved in Phase 1 |
 | R-2 | Surface an SSH policy for probes in docs (managed `KnownHostsFile` for high-security envs, `IdentitiesOnly=yes` to limit agent-key negotiation) | Small |
 | R-3 | Reject `--no-verify` when a custom CA/certificate pin is feasible; keep the prominent warning otherwise | Small |
 | R-4 | Treat URL credentials (`https://user:pass@host`) as forbidden target/URL input | Small |
-| R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Medium |
+| R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Resolved in Phase 1 |
 | R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved and verified for the tagged `v1.0.2` release |
 | R-7 | RustSec `rsa` Marvin advisory | Accepted exception: `rsa` is an optional, unused SQLx backend dependency in the lockfile; no fixed release exists. Revisit if backend features change. |
 

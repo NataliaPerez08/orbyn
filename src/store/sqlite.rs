@@ -628,7 +628,7 @@ impl crate::store::traits::Store for SqliteStore {
         let row = sqlx::query_as::<_, AssetRow>(
             "SELECT id, ip, hostname, device_class, os_name, os_version, \
                     environment, owner, criticality, tags, first_seen, last_seen \
-             FROM assets WHERE hostname = ?1 COLLATE NOCASE",
+             FROM assets WHERE hostname = ?1 COLLATE NOCASE ORDER BY id ASC LIMIT 1",
         )
         .bind(hostname)
         .fetch_optional(&self.pool)

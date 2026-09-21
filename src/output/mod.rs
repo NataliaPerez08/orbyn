@@ -769,7 +769,8 @@ fn mermaid_edge_label(d: &Dependency) -> String {
 }
 
 fn mermaid_node_id(id: &str) -> String {
-    id.chars()
+    let readable: String = id
+        .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' {
                 c
@@ -777,7 +778,13 @@ fn mermaid_node_id(id: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    let encoded = id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("n_{readable}_{encoded}")
 }
 
 fn mermaid_label(assets: &[Asset], id: &str) -> String {
@@ -1087,9 +1094,16 @@ mod tests {
         )];
         let out = mermaid(&edges, &assets);
         assert!(out.starts_with("graph TD\n"));
-        assert!(out.contains("10_0_0_5"));
+        assert!(out.contains("n_10_0_0_5_"));
         assert!(!out.contains("10-0-0-5"));
         assert!(out.contains("web-01 (10.0.0.5)"));
+    }
+
+    #[test]
+    fn mermaid_node_ids_do_not_collide_after_sanitizing() {
+        let first = mermaid_node_id("10.0.0.1");
+        let second = mermaid_node_id("10_0_0_1");
+        assert_ne!(first, second);
     }
 
     #[test]

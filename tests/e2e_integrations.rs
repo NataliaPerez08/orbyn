@@ -31,6 +31,30 @@ done
 "#;
 
 #[cfg(unix)]
+const PAGINATED_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *"/api/dcim/devices/"*"page=2"*)
+    cat <<'JSON'
+{"count":2,"next":null,"results":[
+  {"name":"rtr-edge-2","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.2/24"},"tags":[]}
+]}
+JSON
+    ;;
+  *"/api/dcim/devices/"*)
+    cat <<'JSON'
+{"count":2,"next":"https://netbox.example.com/api/dcim/devices/?limit=100&page=2","results":[
+  {"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+]}
+JSON
+    ;;
+  *"/api/virtualization/virtual-machines/"*)
+    printf '%s\n' '{"count":0,"next":null,"results":[]}'
+    ;;
+esac
+"#;
+
+#[cfg(unix)]
 const THREE_ASSETS_JSON: &str = r#"{"assets":[
   {"ip":"10.0.0.1","hostname":"web-01","device_class":"server","environment":"prod","owner":"platform","criticality":"high","tags":["core","api"]},
   {"ip":"10.0.0.2","hostname":"db-01","device_class":"server","environment":"prod"},
@@ -107,6 +131,23 @@ fn netbox_import_pulls_devices_and_vms() {
     // job recorded under the netbox collector
     let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
     assert!(jobs.contains("netbox,succeeded"));
+}
+
+#[cfg(unix)]
+#[test]
+fn netbox_import_follows_pagination() {
+    let dir = TempDir::new("netbox-pagination");
+    let curl = fake_bin(&dir, "curl", PAGINATED_CURL_SCRIPT);
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(out.contains("Imported 2 assets from NetBox"), "{out}");
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(assets.contains("rtr-edge-1"));
+    assert!(assets.contains("rtr-edge-2"));
 }
 
 #[cfg(unix)]
