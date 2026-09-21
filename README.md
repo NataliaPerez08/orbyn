@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** v1.0 release candidate — CLI focus; v1.1 integrations included.
+> **Status:** v1.0 stable release — CLI focus; v1.1 integrations included.
 
 ## Why Orbyn?
 
@@ -199,8 +199,7 @@ The repository currently provides:
 * Architecture documentation, roadmap and backlog.
 
 The v1.0 CLI surface, completions, audit trail and release packaging are
-implemented. The remaining release gate is publication of the first tagged
-release.
+implemented and published. The current release is `v1.0.2`.
 
 ## Requirements
 
@@ -605,8 +604,8 @@ v0.3    Host discovery via SSH / Windows (done — native WinRM pending)
 v0.4    Dependency mapping       (done)
           ↓
 v0.5    Migration assessment     (done)
-          ↓
-v1.0    Stable CLI product
+           ↓
+ v1.0    Stable CLI product    (done)
           ↓
 v1.2    Historical metrics + right-sizing
 ```

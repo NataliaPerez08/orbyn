@@ -122,7 +122,7 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 | R-3 | Reject `--no-verify` when a custom CA/certificate pin is feasible; keep the prominent warning otherwise | Small |
 | R-4 | Treat URL credentials (`https://user:pass@host`) as forbidden target/URL input | Small |
 | R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Medium |
-| R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved in v1.0 workflow; verify on the first tagged release |
+| R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved and verified for the tagged `v1.0.2` release |
 | R-7 | RustSec `rsa` Marvin advisory | Accepted exception: `rsa` is an optional, unused SQLx backend dependency in the lockfile; no fixed release exists. Revisit if backend features change. |
 
 ## 5. Review checklist

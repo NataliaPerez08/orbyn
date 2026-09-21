@@ -91,8 +91,7 @@ adapter over the same credential profile / command-transport abstraction.
 
 ## v1.0 — Stable CLI product
 
-**Status:** implementation complete; release candidate pending the first tagged
-release publication.
+**Status:** complete; the stable CLI is published as `v1.0.2`.
 
 - Stable CLI v1 (subcommand surface frozen with `orbyn <cmd> --help`).
 - Command completion scripts (bash/zsh/fish).
