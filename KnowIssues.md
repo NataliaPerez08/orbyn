@@ -191,3 +191,41 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     DNS edges use `proto: "dns"` / `port: 0` and are excluded via literal
     `evidence_source != "dns"` in `dep.hub`, `dep.unconfirmed` and grouping.
     Fragile if more evidence kinds need the same treatment.
+
+---
+
+## Security review findings
+
+36. **NetBox pagination URL validation is prefix-based** — `bug`, **high**
+    `src/integrations/netbox.rs` accepts any `next` URL that starts with the
+    configured base URL. Hostnames such as
+    `https://netbox.example.com.evil` and userinfo forms such as
+    `https://netbox.example.com@evil` can pass the check, after which the API
+    token is sent to that URL through `curl`. Parse URLs and require an exact
+    origin match; reject userinfo and unexpected schemes. Regression coverage
+    should include hostile `next` URLs.
+
+37. **Sequential subprocess pipe reads can deadlock** — `bug`, **high**
+    Nmap, SSH, SNMP and NetBox read all of stdout before reading stderr:
+    `src/collectors/nmap.rs`, `src/collectors/ssh.rs`,
+    `src/collectors/snmp.rs` and `src/integrations/netbox.rs`. A child that
+    fills the stderr pipe can block forever before the timeout or `wait` is
+    reached; Nmap has no process timeout. Read both streams concurrently and
+    apply the timeout to the complete process lifecycle, terminating the child
+    on timeout.
+
+38. **Secrets can be exposed in Orbyn's own argv** — `gap`, **medium**
+    `--token` and `--community` place credentials in the Orbyn command line,
+    making them visible to local process inspection and shell history even
+    though they are not passed as arguments to `curl` or `snmpwalk`. This also
+    conflicts with the broad credential statement in `SECURITY.md`. Prefer
+    environment variables, stdin or protected files, and register explicit CLI
+    values with the redactor when CLI support is retained.
+
+39. **SNMP temporary configuration can survive abrupt termination** — `quality`,
+    **low**
+    `src/collectors/snmp.rs` removes the restricted temporary `snmp.conf` only
+    after normal completion. A `SIGKILL` can leave the community on disk in
+    `/tmp`, albeit inside a `0700` directory with a `0600` file. Add startup
+    cleanup for stale Orbyn SNMP directories or use a stronger lifecycle-managed
+    temporary-file strategy.
