@@ -124,11 +124,11 @@ added; today the product surface is `orbyn` subcommands.
 ### Phase 2 — Inventory integrity and integrations
 
 - [x] **P1** Preserve interfaces and services during `orbyn import`.
-- [ ] **P2** Add Ansible YAML inventory export.
-- [ ] **P2** Include complete supported metadata in Terraform export.
+- [x] **P2** Add Ansible YAML inventory export.
+- [x] **P2** Include complete supported metadata in Terraform export.
 - [ ] **P2** Add optional export to NetBox.
 - [ ] **P2** Add virtualization metadata.
-- [ ] **P1** Add import/export round-trip coverage for every supported field.
+- [x] **P1** Add import/export round-trip coverage for every supported field.
 
 ### Phase 3 — Evidence-based right-sizing
 

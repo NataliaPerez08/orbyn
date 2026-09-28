@@ -5,8 +5,8 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
-dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #21, #26,
-#28, #33, #34, #36 y #37**.
+dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #20, #21,
+#23, #24, #26, #28, #33, #34, #36 y #37**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -31,19 +31,24 @@ matching inverso por PTR (#16).
 
 ## Fase 3 — Integridad de inventario e integraciones
 
-Completado: **#21** — `orbyn import` (JSON/CSV) hace round-trip completo de
-interfaces y servicios: el CSV parsea las secciones `#interfaces` y
-`#services` del export, el JSON acepta el objeto completo de
-`export --format json`, los `asset_id` en forma de IP se resuelven al id
-canónico (`domain::asset_id`) y las filas que referencian assets
-desconocidos se omiten con aviso en lugar de fallar.
+Completada. Resumen de lo implementado:
 
-- **#20 Import NetBox mínimo** — añadir `dcim/interfaces` + `ipam/ip-addresses`
-  (`dns_name`) y valorar export hacia NetBox.
-- **#23 YAML Ansible** — segundo formato de inventario Ansible.
-- **#24 Terraform completo** — incluir los metadatos soportados
-  (`os_name`/`os_version`/`first_seen`/`last_seen`) y generación de bloques
-  `import`.
+- **#21** — `orbyn import` (JSON/CSV) hace round-trip completo de interfaces
+  y servicios: el CSV parsea las secciones `#interfaces` y `#services` del
+  export, el JSON acepta el objeto completo de `export --format json`, los
+  `asset_id` en forma de IP se resuelven al id canónico (`domain::asset_id`)
+  y las filas que referencian assets desconocidos se omiten con aviso.
+- **#23** — `orbyn export --format ansible-yaml` renderiza el inventario en
+  el layout YAML de Ansible (`all.children.<group>.hosts`), compartiendo el
+  código de agrupación con el formato INI.
+- **#24** — el export Terraform incluye `os_name`/`os_version`/
+  `first_seen`/`last_seen` y `--tf-import <type>` genera bloques `import`
+  por asset (id del proveedor como placeholder visible).
+- **#20** — `orbyn netbox import` incorpora `dcim/interfaces` +
+  `virtualization/interfaces` (MAC/MTU/enabled) y `ipam/ip-addresses`
+  (IP asignada a la interfaz, `dns_name` como fallback de hostname). El
+  export hacia NetBox queda fuera por diseño: Orbyn es de solo lectura
+  contra NetBox.
 
 ## Fase 4 — CLI y datos operativos
 

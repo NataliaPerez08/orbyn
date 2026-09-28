@@ -136,10 +136,14 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     `orbyn metrics` aggregates avg/p95/p99/peak with a confidence label.
     Periodic *scheduling* of metric collection remains a follow-up.
 
-20. **NetBox import is minimal** — `gap`
-    Only devices + virtual-machines (primary IP) are imported. Interfaces/MACs
-    (`dcim/interfaces`), `ipam/ip-addresses` (dns_name) and export-to-NetBox are
-    not implemented.
+20. **NetBox import is minimal** — `gap` ~~FIXED~~
+    `orbyn netbox import` now also pulls `dcim/interfaces` and
+    `virtualization/interfaces` (name, MAC, MTU, enabled) plus
+    `ipam/ip-addresses`, attaching each assigned IP to its interface and
+    using `dns_name` as the hostname fallback for devices NetBox does not
+    name. Export-to-NetBox stays out by design: Orbyn is read-only against
+    NetBox (it is a source of truth, not a target). (Resolved in
+    `src/integrations/netbox.rs`.)
 
 21. **Import drops interfaces/services** — `gap` ~~FIXED~~
     `orbyn import` now round-trips full exports: the CSV path parses the
@@ -155,12 +159,19 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     v1.1 narrowed `export` to `json|csv|ansible|terraform`; the old `table`
     form is gone (a small breaking change vs v0.5).
 
-23. **Ansible YAML inventory unsupported** — `gap`
-    Only the INI inventory format is exported.
+23. **Ansible YAML inventory unsupported** — `gap` ~~FIXED~~
+    `orbyn export --format ansible-yaml` renders the same grouped inventory
+    as the INI format in Ansible's YAML layout
+    (`all.children.<group>.hosts`), sharing the grouping code so the two
+    formats cannot drift. (Resolved in `src/integrations/ansible.rs`.)
 
-24. **Terraform export is a locals map only** — `gap`
-    `os_name`/`os_version`/`first_seen`/`last_seen` are not included, and there
-    is no `import`-block generation.
+24. **Terraform export is a locals map only** — `gap` ~~FIXED~~
+    The `locals` map now carries every supported metadata field
+    (`os_name`, `os_version`, `first_seen`, `last_seen`), and
+    `--tf-import <resource-type>` scaffolds one `import` block per asset
+    (Terraform >= 1.5) addressed `<type>.<host>`, with the provider
+    resource id left as a visible TODO placeholder. (Resolved in
+    `src/integrations/terraform.rs`.)
 
 25. **No PostgreSQL backend** — `gap`
     The `Store` trait exists but only `SqliteStore` is implemented.

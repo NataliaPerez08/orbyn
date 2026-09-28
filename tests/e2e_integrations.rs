@@ -13,16 +13,42 @@ for a in "$@"; do
   case "$a" in
     */api/dcim/devices/*)
       cat <<'JSON'
-{"count":2,"next":null,"results":[
-  {"name":"rtr-core-1","role":{"name":"Router","slug":"router"},"tenant":{"name":"neteng"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[{"name":"core"},{"name":"env:prod"}]},
-  {"name":"no-ip-device","role":{"name":"Switch","slug":"switch"},"primary_ip":null,"tags":[]}
+{"count":3,"next":null,"results":[
+  {"id":101,"name":"rtr-core-1","role":{"name":"Router","slug":"router"},"tenant":{"name":"neteng"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[{"name":"core"},{"name":"env:prod"}]},
+  {"id":102,"name":"no-ip-device","role":{"name":"Switch","slug":"switch"},"primary_ip":null,"tags":[]},
+  {"id":103,"name":null,"primary_ip":{"address":"10.0.0.7/24"},"tags":[]}
 ]}
 JSON
       ;;
     */api/virtualization/virtual-machines/*)
       cat <<'JSON'
 {"count":1,"next":null,"results":[
-  {"name":"vm-web-01","role":{"name":"VM","slug":"vm"},"tenant":{"name":"appteam"},"primary_ip":{"address":"10.0.0.5/24"},"tags":[{"name":"staging"}]}
+  {"id":201,"name":"vm-web-01","role":{"name":"VM","slug":"vm"},"tenant":{"name":"appteam"},"primary_ip":{"address":"10.0.0.5/24"},"tags":[{"name":"staging"}]}
+]}
+JSON
+      ;;
+    */api/dcim/interfaces/*)
+      cat <<'JSON'
+{"count":3,"next":null,"results":[
+  {"id":301,"device":{"id":101},"name":"eth0","mac_address":"AA:BB:CC:DD:EE:01","mtu":1500,"enabled":true},
+  {"id":302,"device":{"id":102},"name":"eth0","mac_address":null,"mtu":null,"enabled":true},
+  {"id":303,"device":{"id":103},"name":"eth1","mac_address":null,"mtu":null,"enabled":true}
+]}
+JSON
+      ;;
+    */api/virtualization/interfaces/*)
+      cat <<'JSON'
+{"count":1,"next":null,"results":[
+  {"id":401,"virtual_machine":{"id":201},"name":"ens3","mac_address":null,"mtu":null,"enabled":true}
+]}
+JSON
+      ;;
+    */api/ipam/ip-addresses/*)
+      cat <<'JSON'
+{"count":3,"next":null,"results":[
+  {"address":"10.0.0.1/24","dns_name":"rtr-core-1.dns.example.com","assigned_object_type":"dcim.interface","assigned_object_id":301},
+  {"address":"10.0.0.5/24","dns_name":"","assigned_object_type":"virtualization.vminterface","assigned_object_id":401},
+  {"address":"10.0.0.7/24","dns_name":"sw-1.dns.example.com","assigned_object_type":"dcim.interface","assigned_object_id":303}
 ]}
 JSON
       ;;
@@ -37,18 +63,21 @@ case "$url" in
   *"/api/dcim/devices/"*"page=2"*)
     cat <<'JSON'
 {"count":2,"next":null,"results":[
-  {"name":"rtr-edge-2","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.2/24"},"tags":[]}
+  {"id":2,"name":"rtr-edge-2","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.2/24"},"tags":[]}
 ]}
 JSON
     ;;
   *"/api/dcim/devices/"*)
     cat <<'JSON'
 {"count":2,"next":"https://netbox.example.com/api/dcim/devices/?limit=100&page=2","results":[
-  {"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+  {"id":1,"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
 ]}
 JSON
     ;;
   *"/api/virtualization/virtual-machines/"*)
+    printf '%s\n' '{"count":0,"next":null,"results":[]}'
+    ;;
+  *"/api/dcim/interfaces/"*|*"/api/virtualization/interfaces/"*|*"/api/ipam/ip-addresses/"*)
     printf '%s\n' '{"count":0,"next":null,"results":[]}'
     ;;
 esac
@@ -56,7 +85,7 @@ esac
 
 #[cfg(unix)]
 const THREE_ASSETS_JSON: &str = r#"{"assets":[
-  {"ip":"10.0.0.1","hostname":"web-01","device_class":"server","environment":"prod","owner":"platform","criticality":"high","tags":["core","api"]},
+  {"ip":"10.0.0.1","hostname":"web-01","device_class":"server","os_name":"Ubuntu 22.04","os_version":"5.15.0","environment":"prod","owner":"platform","criticality":"high","tags":["core","api"]},
   {"ip":"10.0.0.2","hostname":"db-01","device_class":"server","environment":"prod"},
   {"ip":"10.0.0.3","hostname":"cache-01","device_class":"server","environment":"staging"}
 ]}"#;
@@ -84,6 +113,37 @@ fn export_ansible_inventory() {
 
 #[cfg(unix)]
 #[test]
+fn export_ansible_yaml_inventory() {
+    let dir = TempDir::new("ansible-yaml-export");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    let out = run_ok(orbyn(&dir).args(["export", "--format", "ansible-yaml"]));
+    assert!(out.contains("all:\n  children:\n"), "{out}");
+    assert!(out.contains("    server:\n      hosts:\n"), "{out}");
+    assert!(out.contains("        web-01:\n"), "{out}");
+    assert!(out.contains("          ansible_host: 10.0.0.1\n"), "{out}");
+    assert!(out.contains("          orbyn_environment: prod\n"), "{out}");
+    assert!(out.contains("          orbyn_criticality: high\n"), "{out}");
+    assert!(
+        out.contains("          orbyn_tags:\n            - core\n            - api\n"),
+        "{out}"
+    );
+
+    let out = run_ok(orbyn(&dir).args([
+        "export",
+        "--format",
+        "ansible-yaml",
+        "--group-by",
+        "environment",
+    ]));
+    assert!(
+        out.contains("    prod:\n") && out.contains("    staging:\n"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn export_terraform_locals() {
     let dir = TempDir::new("terraform-export");
     import_json(&dir, THREE_ASSETS_JSON);
@@ -98,7 +158,55 @@ fn export_terraform_locals() {
 
 #[cfg(unix)]
 #[test]
-fn netbox_import_pulls_devices_and_vms() {
+fn export_terraform_includes_full_metadata() {
+    let dir = TempDir::new("terraform-metadata");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    let out = run_ok(orbyn(&dir).args(["export", "--format", "terraform"]));
+    assert!(out.contains("os_name      = \"Ubuntu 22.04\""), "{out}");
+    assert!(out.contains("os_version   = \"5.15.0\""), "{out}");
+    assert!(out.contains("first_seen   = \""), "{out}");
+    assert!(out.contains("last_seen    = \""), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn export_terraform_import_blocks() {
+    let dir = TempDir::new("terraform-import-blocks");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    let out = run_ok(orbyn(&dir).args([
+        "export",
+        "--format",
+        "terraform",
+        "--tf-import",
+        "aws_instance",
+    ]));
+    assert!(
+        out.contains("import {\n  to = aws_instance.web-01\n"),
+        "{out}"
+    );
+    assert!(out.contains("id = \"10.0.0.1\" # TODO"), "{out}");
+    assert_eq!(out.matches("import {").count(), 3, "one block per asset");
+}
+
+#[cfg(unix)]
+#[test]
+fn export_tf_import_requires_terraform_format() {
+    let dir = TempDir::new("terraform-import-format");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    let out =
+        run_fail(orbyn(&dir).args(["export", "--format", "json", "--tf-import", "aws_instance"]));
+    assert!(
+        out.contains("--tf-import requires --format terraform"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn netbox_import_pulls_devices_vms_interfaces_and_ips() {
     let dir = TempDir::new("netbox");
     let curl = fake_bin(&dir, "curl", FAKE_CURL_SCRIPT);
 
@@ -107,7 +215,10 @@ fn netbox_import_pulls_devices_and_vms() {
             .args(["netbox", "import", "--url", "https://netbox.example.com"])
             .env("ORBYN_CURL_BIN", &curl),
     );
-    assert!(out.contains("Imported 2 assets from NetBox"));
+    assert!(
+        out.contains("Imported 3 assets, 3 interfaces from NetBox"),
+        "{out}"
+    );
 
     let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
     assert!(assets.contains("rtr-core-1"));
@@ -115,6 +226,10 @@ fn netbox_import_pulls_devices_and_vms() {
     assert!(
         !assets.contains("no-ip-device"),
         "device without IP is skipped"
+    );
+    assert!(
+        assets.contains("sw-1.dns.example.com"),
+        "dns_name fills the hostname of an unnamed device: {assets}"
     );
 
     // annotations mapped from NetBox (role -> device_class, tenant -> owner, env tag)
@@ -127,6 +242,19 @@ fn netbox_import_pulls_devices_and_vms() {
     assert!(vm.contains("vm"));
     assert!(vm.contains("appteam"));
     assert!(vm.contains("staging"));
+
+    // interfaces: MACs from dcim/interfaces, IPs from ipam/ip-addresses
+    let ifaces = run_ok(orbyn(&dir).args(["interfaces", "rtr-core-1", "--format", "csv"]));
+    assert!(ifaces.contains("eth0"), "{ifaces}");
+    assert!(
+        ifaces.contains("aa:bb:cc:dd:ee:01"),
+        "MAC normalized: {ifaces}"
+    );
+    assert!(ifaces.contains("1500"), "{ifaces}");
+
+    let vm_ifaces = run_ok(orbyn(&dir).args(["interfaces", "vm-web-01", "--format", "csv"]));
+    assert!(vm_ifaces.contains("ens3"), "{vm_ifaces}");
+    assert!(vm_ifaces.contains("10.0.0.5"), "{vm_ifaces}");
 
     // job recorded under the netbox collector
     let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
@@ -198,7 +326,7 @@ case "$url" in
   *"/api/dcim/devices/"*)
     cat <<'JSON'
 {"count":1,"next":"https://netbox.example.com.evil/api/dcim/devices/?limit=100&page=2","results":[
-  {"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+  {"id":1,"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
 ]}
 JSON
     ;;

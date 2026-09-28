@@ -101,9 +101,12 @@ orbyn import --format csv --file inventory.csv
 
 # automation exporters
 orbyn export --format ansible                 # INI inventory (groups)
+orbyn export --format ansible-yaml            # YAML inventory (all.children.<group>.hosts)
 orbyn export --format terraform               # HCL locals.orbyn_inventory
+orbyn export --format terraform --tf-import aws_instance \
+                                              # + import blocks (ids are TODO placeholders)
 
-# NetBox source-of-truth import
+# NetBox source-of-truth import (devices, VMs, interfaces and assigned IPs)
 orbyn netbox import --url https://netbox.example.com --token "$ORBYN_NETBOX_TOKEN"
 ```
 

@@ -19,9 +19,9 @@ use orbyn::domain::{
     JobStatus, Observation, Service,
 };
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
-use orbyn::integrations::ansible::{render_ansible_inventory, GroupBy};
+use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
 use orbyn::integrations::netbox::NetBoxClient;
-use orbyn::integrations::terraform::render_terraform;
+use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
 use orbyn::output::{Format, Inventory};
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::AssetAnnotations;
@@ -66,7 +66,10 @@ enum ImportFormat {
 enum ExportFormat {
     Json,
     Csv,
+    /// Ansible INI inventory.
     Ansible,
+    /// Ansible YAML inventory.
+    AnsibleYaml,
     Terraform,
 }
 
@@ -223,13 +226,18 @@ enum Command {
         format: Format,
     },
 
-    /// Export the inventory to JSON/CSV (Orbyn) or Ansible/Terraform formats.
+    /// Export the inventory to JSON/CSV (Orbyn), Ansible (INI or YAML), or
+    /// Terraform formats.
     Export {
         #[arg(short, long, value_enum, default_value_t = ExportFormat::Json)]
         format: ExportFormat,
         /// Grouping key for the Ansible inventory.
         #[arg(long, value_enum, default_value_t = GroupBy::DeviceClass)]
         group_by: GroupBy,
+        /// Generate Terraform `import` blocks for this resource type
+        /// (requires --format terraform), e.g. aws_instance.
+        #[arg(long, value_name = "RESOURCE_TYPE")]
+        tf_import: Option<String>,
         /// Write to a file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -244,7 +252,8 @@ enum Command {
         file: Option<PathBuf>,
     },
 
-    /// Pull devices and virtual machines from NetBox (source of truth).
+    /// Pull devices, VMs, interfaces and assigned IPs from NetBox
+    /// (source of truth).
     Netbox {
         #[command(subcommand)]
         action: NetboxAction,
@@ -333,7 +342,7 @@ enum DepsAction {
 /// Sub-actions of `orbyn netbox`.
 #[derive(Debug, Subcommand)]
 enum NetboxAction {
-    /// Import devices and virtual machines from a NetBox instance.
+    /// Import devices, VMs, their interfaces and assigned IPs from NetBox.
     Import {
         /// NetBox base URL, e.g. https://netbox.example.com.
         #[arg(long)]
@@ -493,14 +502,25 @@ async fn main() -> anyhow::Result<()> {
         Command::Export {
             format,
             group_by,
+            tf_import,
             output,
         } => {
+            if tf_import.is_some() && format != ExportFormat::Terraform {
+                bail!("--tf-import requires --format terraform");
+            }
             let store = SqliteStore::open(&config.db_path).await?;
             let assets = store.list_assets().await?;
 
             let rendered = match format {
                 ExportFormat::Ansible => render_ansible_inventory(&assets, group_by),
-                ExportFormat::Terraform => render_terraform(&assets),
+                ExportFormat::AnsibleYaml => render_ansible_yaml(&assets, group_by),
+                ExportFormat::Terraform => {
+                    let mut out = render_terraform(&assets);
+                    if let Some(resource_type) = tf_import {
+                        out.push_str(&render_import_blocks(&assets, &resource_type)?);
+                    }
+                    out
+                }
                 ExportFormat::Json | ExportFormat::Csv => {
                     let mut services = Vec::new();
                     let mut interfaces = Vec::new();
@@ -567,27 +587,18 @@ async fn main() -> anyhow::Result<()> {
             }
             let client = NetBoxClient::new(&url, token, no_verify)
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            let mut rows = client
-                .fetch_devices()
+            let inventory = client
+                .fetch_inventory()
                 .await
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            rows.extend(
-                client
-                    .fetch_vms()
-                    .await
-                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?,
-            );
-            let stats = persist_imported_inventory(
-                &store,
-                &ImportedInventory {
-                    assets: rows,
-                    ..Default::default()
-                },
-                "netbox",
-            )
-            .await
-            .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            eprintln!("Imported {} assets from NetBox.", stats.assets);
+            let stats = persist_imported_inventory(&store, &inventory, "netbox")
+                .await
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+            let mut parts = vec![format!("{} assets", stats.assets)];
+            if stats.interfaces > 0 {
+                parts.push(format!("{} interfaces", stats.interfaces));
+            }
+            eprintln!("Imported {} from NetBox.", parts.join(", "));
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
         }

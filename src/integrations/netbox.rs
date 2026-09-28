@@ -9,6 +9,7 @@
 //! an `Authorization` header (`-H @-`), so it never appears in process
 //! arguments, logs, disk, or CLI output.
 
+use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::process::Stdio;
 use std::time::Duration;
@@ -18,7 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use crate::import::ImportedAsset;
+use crate::import::{ImportedAsset, ImportedInterface, ImportedInventory};
 use crate::process::run_captured;
 
 /// Paginated NetBox envelope.
@@ -135,6 +136,7 @@ struct Tag {
 
 #[derive(Debug, Deserialize)]
 struct NetBoxDevice {
+    id: u64,
     name: Option<String>,
     role: Option<NamedRef>,
     tenant: Option<NamedRef>,
@@ -145,12 +147,46 @@ struct NetBoxDevice {
 
 #[derive(Debug, Deserialize)]
 struct NetBoxVm {
+    id: u64,
     name: String,
     role: Option<NamedRef>,
     tenant: Option<NamedRef>,
     primary_ip: Option<PrimaryIp>,
     #[serde(default)]
     tags: Vec<Tag>,
+}
+
+/// The `device` / `virtual_machine` object embedded in interface rows.
+#[derive(Debug, Deserialize)]
+struct NetBoxInterfaceParent {
+    id: u64,
+}
+
+/// An interface row from `dcim/interfaces` or `virtualization/interfaces`.
+#[derive(Debug, Deserialize)]
+struct NetBoxInterface {
+    id: u64,
+    name: Option<String>,
+    mac_address: Option<String>,
+    mtu: Option<u32>,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    device: Option<NetBoxInterfaceParent>,
+    #[serde(default)]
+    virtual_machine: Option<NetBoxInterfaceParent>,
+}
+
+/// An IP address row from `ipam/ip-addresses`.
+#[derive(Debug, Deserialize)]
+struct NetBoxIpAddress {
+    address: String,
+    #[serde(default)]
+    dns_name: Option<String>,
+    #[serde(default)]
+    assigned_object_type: Option<String>,
+    #[serde(default)]
+    assigned_object_id: Option<u64>,
 }
 
 /// Parse the `/api/dcim/devices/` response into import rows.
@@ -217,6 +253,167 @@ fn parse_ip(address: &str) -> Option<std::net::IpAddr> {
     host.parse().ok()
 }
 
+/// Assemble an import inventory from parsed NetBox endpoint payloads:
+/// assets from devices + VMs, interfaces from `dcim/interfaces` +
+/// `virtualization/interfaces`, and interface IPs (plus `dns_name` as a
+/// hostname fallback) from `ipam/ip-addresses`.
+///
+/// Rows referencing parents Orbyn skipped (e.g. a device without a primary
+/// IP) are dropped, mirroring the device-level skip.
+pub fn parse_netbox_inventory(
+    devices_json: &str,
+    vms_json: &str,
+    interfaces_json: &str,
+    vm_interfaces_json: &str,
+    ip_addresses_json: &str,
+) -> Result<ImportedInventory> {
+    let devices: NetBoxEnvelope<NetBoxDevice> =
+        serde_json::from_str(devices_json).context("parsing NetBox devices response")?;
+    let vms: NetBoxEnvelope<NetBoxVm> =
+        serde_json::from_str(vms_json).context("parsing NetBox virtual machines response")?;
+    let interfaces: NetBoxEnvelope<NetBoxInterface> =
+        serde_json::from_str(interfaces_json).context("parsing NetBox interfaces response")?;
+    let vm_interfaces: NetBoxEnvelope<NetBoxInterface> =
+        serde_json::from_str(vm_interfaces_json)
+            .context("parsing NetBox virtual machine interfaces response")?;
+    let ip_addresses: NetBoxEnvelope<NetBoxIpAddress> =
+        serde_json::from_str(ip_addresses_json).context("parsing NetBox IP addresses response")?;
+
+    Ok(assemble_inventory(
+        devices.results,
+        vms.results,
+        interfaces.results,
+        vm_interfaces.results,
+        ip_addresses.results,
+    ))
+}
+
+fn assemble_inventory(
+    devices: Vec<NetBoxDevice>,
+    vms: Vec<NetBoxVm>,
+    interfaces: Vec<NetBoxInterface>,
+    vm_interfaces: Vec<NetBoxInterface>,
+    ip_addresses: Vec<NetBoxIpAddress>,
+) -> ImportedInventory {
+    let mut assets: Vec<ImportedAsset> = Vec::new();
+    let mut asset_by_device: HashMap<u64, usize> = HashMap::new();
+    let mut asset_by_vm: HashMap<u64, usize> = HashMap::new();
+
+    for device in devices {
+        let netbox_id = device.id;
+        if let Some(asset) = import_device(device) {
+            asset_by_device.insert(netbox_id, assets.len());
+            assets.push(asset);
+        }
+    }
+    for vm in vms {
+        let netbox_id = vm.id;
+        if let Some(asset) = import_vm(vm) {
+            asset_by_vm.insert(netbox_id, assets.len());
+            assets.push(asset);
+        }
+    }
+
+    // Interfaces carry no provider-independent id of their own; each row is
+    // keyed by its NetBox id per endpoint (the two tables have independent
+    // primary keys, so `assigned_object_type` disambiguates on lookup).
+    struct InterfaceRow {
+        interface: ImportedInterface,
+        owner: usize,
+    }
+
+    let mut rows: Vec<InterfaceRow> = Vec::new();
+    let mut row_by_interface: HashMap<(u64, u64), usize> = HashMap::new();
+
+    let mut push_interface = |row: InterfaceRow, netbox_id: u64, vm: bool| {
+        row_by_interface.insert((vm as u64, netbox_id), rows.len());
+        rows.push(row);
+    };
+
+    for interface in interfaces {
+        let Some(owner) = interface
+            .device
+            .as_ref()
+            .and_then(|d| asset_by_device.get(&d.id))
+        else {
+            continue;
+        };
+        let netbox_id = interface.id;
+        push_interface(
+            InterfaceRow {
+                interface: import_interface(interface, &assets[*owner]),
+                owner: *owner,
+            },
+            netbox_id,
+            false,
+        );
+    }
+    for interface in vm_interfaces {
+        let Some(owner) = interface
+            .virtual_machine
+            .as_ref()
+            .and_then(|vm| asset_by_vm.get(&vm.id))
+        else {
+            continue;
+        };
+        let netbox_id = interface.id;
+        push_interface(
+            InterfaceRow {
+                interface: import_interface(interface, &assets[*owner]),
+                owner: *owner,
+            },
+            netbox_id,
+            true,
+        );
+    }
+
+    for ip in ip_addresses {
+        let Some(interface_id) = ip.assigned_object_id else {
+            continue;
+        };
+        let vm = ip
+            .assigned_object_type
+            .as_deref()
+            .is_some_and(|t| t == "virtualization.vminterface");
+        let Some(&row_index) = row_by_interface.get(&(vm as u64, interface_id)) else {
+            continue;
+        };
+        let Some(address) = parse_ip(&ip.address) else {
+            continue;
+        };
+        let row = &mut rows[row_index];
+        if row.interface.ip.is_none() {
+            row.interface.ip = Some(address);
+        }
+        // `dns_name` is the only hostname source for devices NetBox names
+        // only by IP; an explicit device name always wins.
+        if let Some(dns_name) = ip.dns_name.clone().filter(|d| !d.is_empty()) {
+            if assets[row.owner].hostname.is_none() {
+                assets[row.owner].hostname = Some(dns_name);
+            }
+        }
+    }
+
+    ImportedInventory {
+        assets,
+        interfaces: rows.into_iter().map(|r| r.interface).collect(),
+        services: Vec::new(),
+    }
+}
+
+fn import_interface(interface: NetBoxInterface, owner: &ImportedAsset) -> ImportedInterface {
+    ImportedInterface {
+        asset_id: owner.ip.clone(),
+        name: interface.name,
+        mac: interface.mac_address,
+        ip: None,
+        vendor: None,
+        mtu: interface.mtu,
+        if_index: None,
+        is_up: Some(interface.enabled),
+    }
+}
+
 /// Derive an environment from `env:<x>` or common environment tag names.
 fn env_from_tags(tags: &[String]) -> Option<String> {
     for tag in tags {
@@ -276,18 +473,31 @@ impl NetBoxClient {
         })
     }
 
-    /// Fetch and parse all devices.
-    pub async fn fetch_devices(&self) -> Result<Vec<ImportedAsset>> {
-        let devices: Vec<NetBoxDevice> = self.fetch_pages("/api/dcim/devices/").await?;
-        Ok(devices.into_iter().filter_map(import_device).collect())
-    }
-
-    /// Fetch and parse all virtual machines.
-    pub async fn fetch_vms(&self) -> Result<Vec<ImportedAsset>> {
-        let vms: Vec<NetBoxVm> = self
-            .fetch_pages("/api/virtualization/virtual-machines/")
+    /// Fetch devices, virtual machines, their interfaces and assigned IP
+    /// addresses, and assemble a complete import inventory.
+    pub async fn fetch_inventory(&self) -> Result<ImportedInventory> {
+        let devices = self
+            .fetch_pages::<NetBoxDevice>("/api/dcim/devices/")
             .await?;
-        Ok(vms.into_iter().filter_map(import_vm).collect())
+        let vms = self
+            .fetch_pages::<NetBoxVm>("/api/virtualization/virtual-machines/")
+            .await?;
+        let interfaces = self
+            .fetch_pages::<NetBoxInterface>("/api/dcim/interfaces/")
+            .await?;
+        let vm_interfaces = self
+            .fetch_pages::<NetBoxInterface>("/api/virtualization/interfaces/")
+            .await?;
+        let ip_addresses = self
+            .fetch_pages::<NetBoxIpAddress>("/api/ipam/ip-addresses/")
+            .await?;
+        Ok(assemble_inventory(
+            devices,
+            vms,
+            interfaces,
+            vm_interfaces,
+            ip_addresses,
+        ))
     }
 
     async fn fetch_pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
@@ -423,12 +633,12 @@ mod tests {
     use super::*;
 
     const DEVICES: &str = r#"{"count":2,"next":null,"results":[
-      {"name":"rtr-core-1","role":{"name":"Router","slug":"router"},"tenant":{"name":"neteng"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[{"name":"core"},{"name":"env:prod"}]},
-      {"name":"no-ip-device","role":{"name":"Switch","slug":"switch"},"primary_ip":null,"tags":[]}
+      {"id":101,"name":"rtr-core-1","role":{"name":"Router","slug":"router"},"tenant":{"name":"neteng"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[{"name":"core"},{"name":"env:prod"}]},
+      {"id":102,"name":"no-ip-device","role":{"name":"Switch","slug":"switch"},"primary_ip":null,"tags":[]}
     ]}"#;
 
     const VMS: &str = r#"{"count":1,"next":null,"results":[
-      {"name":"vm-web-01","role":{"name":"VM","slug":"vm"},"tenant":{"name":"appteam"},"primary_ip":{"address":"10.0.0.5/24"},"tags":[{"name":"staging"}]}
+      {"id":201,"name":"vm-web-01","role":{"name":"VM","slug":"vm"},"tenant":{"name":"appteam"},"primary_ip":{"address":"10.0.0.5/24"},"tags":[{"name":"staging"}]}
     ]}"#;
 
     #[test]
@@ -467,7 +677,7 @@ mod tests {
     #[test]
     fn invalid_ip_is_skipped() {
         let json = r#"{"count":1,"next":null,"results":[
-          {"name":"bad","primary_ip":{"address":"not-an-ip"},"tags":[]}
+          {"id":1,"name":"bad","primary_ip":{"address":"not-an-ip"},"tags":[]}
         ]}"#;
         assert!(parse_netbox_devices(json).unwrap().is_empty());
     }
@@ -475,7 +685,7 @@ mod tests {
     #[test]
     fn role_slug_preferred_over_name() {
         let json = r#"{"count":1,"next":null,"results":[
-          {"name":"r1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+          {"id":1,"name":"r1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
         ]}"#;
         let rows = parse_netbox_devices(json).unwrap();
         assert_eq!(rows[0].device_class.as_deref(), Some("router"));
@@ -487,6 +697,137 @@ mod tests {
             token_header_line("supersecret"),
             "Authorization: Token supersecret\n"
         );
+    }
+
+    const EMPTY: &str = r#"{"count":0,"next":null,"results":[]}"#;
+
+    fn inventory(
+        devices: &str,
+        vms: &str,
+        interfaces: &str,
+        vm_interfaces: &str,
+        ip_addresses: &str,
+    ) -> super::ImportedInventory {
+        parse_netbox_inventory(devices, vms, interfaces, vm_interfaces, ip_addresses)
+            .expect("assemble inventory")
+    }
+
+    #[test]
+    fn inventory_maps_interfaces_and_assigned_ips() {
+        let interfaces = r#"{"count":1,"next":null,"results":[
+          {"id":301,"device":{"id":101},"name":"eth0","mac_address":"AA:BB:CC:DD:EE:01","mtu":1500,"enabled":true}
+        ]}"#;
+        let vm_interfaces = r#"{"count":1,"next":null,"results":[
+          {"id":401,"virtual_machine":{"id":201},"name":"ens3","mac_address":null,"mtu":null,"enabled":false}
+        ]}"#;
+        let ips = r#"{"count":2,"next":null,"results":[
+          {"address":"10.0.0.1/24","dns_name":"rtr-core-1.dns.example.com","assigned_object_type":"dcim.interface","assigned_object_id":301},
+          {"address":"10.0.0.5/24","dns_name":"","assigned_object_type":"virtualization.vminterface","assigned_object_id":401}
+        ]}"#;
+
+        let inv = inventory(DEVICES, VMS, interfaces, vm_interfaces, ips);
+        assert_eq!(inv.assets.len(), 2);
+        assert_eq!(inv.interfaces.len(), 2);
+
+        let eth = &inv.interfaces[0];
+        assert_eq!(eth.asset_id, "10.0.0.1");
+        assert_eq!(eth.name.as_deref(), Some("eth0"));
+        assert_eq!(eth.mac.as_deref(), Some("AA:BB:CC:DD:EE:01"));
+        assert_eq!(eth.mtu, Some(1500));
+        assert_eq!(eth.is_up, Some(true));
+        assert_eq!(eth.ip.map(|i| i.to_string()).as_deref(), Some("10.0.0.1"));
+
+        let ens = &inv.interfaces[1];
+        assert_eq!(ens.asset_id, "10.0.0.5");
+        assert_eq!(ens.is_up, Some(false));
+        assert_eq!(ens.ip.map(|i| i.to_string()).as_deref(), Some("10.0.0.5"));
+
+        // The device already has a name, so dns_name must not override it.
+        assert_eq!(
+            inv.assets[0].hostname.as_deref(),
+            Some("rtr-core-1"),
+            "explicit device name wins over dns_name"
+        );
+    }
+
+    #[test]
+    fn inventory_skips_interfaces_of_skipped_parents() {
+        // Interface 302 belongs to the device without a primary IP, which is
+        // skipped at the asset level; its rows must not dangle.
+        let interfaces = r#"{"count":2,"next":null,"results":[
+          {"id":301,"device":{"id":101},"name":"eth0","enabled":true},
+          {"id":302,"device":{"id":102},"name":"eth0","enabled":true}
+        ]}"#;
+        let ips = r#"{"count":1,"next":null,"results":[
+          {"address":"10.0.0.9/24","dns_name":"orphan.dns.example.com","assigned_object_type":"dcim.interface","assigned_object_id":302}
+        ]}"#;
+
+        let inv = inventory(DEVICES, VMS, interfaces, EMPTY, ips);
+        assert_eq!(inv.assets.len(), 2);
+        assert_eq!(inv.interfaces.len(), 1, "orphan interface is skipped");
+        assert_eq!(inv.interfaces[0].asset_id, "10.0.0.1");
+        assert!(
+            !inv.assets
+                .iter()
+                .any(|a| a.hostname.as_deref() == Some("orphan.dns.example.com")),
+            "dns_name of an orphan IP must not leak into other assets"
+        );
+    }
+
+    #[test]
+    fn inventory_fills_missing_hostname_from_dns_name() {
+        let devices = r#"{"count":1,"next":null,"results":[
+          {"id":111,"name":null,"primary_ip":{"address":"10.0.0.7/24"},"tags":[]}
+        ]}"#;
+        let interfaces = r#"{"count":1,"next":null,"results":[
+          {"id":311,"device":{"id":111},"name":"eth0","enabled":true}
+        ]}"#;
+        let ips = r#"{"count":1,"next":null,"results":[
+          {"address":"10.0.0.7/24","dns_name":"sw-1.dns.example.com","assigned_object_type":"dcim.interface","assigned_object_id":311}
+        ]}"#;
+
+        let inv = inventory(devices, EMPTY, interfaces, EMPTY, ips);
+        assert_eq!(
+            inv.assets[0].hostname.as_deref(),
+            Some("sw-1.dns.example.com")
+        );
+    }
+
+    #[test]
+    fn inventory_disambiguates_interface_ids_by_assigned_object_type() {
+        // dcim interface 500 and vminterface 500 share an id; each IP must
+        // land on its own interface.
+        let interfaces = r#"{"count":1,"next":null,"results":[
+          {"id":500,"device":{"id":101},"name":"eth0","enabled":true}
+        ]}"#;
+        let vm_interfaces = r#"{"count":1,"next":null,"results":[
+          {"id":500,"virtual_machine":{"id":201},"name":"ens3","enabled":true}
+        ]}"#;
+        let ips = r#"{"count":2,"next":null,"results":[
+          {"address":"10.0.0.1/24","dns_name":null,"assigned_object_type":"dcim.interface","assigned_object_id":500},
+          {"address":"10.0.0.5/24","dns_name":null,"assigned_object_type":"virtualization.vminterface","assigned_object_id":500}
+        ]}"#;
+
+        let inv = inventory(DEVICES, VMS, interfaces, vm_interfaces, ips);
+        assert_eq!(inv.interfaces.len(), 2);
+        assert_eq!(inv.interfaces[0].asset_id, "10.0.0.1");
+        assert_eq!(
+            inv.interfaces[0].ip.map(|i| i.to_string()).as_deref(),
+            Some("10.0.0.1")
+        );
+        assert_eq!(inv.interfaces[1].asset_id, "10.0.0.5");
+        assert_eq!(
+            inv.interfaces[1].ip.map(|i| i.to_string()).as_deref(),
+            Some("10.0.0.5")
+        );
+    }
+
+    #[test]
+    fn inventory_without_interfaces_or_ips_still_imports_assets() {
+        let inv = inventory(DEVICES, VMS, EMPTY, EMPTY, EMPTY);
+        assert_eq!(inv.assets.len(), 2);
+        assert!(inv.interfaces.is_empty());
+        assert!(inv.services.is_empty());
     }
 
     #[test]

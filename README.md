@@ -281,7 +281,8 @@ orbyn annotate <id-or-ip> --environment prod --owner <team> \
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
 orbyn audit [--limit 50] [--format ...]           Mutating CLI operations and their outcomes
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
-orbyn export [--format json|csv|ansible|terraform] [--group-by <key>] [--output <file>]
+orbyn export [--format json|csv|ansible|ansible-yaml|terraform] [--group-by <key>] \
+    [--tf-import <resource-type>] [--output <file>]
 orbyn netbox import --url <url> [--token <t>]       Import devices/VMs from NetBox (SoT)
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 orbyn graph [--format ...]
