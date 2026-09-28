@@ -41,6 +41,19 @@ and testing are welcome.
 - `cargo fmt` must be clean and `cargo clippy --all-targets -- -D warnings`
   must pass.
 
+## EOL OS table cadence
+
+`src/assessment/eol_os.csv` is the end-of-life OS table. It is embedded into
+the binary at build time, parsed with loud failure on malformed input, and the
+`EOL table version` evidence shown by `os.eol` findings is derived from the
+file itself. OSes reach end of life continuously, so:
+
+- Review the table quarterly.
+- Bump the `version` line to the review month (`YYYY-MM`) even when no entry
+  changes.
+- A unit test (`eol_table_version_is_recent`) fails when the version is more
+  than six months old, so a stale table cannot ship silently.
+
 ## Security
 
 Discovery is security-sensitive. Read [SECURITY.md](SECURITY.md) before

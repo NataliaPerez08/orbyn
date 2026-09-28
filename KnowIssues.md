@@ -50,11 +50,13 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    only lands in the inventory later in the same run. (Resolved in
    `src/store/sqlite.rs`.)
 
-7. **EOL OS table is static** — `quality` ~~MITIGATED~~
-   `src/assessment/rules.rs` hardcodes the EOL table. OSes reach end-of-life
-   continuously; a stale table silently produces stale `os.eol` findings.
-   The table now carries an explicit `EOL_TABLE_VERSION` and findings include
-   that version as evidence. A regular update cadence remains necessary.
+7. **EOL OS table is static** — `quality` ~~FIXED~~
+   The table now lives in `src/assessment/eol_os.csv` (data, not code),
+   embedded at build time and parsed with loud failure on malformed input;
+   the `EOL table version` evidence is derived from the file itself. The
+   update cadence is documented in CONTRIBUTING.md and enforced by a unit
+   test that fails when the version is more than six months old.
+   (Resolved in `src/assessment/rules.rs` + `src/assessment/eol_os.csv`.)
 
 8. **Capacity merge keeps stale values** — `bug` ~~FIXED~~
    `store_observations` now overwrites every measured capacity field with the
@@ -62,13 +64,19 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    NULL ("unknown now") instead of silently keeping the stale value. (Resolved
    in `src/store/sqlite.rs`.)
 
-9. **SNMP `sysDescr` stored as OS name** — `quality`
-   The SNMP collector puts the full `sysDescr` string into `os_name`
-   (e.g. `"Cisco IOS Software, IOSv"`). Noisy for classification/reporting.
+9. **SNMP `sysDescr` stored as OS name** — `quality` ~~FIXED~~
+   The raw `sysDescr` banner is kept in its own `sys_descr` field (migration
+   `0006_sys_descr.sql`), and `os_name` is derived via
+   `derive_os_from_sysdescr()`: known vendor/OS families map to concise names
+   (e.g. `"Cisco IOS"`, `"Juniper Junos"`) and unrecognized banners fall back
+   to the first comma-separated segment, trimmed and capped at 80 characters.
+   (Resolved in `src/collectors/snmp.rs` + `src/domain/mod.rs`.)
 
-10. **`classify_device` substring heuristics can misfire** — `quality`
-    `src/collectors/classify.rs` uses loose `contains` matches (e.g. `"ios"`,
-    vendor substrings). Conservative but can mislabel uncommon devices.
+10. **`classify_device` substring heuristics can misfire** — `quality` ~~FIXED~~
+    Short needles now match on word boundaries through `contains_word()`
+    (`"ios"` no longer fires inside `"bios"`/`"radios"`), and short vendor
+    names get a word-boundary check on `descr` in addition to the substring
+    match. (Resolved in `src/collectors/classify.rs`.)
 
 11. **`normalize_mac` is not strict** — `quality` ~~FIXED~~
     `domain::normalize_mac` now returns `Option<String>`: `None` when the input
@@ -77,9 +85,14 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     non-canonical values. (Resolved in `src/domain/mod.rs` +
     `src/collectors/nmap.rs`.)
 
-12. **`ss`/`netstat` process parsing is format-specific** — `quality` ~~MITIGATED~~
-    The parser now accepts `ESTAB` and `ESTABLISHED` states and connections
-    without process metadata. Other BusyBox variants may still need fixtures.
+12. **`ss`/`netstat` process parsing is format-specific** — `quality` ~~FIXED~~
+    The parser accepts the known row shapes with fixture coverage: `ss`
+    `ESTAB`/`ESTABLISHED` with and without `users:` process metadata,
+    `LISTEN`/`UNCONN` rows from `ss` builds that ignore the state filter,
+    plain `netstat -tn`, and the `netstat -p` process column in both the
+    BusyBox `pid/prog` and net-tools `pid/prog:name` forms (`-` unavailable),
+    including bare-IPv6 and IPv4-mapped endpoints. (Resolved in
+    `src/collectors/ssh.rs`.)
 
 13. **Ansible exporter does not sanitize host names** — `bug` ~~FIXED~~
     `render_ansible_inventory` now applies `sanitize_name` to host names as
@@ -94,10 +107,16 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     Mermaid IDs retain a readable sanitized prefix and append an encoding of
     the original id, so distinct ids cannot collapse after sanitization.
 
-16. **DNS evidence is shallow and unbounded** — `gap` ~~MITIGATED~~
-    Resolution now has a five-second timeout, de-duplicates results and caps
-    each hostname at 64 addresses. CNAME-chain handling and broader hostname
-    matching remain deferred.
+16. **DNS evidence is shallow and unbounded** — `gap` ~~FIXED~~
+    Resolution keeps the five-second timeout, de-duplication and the
+    64-address cap, and the evidence is no longer shallow: `dig +short`
+    (when available, with a `getaddrinfo` fallback for hosts only present in
+    local sources) captures CNAME chains, so a hostname aliasing another
+    asset's hostname produces an edge even when the final addresses are
+    unmanaged; reverse (PTR) resolution of each asset IP adds IP-based
+    matching. All matching is exact and case-insensitive, edges stay
+    low-confidence and deduplicated per asset pair. (Resolved in
+    `src/collectors/dns.rs` + `src/main.rs`.)
 
 ---
 

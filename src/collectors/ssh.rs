@@ -543,10 +543,19 @@ fn parse_systemctl(lines: &[String]) -> Vec<RunningService> {
 }
 
 /// Parse active TCP connections from `ss -tnp state established` output,
-/// falling back to `netstat -tn` format.
+/// falling back to `netstat -tn` (optionally `-p`) format.
 ///
-/// Loopback remote endpoints and self-connections (remote == local address)
-/// are dropped: they never become dependency evidence.
+/// Accepted row shapes:
+///
+/// - `ss`: `ESTAB|ESTABLISHED recvq sendq local peer [users:(("proc",...))]`
+/// - `netstat`: `tcp|tcp6 recvq sendq local peer ESTABLISHED [pid/prog[:name]]`
+///   where the trailing process column is the BusyBox `pid/prog` form or the
+///   net-tools `pid/prog:name` form (`-` when unavailable).
+///
+/// Rows in other states (e.g. `LISTEN`, emitted by `ss` builds that ignore
+/// the `state established` filter) are skipped. Loopback remote endpoints
+/// and self-connections (remote == local address) are dropped: they never
+/// become dependency evidence.
 fn parse_connections(lines: &[String]) -> Vec<Connection> {
     let mut out = Vec::new();
     for line in lines {
@@ -562,7 +571,7 @@ fn parse_connections(lines: &[String]) -> Vec<Connection> {
         let (local, peer, process) = if fields.first().is_some_and(|field| {
             field.eq_ignore_ascii_case("tcp") || field.eq_ignore_ascii_case("tcp6")
         }) {
-            // tcp 0 0 local peer ESTABLISHED
+            // tcp 0 0 local peer ESTABLISHED [pid/prog[:name]]
             if fields.len() < 5
                 || !fields[5..]
                     .iter()
@@ -570,7 +579,11 @@ fn parse_connections(lines: &[String]) -> Vec<Connection> {
             {
                 continue;
             }
-            (fields[3], fields[4], None)
+            let process = fields[5..]
+                .iter()
+                .find(|field| field.contains('/'))
+                .and_then(|field| netstat_process(field));
+            (fields[3], fields[4], process)
         } else {
             // ESTAB 0 0 local peer [users:(("proc",pid=..,fd=..))]
             if fields.len() < 5
@@ -614,6 +627,14 @@ fn first_quoted(raw: &str) -> Option<String> {
     let start = raw.find('"')? + 1;
     let end = raw[start..].find('"')? + start;
     Some(raw[start..end].to_string())
+}
+
+/// Extract the program name from a `netstat -p` process column:
+/// `1234/sshd` (BusyBox), `1234/sshd:server` (net-tools) or `-` when the
+/// owning process is unavailable.
+fn netstat_process(field: &str) -> Option<String> {
+    let program = field.split('/').nth(1)?.split(':').next()?.trim();
+    (!program.is_empty()).then(|| program.to_string())
 }
 
 #[cfg(test)]
@@ -764,6 +785,111 @@ tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT\n
         assert_eq!(conns.len(), 1);
         assert_eq!(conns[0].remote_port, 51414);
         assert_eq!(conns[0].process, None);
+    }
+
+    /// BusyBox `netstat -tn`: same layout as net-tools, no process column.
+    const BUSYBOX_NETSTAT_SECTION: &str = "Active Internet connections (w/o servers)\n\
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State     \n\
+    tcp        0      0 10.0.0.5:22             10.0.0.8:49222          ESTABLISHED\n\
+    tcp        0      0 10.0.0.5:443            10.0.0.9:51414          ESTABLISHED\n\
+    tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT \n";
+
+    /// BusyBox `netstat -tnp`: trailing `pid/prog` process column.
+    const BUSYBOX_NETSTAT_P_SECTION: &str = "Active Internet connections (w/o servers)\n\
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program\n\
+    tcp        0      0 10.0.0.5:22             10.0.0.8:49222          ESTABLISHED 1234/sshd\n\
+    tcp        0      0 10.0.0.5:443            10.0.0.9:51414          ESTABLISHED 987/nginx\n\
+    tcp        0      0 10.0.0.5:54324          10.0.0.7:5432           ESTABLISHED -\n";
+
+    /// net-tools `netstat -tnp`: `pid/prog:name` process column.
+    const NETTOOLS_NETSTAT_P_SECTION: &str = "Active Internet connections (w/o servers)\n\
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\n\
+    tcp        0      0 10.0.0.5:22             10.0.0.8:49222          ESTABLISHED 1234/sshd:server\n\
+    tcp        0      0 10.0.0.5:443            10.0.0.9:51414          ESTABLISHED 987/nginx:worker\n";
+
+    #[test]
+    fn parses_busybox_netstat_without_process_column() {
+        let conns = parse_connections(
+            &BUSYBOX_NETSTAT_SECTION
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(conns.len(), 2, "CLOSE_WAIT must be skipped");
+        assert!(conns.iter().all(|c| c.process.is_none()));
+        assert_eq!(conns[1].remote_port, 51414);
+    }
+
+    #[test]
+    fn parses_busybox_netstat_p_process_column() {
+        let conns = parse_connections(
+            &BUSYBOX_NETSTAT_P_SECTION
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(conns.len(), 3);
+        let ssh = conns.iter().find(|c| c.remote_port == 49222).unwrap();
+        assert_eq!(ssh.process.as_deref(), Some("sshd"), "BusyBox pid/prog");
+        let web = conns.iter().find(|c| c.remote_port == 51414).unwrap();
+        assert_eq!(web.process.as_deref(), Some("nginx"));
+        let db = conns.iter().find(|c| c.remote_port == 5432).unwrap();
+        assert_eq!(db.process, None, "`-` means no process available");
+    }
+
+    #[test]
+    fn parses_nettools_netstat_p_program_name() {
+        let conns = parse_connections(
+            &NETTOOLS_NETSTAT_P_SECTION
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(conns.len(), 2);
+        assert_eq!(conns[0].process.as_deref(), Some("sshd"), "prog:name form");
+        assert_eq!(conns[1].process.as_deref(), Some("nginx"));
+    }
+
+    #[test]
+    fn parses_ipv6_rows_in_both_formats() {
+        // netstat prints bare IPv6 (`2001:db8::5:22`), ss prints bracketed.
+        let lines: Vec<String> = [
+            "tcp6       0      0 2001:db8::5:22          2001:db8::9:51414       ESTABLISHED 1234/sshd",
+            "tcp6       0      0 ::ffff:10.0.0.5:443     ::ffff:10.0.0.9:51414  ESTABLISHED 987/nginx",
+            "ESTAB      0      0 [2001:db8::5]:54322     [2001:db8::7]:5432     users:((\"postgres\",pid=977,fd=6))",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+        let conns = parse_connections(&lines);
+        assert_eq!(conns.len(), 3);
+        assert_eq!(conns[0].remote_ip.to_string(), "2001:db8::9");
+        assert_eq!(conns[0].process.as_deref(), Some("sshd"));
+        assert_eq!(
+            conns[1].remote_ip.to_string(),
+            "10.0.0.9",
+            "IPv4-mapped endpoints must collapse to IPv4"
+        );
+        assert_eq!(conns[2].remote_ip.to_string(), "2001:db8::7");
+        assert_eq!(conns[2].process.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn skips_listen_rows_from_ss_builds_without_state_filter() {
+        // Old iproute2 builds accept but ignore `state established`, so the
+        // output can contain listening and unconnected rows.
+        let lines: Vec<String> = [
+            "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process",
+            "LISTEN 0      128    0.0.0.0:22            0.0.0.0:*               users:((\"sshd\",pid=1,fd=3))",
+            "ESTAB  0      0      10.0.0.5:443          10.0.0.9:51414         users:((\"nginx\",pid=987,fd=9))",
+            "UNCONN 0      0      0.0.0.0:68            0.0.0.0:*               users:((\"dhclient\",pid=2,fd=4))",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+        let conns = parse_connections(&lines);
+        assert_eq!(conns.len(), 1, "only ESTAB rows are dependency evidence");
+        assert_eq!(conns[0].process.as_deref(), Some("nginx"));
     }
 
     #[test]

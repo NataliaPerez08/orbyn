@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::sync::OnceLock;
 
 use super::{AssessmentInput, Finding, Severity};
 use crate::domain::{Dependency, Filesystem, Service};
@@ -71,82 +72,159 @@ pub fn catalog() -> &'static [Rule] {
     ]
 }
 
-/// End-of-life OS patterns. First case-insensitive substring match wins.
+/// End-of-life OS table, embedded from `eol_os.csv` next to this module.
 ///
-/// (pattern, severity, vendor-support note)
-pub const EOL_TABLE_VERSION: &str = "2026-09";
+/// The table is data, not code: maintainers review it quarterly and bump its
+/// `version` line (see the file header and CONTRIBUTING.md). A unit test
+/// fails when the version is more than six months old so a stale table
+/// cannot ship silently.
+const EOL_OS_CSV: &str = include_str!("eol_os.csv");
 
-const EOL_OS: &[(&str, Severity, &str)] = &[
-    (
-        "ubuntu 14.04",
-        Severity::High,
-        "Ubuntu 14.04 LTS reached end of life in 2019",
-    ),
-    (
-        "ubuntu 16.04",
-        Severity::High,
-        "Ubuntu 16.04 LTS standard support ended in 2021",
-    ),
-    (
-        "ubuntu 18.04",
-        Severity::High,
-        "Ubuntu 18.04 LTS standard support ended in 2023",
-    ),
-    (
-        "centos 6",
-        Severity::High,
-        "CentOS 6 reached end of life in 2020",
-    ),
-    (
-        "centos 7",
-        Severity::High,
-        "CentOS 7 reached end of life in June 2024",
-    ),
-    (
-        "centos 8",
-        Severity::High,
-        "CentOS 8 reached end of life in 2021",
-    ),
-    (
-        "red hat enterprise linux 6",
-        Severity::High,
-        "RHEL 6 support ended in 2020",
-    ),
-    (
-        "red hat enterprise linux 7",
-        Severity::High,
-        "RHEL 7 support ended in 2024",
-    ),
-    ("rhel 6", Severity::High, "RHEL 6 support ended in 2020"),
-    ("rhel 7", Severity::High, "RHEL 7 support ended in 2024"),
-    ("debian 9", Severity::High, "Debian 9 LTS ended in 2022"),
-    ("debian 10", Severity::High, "Debian 10 LTS ended in 2024"),
-    (
-        "sles 11",
-        Severity::High,
-        "SUSE Linux Enterprise Server 11 support ended in 2019",
-    ),
-    (
-        "windows server 2008",
-        Severity::High,
-        "Windows Server 2008 extended support ended in 2020",
-    ),
-    (
-        "windows server 2012",
-        Severity::High,
-        "Windows Server 2012 extended support ended in 2023",
-    ),
-    (
-        "windows server 2016",
-        Severity::Warning,
-        "Windows Server 2016 extended support ends in 2027",
-    ),
-    (
-        "sles 12",
-        Severity::Warning,
-        "SUSE Linux Enterprise Server 12 LTSS ends in 2027",
-    ),
-];
+/// One row of the end-of-life OS table.
+struct EolEntry {
+    /// Case-insensitive substring matched against the asset's `os_name`.
+    pattern: String,
+    severity: Severity,
+    /// Vendor-support note surfaced as finding evidence.
+    note: String,
+}
+
+/// The parsed end-of-life table: a dated version plus ordered entries.
+/// First case-insensitive substring match against `os_name` wins.
+struct EolTable {
+    version: String,
+    entries: Vec<EolEntry>,
+}
+
+/// The embedded EOL table, parsed once on first use. A malformed embedded
+/// file is a programming error and panics loudly instead of silently
+/// disabling `os.eol` findings.
+fn eol_table() -> &'static EolTable {
+    static TABLE: OnceLock<EolTable> = OnceLock::new();
+    TABLE.get_or_init(|| parse_eol_csv(EOL_OS_CSV).expect("embedded EOL table must be valid"))
+}
+
+/// Parse the documented CSV dialect: `#` comments, a `version <YYYY-MM>`
+/// line, a `pattern,severity,note` header, then one entry per line.
+fn parse_eol_csv(src: &str) -> Result<EolTable, String> {
+    let mut version: Option<String> = None;
+    let mut saw_header = false;
+    let mut entries = Vec::new();
+
+    for (idx, raw) in src.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let loc = format!("line {}: ", idx + 1);
+
+        if version.is_none() {
+            let (key, value) = line
+                .split_once(' ')
+                .ok_or_else(|| format!("{loc}expected `version <YYYY-MM>`"))?;
+            if key != "version" {
+                return Err(format!("{loc}expected `version <YYYY-MM>`"));
+            }
+            if parse_ym(value).is_none() {
+                return Err(format!("{loc}version must be YYYY-MM, got `{value}`"));
+            }
+            version = Some(value.to_string());
+            continue;
+        }
+
+        if !saw_header {
+            if line != "pattern,severity,note" {
+                return Err(format!("{loc}expected `pattern,severity,note` header"));
+            }
+            saw_header = true;
+            continue;
+        }
+
+        let fields = csv_row(line).map_err(|e| format!("{loc}{e}"))?;
+        if fields.len() != 3 {
+            return Err(format!(
+                "{loc}expected 3 fields (pattern,severity,note), got {}",
+                fields.len()
+            ));
+        }
+        let pattern = fields[0].trim().to_lowercase();
+        if pattern.is_empty() {
+            return Err(format!("{loc}empty pattern"));
+        }
+        let severity = parse_severity(fields[1].trim()).map_err(|e| format!("{loc}{e}"))?;
+        let note = fields[2].trim().to_string();
+        if note.is_empty() {
+            return Err(format!("{loc}empty note"));
+        }
+        entries.push(EolEntry {
+            pattern,
+            severity,
+            note,
+        });
+    }
+
+    let version = version.ok_or("missing `version <YYYY-MM>` line")?;
+    if !saw_header {
+        return Err("missing `pattern,severity,note` header".into());
+    }
+    if entries.is_empty() {
+        return Err("EOL table has no entries; os.eol would be silently disabled".into());
+    }
+    Ok(EolTable { version, entries })
+}
+
+/// Split one CSV line into fields, honoring double-quoted fields with `""`
+/// escapes so notes may contain commas.
+fn csv_row(line: &str) -> Result<Vec<String>, String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes => {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            }
+            '"' => in_quotes = true,
+            ',' if !in_quotes => fields.push(std::mem::take(&mut field)),
+            _ => field.push(c),
+        }
+    }
+    if in_quotes {
+        return Err("unterminated quoted field".into());
+    }
+    fields.push(field);
+    Ok(fields)
+}
+
+/// Parse a `YYYY-MM` calendar version.
+fn parse_ym(s: &str) -> Option<(i32, u32)> {
+    let (year, month) = s.split_once('-')?;
+    if year.len() != 4 || month.len() != 2 {
+        return None;
+    }
+    let year: i32 = year.parse().ok()?;
+    let month: u32 = month.parse().ok()?;
+    if (1..=12).contains(&month) {
+        Some((year, month))
+    } else {
+        None
+    }
+}
+
+fn parse_severity(s: &str) -> Result<Severity, String> {
+    match s {
+        "info" => Ok(Severity::Info),
+        "warning" => Ok(Severity::Warning),
+        "high" => Ok(Severity::High),
+        other => Err(format!("unknown severity `{other}` (info|warning|high)")),
+    }
+}
 
 /// Cleartext protocols that should not exist in a modern estate.
 const INSECURE_PORTS: &[u16] = &[21, 23];
@@ -176,25 +254,23 @@ fn rule_os_missing(input: &AssessmentInput, findings: &mut Vec<Finding>) {
 }
 
 fn rule_os_eol(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    let table = eol_table();
     for asset in &input.assets {
         let Some(os_name) = &asset.os_name else {
             continue;
         };
         let os_lower = os_name.to_lowercase();
-        if let Some((_, severity, note)) = EOL_OS
-            .iter()
-            .find(|(pattern, _, _)| os_lower.contains(pattern))
-        {
+        if let Some(entry) = table.entries.iter().find(|e| os_lower.contains(&e.pattern)) {
             findings.push(Finding {
                 rule_id: "os.eol".into(),
-                severity: *severity,
+                severity: entry.severity,
                 message: "operating system is at or near end of vendor support; \
                           in-place upgrade or re-platforming is likely required before migration"
                     .into(),
                 evidence: vec![
                     format!("reported OS: {os_name}"),
-                    format!("EOL table version: {EOL_TABLE_VERSION}"),
-                    note.to_string(),
+                    format!("EOL table version: {}", table.version),
+                    entry.note.clone(),
                 ],
                 asset_id: Some(asset.id.clone()),
             });
@@ -427,7 +503,7 @@ fn asset_label(input: &AssessmentInput, id: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::{Asset, Connection, Dependency, Filesystem, Service};
-    use chrono::Utc;
+    use chrono::{Datelike, Utc};
 
     fn asset(id: &str, ip: &str, os_name: Option<&str>) -> Asset {
         Asset {
@@ -525,6 +601,81 @@ mod tests {
             findings.iter().all(|f| f.evidence.len() >= 2),
             "OS + vendor note evidence"
         );
+    }
+
+    #[test]
+    fn eol_table_parses_embedded_file() {
+        let table = eol_table();
+        assert!(parse_ym(&table.version).is_some(), "version is YYYY-MM");
+        assert!(table.entries.len() >= 17, "known OS families present");
+        assert!(table
+            .entries
+            .iter()
+            .all(|e| !e.pattern.is_empty() && e.pattern.chars().all(|c| !c.is_uppercase())));
+        for pattern in ["ubuntu 18.04", "centos 7", "windows server 2012"] {
+            assert!(
+                table.entries.iter().any(|e| e.pattern == pattern),
+                "missing `{pattern}`"
+            );
+        }
+    }
+
+    #[test]
+    fn eol_table_version_is_recent() {
+        // Documented cadence: quarterly review, so allow six months of slack
+        // before the table counts as stale and fails the build loudly.
+        let table = eol_table();
+        let (year, month) = parse_ym(&table.version).expect("version must be YYYY-MM");
+        let now = Utc::now();
+        let age_months = (now.year() - year) * 12 + now.month() as i32 - month as i32;
+        assert!(
+            age_months <= 6,
+            "EOL table version {} is stale; review eol_os.csv and bump the version",
+            table.version
+        );
+    }
+
+    #[test]
+    fn parse_eol_csv_synthetic_table() {
+        let src = "# comment\nversion 2026-01\npattern,severity,note\n\
+                   \"Legacy OS\",high,\"Ended in 2020, vendor\"\n\
+                   newer,warning,\"Ends soon\"\n";
+        let table = parse_eol_csv(src).expect("parses");
+        assert_eq!(table.version, "2026-01");
+        assert_eq!(table.entries.len(), 2);
+        assert_eq!(table.entries[0].pattern, "legacy os", "pattern lowercased");
+        assert_eq!(table.entries[0].severity, Severity::High);
+        assert_eq!(table.entries[0].note, "Ended in 2020, vendor");
+        assert_eq!(table.entries[1].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn parse_eol_csv_rejects_malformed_tables() {
+        let bad = [
+            "pattern,severity,note\nlegacy,high,ended\n", // no version line
+            "version 2026-13\npattern,severity,note\nlegacy,high,ended\n", // bad month
+            "version 2026-1\npattern,severity,note\nlegacy,high,ended\n", // bad format
+            "version 2026-01\nlegacy,high,ended\n",       // no header row
+            "version 2026-01\npattern,severity,note\n",   // no entries
+            "version 2026-01\npattern,severity,note\nlegacy,critical,ended\n", // severity
+            "version 2026-01\npattern,severity,note\nlegacy,high\n", // field count
+            "version 2026-01\npattern,severity,note\nlegacy,high,\"open\n", // quote
+            "version 2026-01\npattern,severity,note\n,high,ended\n", // empty pattern
+            "version 2026-01\npattern,severity,note\nlegacy,high,\n", // empty note
+        ];
+        for src in bad {
+            assert!(parse_eol_csv(src).is_err(), "must reject: {src}");
+        }
+    }
+
+    #[test]
+    fn csv_row_handles_quoted_fields() {
+        assert_eq!(csv_row("a,b,\"c, d\"").unwrap(), vec!["a", "b", "c, d"]);
+        assert_eq!(
+            csv_row("\"he said \"\"hi\"\"\",x").unwrap(),
+            vec!["he said \"hi\"", "x"]
+        );
+        assert!(csv_row("\"unterminated").is_err());
     }
 
     #[test]

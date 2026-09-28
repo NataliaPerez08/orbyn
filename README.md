@@ -173,7 +173,8 @@ The repository currently provides:
   * Active connection observations from the SSH/Windows host probes
     (`ss -tnp` / `Get-NetTCPConnection`), reconciled into dependency edges
     whenever the remote endpoint matches a known asset.
-  * DNS relationship evidence (`orbyn deps dns`).
+  * DNS relationship evidence (`orbyn deps dns`; forward, CNAME-chain and
+    PTR alias matching, low confidence).
   * Manual relationship confirmation and curation (`orbyn deps add`,
     `orbyn deps confirm`, `orbyn deps remove`).
   * Labeled graph views: `orbyn graph` (table/JSON/CSV), `--mermaid`

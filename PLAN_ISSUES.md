@@ -5,8 +5,8 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
-dependencias), #8, #11, #13, #14, #15, #19, #26, #28, #33, #34, #36 y #37**.
-Mitigados con trabajo residual (permanecen en Fase 2): **#7, #12 y #16**.
+dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #26, #28,
+#33, #34, #36 y #37**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -17,19 +17,17 @@ valores obsoletos (#8), las dependencias dejaron de depender del orden de
 descubrimiento (#6), `--no-verify` avisa de forma prominente (#4) y la
 community SNMP ya no viaja en argv (#6).
 
-## Fase 2 — Calidad de datos y parsers
+## Fase 2 — Calidad de datos y parsers ✅
 
-- **#9 `sysDescr` como `os_name`** — guardar el raw en un campo aparte y derivar
-  vendor/OS por reglas; no volcar la cadena `sysDescr` completa en `os_name`.
-- **#10 Heurísticas de `classify_device`** — matching más estricto (límites de
-  palabra, prioridad de coincidencias exactas sobre subcadenas).
-- **#7 Tabla EOL estática** — ~~MITIGADO~~ externalizar la tabla a datos y
-  mantener la cadencia de actualización; `EOL_TABLE_VERSION` ya se emite como
-  evidencia.
-- **#12 Parser de `ss`/`netstat`** — ~~MITIGADO~~ añadir fixtures de las
-  variantes BusyBox restantes.
-- **#16 Evidencia DNS superficial** — ~~MITIGADO~~ manejo de cadenas CNAME y
-  matching adicional por IP.
+Completada: el `sysDescr` crudo se guarda en su propio campo `sys_descr` y
+`os_name` se deriva por reglas (#9), `classify_device` aplica límites de
+palabra para descartar falsos positivos como "bios" (#10), la tabla EOL se
+externalizó a `src/assessment/eol_os.csv` con versión derivada del propio
+archivo y cadencia trimestral documentada y cubierta por test (#7), el parser
+de `ss`/`netstat` cubre con fixtures las variantes BusyBox y net-tools,
+incluida la columna de proceso de `netstat -p` (#12), y la evidencia DNS
+maneja cadenas CNAME (vía `dig`, con fallback al resolver del sistema) y
+matching inverso por PTR (#16).
 
 ## Fase 3 — Integridad de inventario e integraciones
 

@@ -171,7 +171,8 @@ Evidence may come from:
   and upserts an edge with `active-connections` evidence);
 - DNS relationships (v0.4: `orbyn deps dns` forward-resolves asset hostnames
   and links assets whose hostnames point at each other — low-confidence
-  alias evidence, not a runtime dependency);
+  alias evidence, not a runtime dependency; CNAME chains are captured via
+  `dig` when available and reverse PTR records add IP-based matching);
 - firewall/network flow logs (planned);
 - eBPF (planned);
 - service configuration (planned);

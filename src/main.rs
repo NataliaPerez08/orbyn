@@ -947,20 +947,35 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
             let result: Result<()> = async {
                 let assets = store.list_assets().await?;
                 let mut resolutions = Vec::new();
+                let mut reverse = Vec::new();
                 let mut failed = 0usize;
                 for asset in &assets {
                     let Some(hostname) = &asset.hostname else {
                         continue;
                     };
                     match orbyn::collectors::dns::resolve_host(hostname).await {
-                        Ok(ips) => resolutions.push((hostname.clone(), ips)),
+                        Ok(resolution) => resolutions.push((hostname.clone(), resolution)),
                         Err(e) => {
                             failed += 1;
                             tracing::warn!(hostname = %hostname, error = %e, "DNS resolution failed");
                         }
                     }
                 }
-                let edges = orbyn::collectors::dns::dns_edges(&assets, &resolutions);
+                for asset in &assets {
+                    match orbyn::collectors::dns::resolve_ptr(asset.ip).await {
+                        Ok(names) if !names.is_empty() => reverse.push((asset.ip, names)),
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::debug!(ip = %asset.ip, error = %e, "PTR resolution failed");
+                        }
+                    }
+                }
+                let mut edges = orbyn::collectors::dns::dns_edges(&assets, &resolutions);
+                edges.extend(orbyn::collectors::dns::dns_edges_ptr(&assets, &reverse));
+                // Forward and reverse evidence can name the same pair; keep
+                // one edge per (source, target).
+                let mut seen = std::collections::HashSet::new();
+                edges.retain(|e| seen.insert((e.source_asset_id.clone(), e.target_asset_id.clone())));
                 let count = edges.len();
                 for edge in edges {
                     store

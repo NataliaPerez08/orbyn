@@ -521,10 +521,7 @@ mod tests {
             .collect();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].hostname.as_deref(), Some("switch-a"));
-        assert_eq!(
-            assets[0].os_name.as_deref(),
-            Some("Linux")
-        );
+        assert_eq!(assets[0].os_name.as_deref(), Some("Linux"));
         assert_eq!(
             assets[0].sys_descr.as_deref(),
             Some("Linux host 5.15.0-91-generic example")

@@ -1,0 +1,29 @@
+# Orbyn end-of-life OS table.
+#
+# Each row is matched case-insensitively as a substring of the asset's
+# `os_name`; the first matching row wins. Severity is one of
+# info | warning | high. The note is surfaced as finding evidence.
+#
+# Update cadence: review this table quarterly and bump the `version` line to
+# the review month (YYYY-MM) even when no entry changes. A unit test fails
+# when the version is more than six months old, so a stale table cannot ship
+# silently.
+version 2026-09
+pattern,severity,note
+ubuntu 14.04,high,"Ubuntu 14.04 LTS reached end of life in 2019"
+ubuntu 16.04,high,"Ubuntu 16.04 LTS standard support ended in 2021"
+ubuntu 18.04,high,"Ubuntu 18.04 LTS standard support ended in 2023"
+centos 6,high,"CentOS 6 reached end of life in 2020"
+centos 7,high,"CentOS 7 reached end of life in June 2024"
+centos 8,high,"CentOS 8 reached end of life in 2021"
+red hat enterprise linux 6,high,"RHEL 6 support ended in 2020"
+red hat enterprise linux 7,high,"RHEL 7 support ended in 2024"
+rhel 6,high,"RHEL 6 support ended in 2020"
+rhel 7,high,"RHEL 7 support ended in 2024"
+debian 9,high,"Debian 9 LTS ended in 2022"
+debian 10,high,"Debian 10 LTS ended in 2024"
+sles 11,high,"SUSE Linux Enterprise Server 11 support ended in 2019"
+windows server 2008,high,"Windows Server 2008 extended support ended in 2020"
+windows server 2012,high,"Windows Server 2012 extended support ended in 2023"
+windows server 2016,warning,"Windows Server 2016 extended support ends in 2027"
+sles 12,warning,"SUSE Linux Enterprise Server 12 LTSS ends in 2027"

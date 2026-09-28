@@ -14,6 +14,7 @@ by the collectors you plan to use:
 | SNMP discovery | `snmpwalk` from net-snmp |
 | Linux or Windows host discovery | OpenSSH client (`ssh`) |
 | NetBox import | `curl` |
+| DNS relationship evidence (CNAME chains, PTR) | `dig` (optional; without it only forward IP matching via the system resolver) |
 
 Host discovery uses key-based SSH authentication through `ssh-agent` or an
 identity file. Orbyn does not store passwords or private key contents.

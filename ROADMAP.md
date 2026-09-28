@@ -176,8 +176,7 @@ private infrastructure and a public cloud before expanding coverage.
 
 ### Phase 1 — Security and operational correctness
 
-**Status:** implemented; residual DNS CNAME handling and additional parser
-fixtures remain follow-up work.
+**Status:** implemented.
 
 **Goal:** remove known security and reliability risks before expanding
 integrations.

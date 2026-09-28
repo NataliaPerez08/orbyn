@@ -32,11 +32,13 @@ release on 2026-09-20.
 
 - **Boundary A — operator input**: `--db`, `--target`, annotations, import
   stdin, environment variables (`ORBYN_*`), and the optional `.env` file.
-- **Boundary B — external tools & remotes**: `nmap`, `snmpwalk`, `ssh`, `curl`
-  (path configurable via `ORBYN_*_BIN`); remote SNMP agents, SSH servers and
-  the NetBox HTTP API. Their stdout/stderr is parsed into observations.
+- **Boundary B — external tools & remotes**: `nmap`, `snmpwalk`, `ssh`, `curl`,
+  `dig` (paths configurable via `ORBYN_*_BIN`); remote SNMP agents, SSH servers
+  and the NetBox HTTP API. Their stdout/stderr is parsed into observations.
 - **Boundary C — system resolver**: `orbyn deps dns` resolves hostnames via
-  `getaddrinfo` (blocking pool).
+  `dig +short` when available (capturing CNAME chains and PTR records) and
+  falls back to `getaddrinfo` (blocking pool) otherwise. Hostnames are only
+  passed to `dig` as argv elements when they cannot be mistaken for options.
 - **Boundary D — persistence**: the SQLite database file plus job audit rows.
 - **Boundary E — output**: stdout tables/JSON/CSV, stderr logs, exporter output
   files, Mermaid graphs.

@@ -111,3 +111,54 @@ fn connections_command_shows_evidence() {
     );
     assert!(!out.contains("127.0.0.1"));
 }
+
+/// A fake `dig` answering forward queries (`+short <host>`) and reverse
+/// lookups (`+short -x <ip>`) with canned records:
+///
+/// - `db-01` resolves to cache-01's IP (forward IP match),
+/// - `web-01` is a CNAME chain to `db-01` with an unmanaged final address
+///   (CNAME-chain match),
+/// - cache-01's IP PTR-resolves to `db-01` (reverse match).
+#[cfg(unix)]
+pub const FAKE_DIG_SCRIPT: &str = r#"#!/usr/bin/env bash
+if [ "$2" = "-x" ]; then
+  case "$3" in
+    10.0.0.9) echo "db-01." ;;
+  esac
+else
+  case "$2" in
+    db-01) echo "10.0.0.9" ;;
+    web-01) echo "db-01."; echo "203.0.113.7" ;;
+    cache-01) echo "203.0.113.99" ;;
+  esac
+fi
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn deps_dns_produces_forward_cname_and_ptr_edges() {
+    let dir = TempDir::new("deps-dns");
+    seed_with_edges(&dir);
+    let bin = fake_bin(&dir, "dig", FAKE_DIG_SCRIPT);
+
+    let out = run_ok_combined(orbyn(&dir).args(["deps", "dns"]).env("ORBYN_DIG_BIN", &bin));
+    assert!(
+        out.contains("DNS evidence produced 3 relationship edge(s)"),
+        "got: {out}"
+    );
+
+    let graph = run_ok(orbyn(&dir).args(["graph", "--format", "csv"]));
+    assert!(
+        graph.contains("10-0-0-2,10-0-0-9,dns,0"),
+        "forward IP match (db-01 -> cache-01): {graph}"
+    );
+    assert!(
+        graph.contains("10-0-0-5,10-0-0-2,dns,0"),
+        "CNAME chain match (web-01 -> db-01): {graph}"
+    );
+    assert!(
+        graph.contains("10-0-0-9,10-0-0-2,dns,0"),
+        "PTR match (cache-01 -> db-01): {graph}"
+    );
+}
