@@ -197,22 +197,26 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 ## Security review findings
 
 36. **NetBox pagination URL validation is prefix-based** — `bug`, **high**
-    `src/integrations/netbox.rs` accepts any `next` URL that starts with the
-    configured base URL. Hostnames such as
-    `https://netbox.example.com.evil` and userinfo forms such as
-    `https://netbox.example.com@evil` can pass the check, after which the API
-    token is sent to that URL through `curl`. Parse URLs and require an exact
-    origin match; reject userinfo and unexpected schemes. Regression coverage
-    should include hostile `next` URLs.
+    ~~FIXED~~
+    `next` URLs are now parsed with a strict origin grammar
+    (`src/integrations/netbox.rs::url_origin`: http/https only, no
+    userinfo, reg-name or bracketed IPv6 hosts, normalized default ports)
+    and must match the base URL's exact origin — `https://netbox.example.com.evil`
+    and `https://netbox.example.com@evil` no longer pass. The base `--url`
+    itself is validated the same way at client construction. Regression
+    coverage: hostile-`next` unit tests plus an E2E test asserting the
+    hostile URL is never requested.
 
 37. **Sequential subprocess pipe reads can deadlock** — `bug`, **high**
-    Nmap, SSH, SNMP and NetBox read all of stdout before reading stderr:
-    `src/collectors/nmap.rs`, `src/collectors/ssh.rs`,
-    `src/collectors/snmp.rs` and `src/integrations/netbox.rs`. A child that
-    fills the stderr pipe can block forever before the timeout or `wait` is
-    reached; Nmap has no process timeout. Read both streams concurrently and
-    apply the timeout to the complete process lifecycle, terminating the child
-    on timeout.
+    ~~FIXED~~
+    All subprocess call sites (nmap, ssh, snmpwalk, curl) now run through
+    `src/process.rs::run_captured`: stdout and stderr are read (and the
+    optional stdin payload written) concurrently via `tokio::join!`, one
+    timeout bounds the complete process lifecycle, and the child is killed
+    and reaped on expiry. Nmap gained a 1800 s default timeout, overridable
+    with `ORBYN_NMAP_TIMEOUT_SECS`. Regression coverage: a stderr-flood
+    child that deadlocked the old code now completes, and a hanging child
+    is killed at the timeout.
 
 38. **Secrets can be exposed in Orbyn's own argv** — `gap`, **medium**
     `--token` and `--community` place credentials in the Orbyn command line,

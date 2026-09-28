@@ -10,28 +10,36 @@
 
 use std::net::IpAddr;
 use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::domain::{Asset, Interface, Observation, Service};
+use crate::process::run_captured;
 
 use super::classify::classify_device;
 use super::types::{Collector, ScanTarget};
 
+/// Default whole-process timeout for an nmap run. Generous on purpose: CIDR
+/// targets down to /1 are accepted and `-sV` probes are slow. Override with
+/// `ORBYN_NMAP_TIMEOUT_SECS`.
+const DEFAULT_NMAP_TIMEOUT_SECS: u64 = 1800;
+
 pub struct NmapCollector {
     binary: String,
+    timeout: Duration,
 }
 
 impl NmapCollector {
     pub fn new() -> Self {
         Self {
             binary: std::env::var("ORBYN_NMAP_BIN").unwrap_or_else(|_| "nmap".to_string()),
+            timeout: nmap_timeout_from_env(),
         }
     }
 
@@ -54,36 +62,59 @@ impl Collector for NmapCollector {
             ScanTarget::Cidr(cidr) => cidr.clone(),
         };
 
-        let mut child = Command::new(&self.binary)
+        let child = Command::new(&self.binary)
             .arg("-oX")
             .arg("-")
             .arg("-sV")
             .arg("--no-stylesheet")
             .arg(&target)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .context("failed to start nmap; is it installed?")?;
 
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut out) = child.stdout.take() {
-            out.read_to_string(&mut stdout)
-                .await
-                .context("failed reading nmap stdout")?;
-        }
-        if let Some(mut err) = child.stderr.take() {
-            err.read_to_string(&mut stderr)
-                .await
-                .context("failed reading nmap stderr")?;
-        }
-        let status = child.wait().await.context("failed waiting for nmap")?;
+        let captured = run_captured(
+            child,
+            None,
+            None,
+            self.timeout,
+            format!(
+                "nmap timed out against {target} after {}s \
+                 (adjust with ORBYN_NMAP_TIMEOUT_SECS)",
+                self.timeout.as_secs()
+            ),
+        )
+        .await?;
 
-        if !status.success() {
-            return Err(anyhow!("nmap exited with {status}: {}", stderr.trim()));
+        if !captured.status.success() {
+            return Err(anyhow!(
+                "nmap exited with {}: {}",
+                captured.status,
+                captured.stderr.trim()
+            ));
         }
 
-        Ok(self.parse_xml(&stdout)?)
+        Ok(self.parse_xml(&captured.stdout)?)
+    }
+}
+
+/// Resolve the nmap lifecycle timeout from `ORBYN_NMAP_TIMEOUT_SECS`,
+/// falling back to (and warning about) the default on invalid values.
+fn nmap_timeout_from_env() -> Duration {
+    match std::env::var("ORBYN_NMAP_TIMEOUT_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(secs) if secs > 0 => Duration::from_secs(secs),
+            _ => {
+                tracing::warn!(
+                    "invalid ORBYN_NMAP_TIMEOUT_SECS '{raw}'; \
+                     using the {DEFAULT_NMAP_TIMEOUT_SECS}s default"
+                );
+                Duration::from_secs(DEFAULT_NMAP_TIMEOUT_SECS)
+            }
+        },
+        Err(_) => Duration::from_secs(DEFAULT_NMAP_TIMEOUT_SECS),
     }
 }
 

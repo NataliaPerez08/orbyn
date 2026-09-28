@@ -54,6 +54,67 @@ fn discover_rejects_unrestricted_scope() {
     );
 }
 
+/// A fake `nmap` that floods stderr with far more than the pipe buffer
+/// before emitting valid XML: sequential pipe reads would deadlock here.
+#[cfg(unix)]
+const STDERR_FLOOD_NMAP_SCRIPT: &str = r#"#!/usr/bin/env bash
+for i in $(seq 1 20000); do echo "stderr noise noise noise noise noise" >&2; done
+cat <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -oX - -sV" start="1700000000" version="7.94">
+<host starttime="1700000000" endtime="1700000001">
+<status state="up" reason="syn-ack"/>
+<address addr="10.0.0.10" addrtype="ipv4"/>
+<ports>
+<port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+</ports>
+</host>
+</nmaprun>
+XML
+"#;
+
+#[cfg(unix)]
+#[test]
+fn nmap_discovery_survives_stderr_flood() {
+    let dir = TempDir::new("nmap-flood");
+    let bin = fake_bin(&dir, "nmap", STDERR_FLOOD_NMAP_SCRIPT);
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.10"])
+            .env("ORBYN_NMAP_BIN", &bin),
+    );
+    assert!(out.contains("1 assets, 1 services"), "{out}");
+
+    let assets = run_ok(orbyn(&dir).arg("assets"));
+    assert!(assets.contains("10.0.0.10"), "asset persisted: {assets}");
+}
+
+#[cfg(unix)]
+#[test]
+fn nmap_discovery_times_out_hanging_scans() {
+    let dir = TempDir::new("nmap-hang");
+    // `exec` so the hang is the child itself and gets killed on timeout.
+    let bin = fake_bin(&dir, "nmap", "#!/usr/bin/env bash\nexec sleep 600\n");
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.10"])
+            .env("ORBYN_NMAP_BIN", &bin)
+            .env("ORBYN_NMAP_TIMEOUT_SECS", "1"),
+    );
+    assert!(out.contains("timed out"), "got: {out}");
+    assert!(
+        out.contains("ORBYN_NMAP_TIMEOUT_SECS"),
+        "error names the override: {out}"
+    );
+
+    // the failed job is recorded with the timeout as its error
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(jobs.contains("nmap,failed"), "{jobs}");
+    assert!(jobs.contains("timed out"), "{jobs}");
+}
+
 #[cfg(unix)]
 #[test]
 fn snmp_discovery_classifies_network_device() {

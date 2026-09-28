@@ -350,6 +350,7 @@ clean for piping.
 | `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path |
 | `ORBYN_LOG`  | `orbyn=warn`      | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
+| `ORBYN_NMAP_TIMEOUT_SECS` | `1800` | Whole-process timeout for an nmap run |
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | Default SNMP v1/v2c community string |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |

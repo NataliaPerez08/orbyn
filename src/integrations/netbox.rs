@@ -9,17 +9,17 @@
 //! an `Authorization` header (`-H @-`), so it never appears in process
 //! arguments, logs, disk, or CLI output.
 
+use std::net::Ipv6Addr;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::time::timeout;
 
 use crate::import::ImportedAsset;
+use crate::process::run_captured;
 
 /// Paginated NetBox envelope.
 #[derive(Debug, Deserialize)]
@@ -33,6 +33,89 @@ const NETBOX_PAGE_SIZE: usize = 100;
 const NETBOX_MAX_PAGES: usize = 10_000;
 const NETBOX_MAX_RECORDS: usize = 1_000_000;
 const NETBOX_MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+const NETBOX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The origin of an absolute http(s) URL: scheme, host and effective port.
+///
+/// Hosts are lowercased reg-names or canonical IPv6 literals and ports are
+/// normalized to the scheme default, so origins compare with `==`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UrlOrigin {
+    scheme: String,
+    host: String,
+    port: u16,
+}
+
+/// Parse the origin of an absolute http(s) URL under a strict grammar.
+///
+/// Accepted: `scheme://host[:port]/...` where the scheme is `http`/`https`
+/// (case-insensitive), the host is a dotted reg-name of `[A-Za-z0-9.-]` or a
+/// bracketed IPv6 literal, and the port is optional decimal digits. Anything
+/// else — userinfo (`user:pass@host`), percent-encoding, empty ports, other
+/// schemes, relative URLs — is rejected with `None`.
+///
+/// Pagination `next` URLs come from the server; a prefix check is not enough
+/// (`https://netbox.example.com.evil/` and `https://netbox.example.com@evil/`
+/// both pass one), so callers must compare parsed origins instead.
+fn url_origin(url: &str) -> Option<UrlOrigin> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+
+    // The authority runs to the first path/query/fragment separator.
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    // Userinfo is forbidden: under this grammar an '@' can only be a
+    // userinfo separator (reg-names and IPv6 literals exclude it), and
+    // `https://host@evil/` would otherwise send the token to `evil`.
+    if authority.contains('@') {
+        return None;
+    }
+
+    let (host, port_str, is_ipv6) = if let Some(bracketed) = authority.strip_prefix('[') {
+        // Bracketed IPv6 literal: `[::1]` or `[::1]:8443`. Canonicalized via
+        // `Ipv6Addr` so equivalent literals compare equal.
+        let (literal, after) = bracketed.split_once(']')?;
+        let canonical = literal.parse::<Ipv6Addr>().ok()?.to_string();
+        // Anything after `]` must be a port; bare junk is malformed.
+        let port = match after {
+            "" => None,
+            _ => Some(after.strip_prefix(':')?),
+        };
+        (canonical, port, true)
+    } else {
+        match authority.rsplit_once(':') {
+            // `host:port` — an unbracketed host never contains ':'.
+            Some((host, port)) if !host.contains(':') => (host.to_string(), Some(port), false),
+            _ => (authority.to_string(), None, false),
+        }
+    };
+
+    let host = if is_ipv6 {
+        host
+    } else {
+        if host.is_empty()
+            || !host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+        {
+            return None;
+        }
+        host.to_ascii_lowercase()
+    };
+
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    let port = match port_str {
+        Some(digits) => digits.parse::<u16>().ok()?,
+        None => default_port,
+    };
+
+    Some(UrlOrigin { scheme, host, port })
+}
 
 #[derive(Debug, Deserialize)]
 struct NamedRef {
@@ -166,19 +249,31 @@ fn env_from_tags(tags: &[String]) -> Option<String> {
 /// A read-only NetBox API client backed by the `curl` binary.
 pub struct NetBoxClient {
     base_url: String,
+    origin: UrlOrigin,
     token: Option<String>,
     insecure: bool,
     binary: String,
 }
 
 impl NetBoxClient {
-    pub fn new(base_url: &str, token: Option<String>, insecure: bool) -> Self {
-        Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+    /// Create a client for `base_url`, which must be an absolute http(s)
+    /// URL without credentials; the token would otherwise be sent to a
+    /// malformed destination.
+    pub fn new(base_url: &str, token: Option<String>, insecure: bool) -> Result<Self> {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        let origin = url_origin(&base_url).ok_or_else(|| {
+            anyhow!(
+                "invalid NetBox URL '{base_url}': expected an absolute http(s) \
+                 URL without embedded credentials"
+            )
+        })?;
+        Ok(Self {
+            base_url,
+            origin,
             token,
             insecure,
             binary: std::env::var("ORBYN_CURL_BIN").unwrap_or_else(|_| "curl".to_string()),
-        }
+        })
     }
 
     /// Fetch and parse all devices.
@@ -214,7 +309,11 @@ impl NetBoxClient {
             let Some(next) = envelope.next.filter(|next| !next.trim().is_empty()) else {
                 return Ok(records);
             };
-            if !next.starts_with(&self.base_url) {
+            // The `next` URL is server-controlled: require an exact origin
+            // match so the token is never sent to a redirected destination
+            // (`https://netbox.example.com.evil/` and userinfo forms pass a
+            // plain prefix check).
+            if url_origin(&next).as_ref() != Some(&self.origin) {
                 return Err(anyhow!("NetBox pagination returned an unexpected URL"));
             }
             url = next;
@@ -227,14 +326,12 @@ impl NetBoxClient {
     }
 
     async fn get_url(&self, url: &str) -> Result<String> {
-        let has_token = self.token.is_some();
-
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-sS");
         if self.insecure {
             cmd.arg("--insecure");
         }
-        if has_token {
+        if self.token.is_some() {
             // Read the Authorization header from stdin (`-H @-`) so the token
             // never hits the filesystem or the process argument list.
             cmd.arg("-H").arg("@-");
@@ -242,59 +339,37 @@ impl NetBoxClient {
         cmd.arg(url)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .context("failed to start curl; is it installed?")?;
 
-        match &self.token {
-            Some(token) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    stdin
-                        .write_all(token_header_line(token).as_bytes())
-                        .await
-                        .context("writing NetBox token header to curl stdin")?;
-                    stdin.shutdown().await.ok();
-                }
-            }
-            None => {
-                // Close stdin so an unexpectedly header-reading curl still
-                // reaches EOF instead of blocking.
-                child.stdin.take();
-            }
-        }
+        let stdin_payload = self.token.as_deref().map(token_header_line);
+        let captured = run_captured(
+            child,
+            stdin_payload.as_deref(),
+            Some(NETBOX_MAX_RESPONSE_BYTES),
+            NETBOX_REQUEST_TIMEOUT,
+            format!("curl timed out against {url}"),
+        )
+        .await?;
 
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(out) = child.stdout.take() {
-            let mut limited = out.take(NETBOX_MAX_RESPONSE_BYTES + 1);
-            limited
-                .read_to_string(&mut stdout)
-                .await
-                .context("reading curl stdout")?;
-            if stdout.len() as u64 > NETBOX_MAX_RESPONSE_BYTES {
-                return Err(anyhow!(
-                    "NetBox response exceeds the {} byte limit",
-                    NETBOX_MAX_RESPONSE_BYTES
-                ));
-            }
+        if captured.stdout.len() as u64 > NETBOX_MAX_RESPONSE_BYTES {
+            return Err(anyhow!(
+                "NetBox response exceeds the {} byte limit",
+                NETBOX_MAX_RESPONSE_BYTES
+            ));
         }
-        if let Some(mut err) = child.stderr.take() {
-            err.read_to_string(&mut stderr)
-                .await
-                .context("reading curl stderr")?;
+        if !captured.status.success() {
+            return Err(anyhow!(
+                "curl exited with {}: {}",
+                captured.status,
+                captured.stderr.trim()
+            ));
         }
-        let status = timeout(Duration::from_secs(60), child.wait())
-            .await
-            .map_err(|_| anyhow!("curl timed out against {url}"))?
-            .context("waiting for curl")?;
-
-        if !status.success() {
-            return Err(anyhow!("curl exited with {status}: {}", stderr.trim()));
-        }
-        Ok(stdout)
+        Ok(captured.stdout)
     }
 }
 
@@ -412,5 +487,115 @@ mod tests {
             token_header_line("supersecret"),
             "Authorization: Token supersecret\n"
         );
+    }
+
+    #[test]
+    fn url_origin_parses_scheme_host_and_port() {
+        let o = url_origin("https://netbox.example.com:8443/api/dcim/devices/")
+            .expect("absolute https URL with port");
+        assert_eq!(o.scheme, "https");
+        assert_eq!(o.host, "netbox.example.com");
+        assert_eq!(o.port, 8443);
+    }
+
+    #[test]
+    fn url_origin_normalizes_case_and_default_ports() {
+        assert_eq!(
+            url_origin("https://NetBox.Example.COM"),
+            url_origin("https://netbox.example.com:443/api/dcim/devices/")
+        );
+        assert_eq!(url_origin("http://host:80/"), url_origin("http://host/"));
+        assert_ne!(
+            url_origin("http://host/"),
+            url_origin("https://host/"),
+            "scheme is part of the origin"
+        );
+    }
+
+    #[test]
+    fn url_origin_accepts_ipv6_literals() {
+        let o = url_origin("https://[2001:db8::1]:8443/api").expect("bracketed IPv6");
+        assert_eq!(o.host, "2001:db8::1");
+        assert_eq!(o.port, 8443);
+        assert_eq!(
+            Some(o),
+            url_origin("https://[2001:0DB8:0000:0000:0000:0000:0000:0001]:8443/x")
+        );
+        assert!(url_origin("https://[not-ipv6]/api").is_none());
+        assert!(
+            url_origin("https://[::1]garbage/api").is_none(),
+            "trailing junk after the IPv6 literal is malformed"
+        );
+    }
+
+    #[test]
+    fn url_origin_rejects_userinfo_and_malformed_forms() {
+        // userinfo in all shapes
+        assert!(url_origin("https://netbox.example.com@evil.com/api").is_none());
+        assert!(url_origin("https://user:pass@netbox.example.com/api").is_none());
+        // non-http(s) schemes
+        assert!(url_origin("file:///etc/passwd").is_none());
+        assert!(url_origin("gopher://netbox.example.com/x").is_none());
+        // relative or scheme-less
+        assert!(url_origin("/api/dcim/devices/").is_none());
+        assert!(url_origin("netbox.example.com/api").is_none());
+        assert!(url_origin("").is_none());
+        assert!(url_origin("https://").is_none());
+        // empty port, percent-encoding, whitespace, unbracketed IPv6
+        assert!(url_origin("https://netbox.example.com:/api").is_none());
+        assert!(url_origin("https://net%62ox.example.com/api").is_none());
+        assert!(url_origin("https://net box.example.com/api").is_none());
+        assert!(url_origin("https://::1/api").is_none());
+    }
+
+    #[test]
+    fn hostile_next_urls_fail_the_origin_check() {
+        let base = url_origin("https://netbox.example.com").expect("valid base");
+        // Prefix-passing but different host: the core #36 regression.
+        assert_ne!(
+            Some(base.clone()),
+            url_origin("https://netbox.example.com.evil/api/dcim/devices/")
+        );
+        // Userinfo form: unparseable under the strict grammar.
+        assert!(url_origin("https://netbox.example.com@evil.com/api").is_none());
+        // Scheme or port mismatch.
+        assert_ne!(
+            Some(base.clone()),
+            url_origin("http://netbox.example.com/api")
+        );
+        assert_ne!(
+            Some(base.clone()),
+            url_origin("https://netbox.example.com:8443/api")
+        );
+        // A completely different host.
+        assert_ne!(Some(base.clone()), url_origin("https://evil.com/api"));
+    }
+
+    #[test]
+    fn legitimate_next_urls_pass_the_origin_check() {
+        let base = url_origin("https://netbox.example.com").expect("valid base");
+        assert_eq!(
+            Some(base.clone()),
+            url_origin("https://netbox.example.com/api/dcim/devices/?limit=100&page=2&offset=100")
+        );
+        // Explicit default port is the same origin.
+        assert_eq!(
+            Some(base.clone()),
+            url_origin("https://netbox.example.com:443/api/dcim/devices/?page=2")
+        );
+        // Same origin behind a subpath proxy.
+        assert_eq!(
+            Some(base),
+            url_origin("https://netbox.example.com/netbox/api/dcim/devices/")
+        );
+    }
+
+    #[test]
+    fn netbox_client_validates_the_base_url() {
+        assert!(NetBoxClient::new("https://netbox.example.com", None, false).is_ok());
+        assert!(NetBoxClient::new("http://netbox.internal:8000/", None, false).is_ok());
+        assert!(NetBoxClient::new("https://user@netbox.example.com", None, false).is_err());
+        assert!(NetBoxClient::new("not-a-url", None, false).is_err());
+        assert!(NetBoxClient::new("ftp://netbox.example.com", None, false).is_err());
     }
 }

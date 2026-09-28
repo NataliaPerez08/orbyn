@@ -15,16 +15,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use crate::domain::{Asset, Interface, Observation};
+use crate::process::run_captured;
 
 use super::classify::classify_device;
 use super::types::{Collector, ScanTarget};
@@ -174,6 +174,9 @@ impl Collector for SnmpCollector {
     }
 }
 
+/// Whole-process timeout for a single SNMP walk.
+const SNMP_WALK_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl SnmpCollector {
     async fn run_walk(&self, agent: &str, oid: &str) -> Result<String> {
         let config_dir = write_community_config(&self.community)?;
@@ -188,7 +191,7 @@ impl SnmpCollector {
         oid: &str,
         config_dir: &Path,
     ) -> Result<String> {
-        let mut child = Command::new(&self.binary)
+        let child = Command::new(&self.binary)
             .arg("-v")
             .arg(self.version.to_string())
             .arg("-On")
@@ -199,37 +202,30 @@ impl SnmpCollector {
             .arg(agent)
             .arg(oid)
             .env("SNMPCONFPATH", config_dir)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .context("failed to start snmpwalk; is net-snmp-utils installed?")?;
 
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut out) = child.stdout.take() {
-            out.read_to_string(&mut stdout)
-                .await
-                .context("failed reading snmpwalk stdout")?;
-        }
-        if let Some(mut err) = child.stderr.take() {
-            err.read_to_string(&mut stderr)
-                .await
-                .context("failed reading snmpwalk stderr")?;
-        }
+        let captured = run_captured(
+            child,
+            None,
+            None,
+            SNMP_WALK_TIMEOUT,
+            format!("snmpwalk timed out against {agent}"),
+        )
+        .await?;
 
-        let wait_fut = child.wait();
-        let status = timeout(Duration::from_secs(30), wait_fut)
-            .await
-            .map_err(|_| anyhow!("snmpwalk timed out against {agent}"))?
-            .context("failed waiting for snmpwalk")?;
-
-        if !status.success() {
+        if !captured.status.success() {
             return Err(anyhow!(
-                "snmpwalk exited with {status} against {agent}: {}",
-                stderr.trim()
+                "snmpwalk exited with {} against {agent}: {}",
+                captured.status,
+                captured.stderr.trim()
             ));
         }
-        Ok(stdout)
+        Ok(captured.stdout)
     }
 }
 

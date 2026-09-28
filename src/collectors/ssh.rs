@@ -21,14 +21,13 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::time::timeout;
 
 use crate::domain::{
     Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
 };
 use crate::parsing::{parse_addr_port, split_sections};
+use crate::process::run_captured;
 
 use super::credentials::CredentialProfile;
 use super::types::{Collector, CpuFacts, ScanTarget};
@@ -70,6 +69,9 @@ pub struct SshTransport {
     profile: CredentialProfile,
 }
 
+/// Whole-process timeout for one SSH probe round trip.
+const SSH_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+
 impl SshTransport {
     pub fn new(profile: CredentialProfile) -> Self {
         Self {
@@ -105,37 +107,30 @@ impl SshTransport {
             .arg(command)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .context("failed to start ssh; is an OpenSSH client installed?")?;
 
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut out) = child.stdout.take() {
-            out.read_to_string(&mut stdout)
-                .await
-                .context("failed reading ssh stdout")?;
-        }
-        if let Some(mut err) = child.stderr.take() {
-            err.read_to_string(&mut stderr)
-                .await
-                .context("failed reading ssh stderr")?;
-        }
+        let captured = run_captured(
+            child,
+            None,
+            None,
+            SSH_PROBE_TIMEOUT,
+            format!("ssh timed out connecting to {destination}"),
+        )
+        .await?;
 
-        let status = timeout(Duration::from_secs(60), child.wait())
-            .await
-            .map_err(|_| anyhow!("ssh timed out connecting to {destination}"))?
-            .context("failed waiting for ssh")?;
-
-        if !status.success() {
+        if !captured.status.success() {
             return Err(anyhow!(
-                "ssh exited with {status} against {destination}: {}",
-                stderr.trim()
+                "ssh exited with {} against {destination}: {}",
+                captured.status,
+                captured.stderr.trim()
             ));
         }
-        Ok(stdout)
+        Ok(captured.stdout)
     }
 }
 

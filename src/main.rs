@@ -556,7 +556,8 @@ async fn main() -> anyhow::Result<()> {
             if let Some(token) = &token {
                 redactor.add_value(token);
             }
-            let client = NetBoxClient::new(&url, token, no_verify);
+            let client = NetBoxClient::new(&url, token, no_verify)
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
             let mut rows = client
                 .fetch_devices()
                 .await

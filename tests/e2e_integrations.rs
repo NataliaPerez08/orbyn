@@ -184,3 +184,75 @@ fn netbox_bad_url_fails_cleanly() {
     );
     assert!(out.contains("curl exited"), "got: {out}");
 }
+
+/// A fake `curl` whose first devices page points `next` at a host that
+/// passes a naive prefix check (`netbox.example.com.evil`) but is a
+/// different origin, logging every invocation.
+#[cfg(unix)]
+const HOSTILE_NEXT_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+if [[ -n "$ORBYN_CURL_ARGS_LOG" ]]; then
+  printf '%s\n' "$*" >> "$ORBYN_CURL_ARGS_LOG"
+fi
+url="${@: -1}"
+case "$url" in
+  *"/api/dcim/devices/"*)
+    cat <<'JSON'
+{"count":1,"next":"https://netbox.example.com.evil/api/dcim/devices/?limit=100&page=2","results":[
+  {"name":"rtr-edge-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+]}
+JSON
+    ;;
+  *)
+    printf '%s\n' '{"count":0,"next":null,"results":[]}'
+    ;;
+esac
+"#;
+
+#[cfg(unix)]
+#[test]
+fn netbox_import_rejects_hostile_pagination_url() {
+    let dir = TempDir::new("netbox-hostile-next");
+    let curl = fake_bin(&dir, "curl", HOSTILE_NEXT_CURL_SCRIPT);
+    let log = dir.path().join("curl-args.log");
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .args(["--token", "supersecrettoken123"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_CURL_ARGS_LOG", &log),
+    );
+    assert!(out.contains("unexpected URL"), "got: {out}");
+    assert!(
+        !out.contains("supersecrettoken123"),
+        "token must never be printed"
+    );
+
+    // The hostile next URL must never have been requested: exactly one
+    // curl invocation (the first devices page).
+    let log = std::fs::read_to_string(&log).expect("curl args log");
+    assert_eq!(log.lines().count(), 1, "exactly one request: {log}");
+    assert!(!log.contains(".evil"), "hostile URL must not be fetched");
+}
+
+#[cfg(unix)]
+#[test]
+fn netbox_import_rejects_credential_bearing_base_url() {
+    let dir = TempDir::new("netbox-userinfo-url");
+    let curl = fake_bin(&dir, "curl", FAKE_CURL_SCRIPT);
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args([
+                "netbox",
+                "import",
+                "--url",
+                "https://user:pass@netbox.example.com",
+            ])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(
+        out.contains("invalid NetBox URL"),
+        "userinfo in the base URL must be rejected: {out}"
+    );
+}
