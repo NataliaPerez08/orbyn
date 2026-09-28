@@ -1,62 +1,78 @@
 # Plan de resolución de Known Issues
 
 Plan de trabajo para resolver los issues registrados en `KnowIssues.md`.
-Se agrupan por fases y cada item incluye el enfoque propuesto. Los items marcados
-como `~~FIXED~~` en `KnowIssues.md` (#1, #11, #13, #33, #34) quedan fuera.
+Se agrupan por fases y cada item incluye el enfoque propuesto.
+
+**Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
+tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
+dependencias), #8, #11, #13, #14, #15, #19, #26, #28, #33, #34, #36 y #37**.
+Mitigados con trabajo residual (permanecen en Fase 2): **#7, #12 y #16**.
+**#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
 
-Hecho:
+Completada: se retiró el archivo temporal de token de NetBox (#5), se añadió
+redacción central de secretos (#2), el upsert de capacidad ya no conserva
+valores obsoletos (#8), las dependencias dejaron de depender del orden de
+descubrimiento (#6), `--no-verify` avisa de forma prominente (#4) y la
+community SNMP ya no viaja en argv (#6).
 
-1. **#5 Permisos del archivo token de NetBox solo en Unix** — ~~FIXED
-   El token ahora se pasa a curl por stdin (`-H @-`): no hay archivo temporal
-   en ninguna plataforma. (`src/integrations/netbox.rs`)
+## Fase 2 — Calidad de datos y parsers
 
-2. **#2 Sin redacción central de secretos** — ~~FIXED~~
-   Nuevo módulo `src/redact.rs` (`Redactor` basado en valores) aplicado a los
-   errores de discovery y NetBox antes de escribirlos a logs/registros del job.
+- **#9 `sysDescr` como `os_name`** — guardar el raw en un campo aparte y derivar
+  vendor/OS por reglas; no volcar la cadena `sysDescr` completa en `os_name`.
+- **#10 Heurísticas de `classify_device`** — matching más estricto (límites de
+  palabra, prioridad de coincidencias exactas sobre subcadenas).
+- **#7 Tabla EOL estática** — ~~MITIGADO~~ externalizar la tabla a datos y
+  mantener la cadencia de actualización; `EOL_TABLE_VERSION` ya se emite como
+  evidencia.
+- **#12 Parser de `ss`/`netstat`** — ~~MITIGADO~~ añadir fixtures de las
+  variantes BusyBox restantes.
+- **#16 Evidencia DNS superficial** — ~~MITIGADO~~ manejo de cadenas CNAME y
+  matching adicional por IP.
 
-3. **#8 Capacity merge conserva valores obsoletos** — ~~FIXED~~
-   El upsert de `asset_capacity` ahora sobrescribe cada campo con la última
-   observación: un campo no detectado se graba como NULL ("unknown now").
+## Fase 3 — Integridad de inventario e integraciones
 
-4. **#6 Dependencias dependientes del orden de descubrimiento** — ~~FIXED~~
-   Cada batch de `store_observations` re-resuelve los edges desde todas las
-   conexiones contra el inventario completo (SQL único), más el método
-   `reconcile_dependencies` en el trait `Store`.
+- **#21 Import descarta interfaces/services** — extender `ImportedAsset` y
+  `orbyn import` para un round-trip completo (interfaces y servicios), no solo
+  assets.
+- **#20 Import NetBox mínimo** — añadir `dcim/interfaces` + `ipam/ip-addresses`
+  (`dns_name`) y valorar export hacia NetBox.
+- **#23 YAML Ansible** — segundo formato de inventario Ansible.
+- **#24 Terraform completo** — incluir los metadatos soportados
+  (`os_name`/`os_version`/`first_seen`/`last_seen`) y generación de bloques
+  `import`.
 
-5. **#4 `--no-verify` deshabilita la verificación TLS** — ~~FIXED~~
-   Ahora imprime un warning prominente al usarlo.
+## Fase 4 — CLI y datos operativos
 
-## Fase 2 — Calidad de datos
+- **#30 `annotate --unset`** — flag para limpiar environment/owner/criticality
+  (hoy solo se pueden quitar tags con `--remove-tag`).
+- **#31 Job outcome completo** — persistir los counts de filesystems, servicios
+  en ejecución y conexiones, no solo assets/services.
+- **#35 Magic strings DNS** — sustituir los literales `"dns"` /
+  `evidence_source != "dns"` por una columna/`evidence_kind`.
 
-6. **#7 Tabla EOL estática** — externalizar a datos y marcar `RULES_VERSION` al
-   actualizarla.
-7. **#9 `sysDescr` como `os_name`** — guardar el raw y derivar vendor/OS por
-   reglas.
-8. **#10 Heurísticas de `classify_device`** — matching más estricto (boundaries,
-   prioridad de coincidencias exactas).
-9. **#12 Parser de `ss`/`netstat`** — tolerante a variantes (BusyBox).
-10. **#14 Hostnames duplicados** — resolución determinista + warning.
-11. **#15 Colisión en `mermaid_node_id`** — incluir tipo/hash en el id.
-12. **#16 Evidencia DNS superficial** — timeout, CNAME y match por IP.
+## Fase 5 — Escala y plataforma
 
-## Fase 3 — Features de valor alto
+- **#27 N+1 en assess/export** — queries bulk en el store para
+  `list_services`/`list_filesystems`/`get_capacity`/`list_connections`.
+- **#29 Discovery sin concurrencia** — workers + rate limit + scheduling
+  (un target por ejecución hoy).
+- **#17 WinRM**, **#18 vCenter**, **#25 PostgreSQL** — adaptadores/backends
+  diferidos.
+- **#32 E2E solo Unix** — cobertura automatizada en Windows.
 
-13. **#19 Samples de métricas no persistidos** — tabla time-series.
-14. **#20 Import NetBox mínimo** — `dcim/interfaces` + `ipam/ip-addresses`.
-15. **#21 Import descarta interfaces/services** — ciclo completo round-trip.
-16. **#30 `annotate` no puede limpiar valores** — flag `--unset`.
-17. **#31 Job outcome incompleto** — persistir counts de fs/services/conexiones.
-18. **#35 Magic strings para DNS** — columna `evidence_kind`.
+## Fase 6 — Endurecimiento de seguridad restante
 
-## Fase 4 — Escala y plataforma
+- **#38 Secretos en el argv de Orbyn** — aceptar `--token`/`--community` por
+  env/stdin, o registrar los valores explicados por CLI en el `Redactor`.
+- **#39 `snmp.conf` temporal tras SIGKILL** — limpieza de directorios
+  `orbyn-snmp-*` obsoletos al arrancar o gestión de ciclo de vida más estricta
+  del archivo temporal.
 
-19. **#27 N+1 en assess/export** — queries bulk.
-20. **#28 NetBox sin paginación** — iterar `next`.
-21. **#29 Discovery sin concurrencia** — workers + rate limit + scheduling.
-22. **#26 Sin CI** — ~~FIXED~~ GitHub Actions now run fmt, clippy, locked build,
-    locked test and a release build; tag releases package checksummed artifacts
-    with build provenance.
-23. **#17 WinRM**, **#18 vCenter**, **#22 export table**, **#23 YAML Ansible**,
-    **#24 Terraform completo**, **#25 PostgreSQL** (candidatos a roadmaps).
+## Aceptados / fuera de plan
+
+- **#22 `export --format table` eliminado** — cambio incompatible documentado
+  frente a v0.5; no se reintroduce.
+- **#3 Auth por password** — decisión de diseño: se apoya en ssh-agent /
+  identity files, Orbyn no almacena credenciales.
