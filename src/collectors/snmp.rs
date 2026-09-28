@@ -111,8 +111,9 @@ impl SnmpCollector {
             ip,
             hostname: facts.sys_name.clone(),
             device_class,
-            os_name: facts.sys_descr.clone(),
+            os_name: derive_os_from_sysdescr(facts.sys_descr.as_deref()),
             os_version: None,
+            sys_descr: facts.sys_descr.clone(),
             environment: None,
             owner: None,
             criticality: None,
@@ -264,6 +265,53 @@ fn write_community_config(community: &str) -> Result<PathBuf> {
     file.write_all(format!("defCommunity {community}\n").as_bytes())
         .context("writing temporary SNMP community file")?;
     Ok(dir)
+}
+
+/// Derive a concise, human-readable OS name from a raw SNMP `sysDescr`
+/// string. Returns `None` when the description is empty or unrecognizable.
+///
+/// Known vendor/OS families are matched case-insensitively; the first match
+/// wins. Unrecognized descriptions fall back to the first comma-separated
+/// segment (trimmed, capped at 80 characters) so `os_name` is never the full
+/// noisy banner.
+fn derive_os_from_sysdescr(descr: Option<&str>) -> Option<String> {
+    let descr = descr?.trim();
+    if descr.is_empty() {
+        return None;
+    }
+    let lower = descr.to_lowercase();
+
+    const KNOWN: &[(&str, &str)] = &[
+        ("cisco ios", "Cisco IOS"),
+        ("ios xe", "Cisco IOS-XE"),
+        ("nx-os", "Cisco NX-OS"),
+        ("junos", "Juniper Junos"),
+        ("junos", "Juniper Junos"),
+        ("fortigate", "FortiOS"),
+        ("fortios", "FortiOS"),
+        ("palo alto", "PAN-OS"),
+        ("vmware esx", "VMware ESXi"),
+        ("esxi", "VMware ESXi"),
+        ("netapp", "NetApp ONTAP"),
+        ("linux", "Linux"),
+        ("windows", "Windows"),
+        ("freebsd", "FreeBSD"),
+    ];
+    for (needle, os) in KNOWN {
+        if lower.contains(needle) {
+            return Some(os.to_string());
+        }
+    }
+
+    // Fallback: first comma-separated segment, trimmed and length-bounded.
+    let segment = descr.split(',').next().unwrap_or(descr).trim();
+    if segment.len() > 80 {
+        Some(format!("{}…", &segment[..79]))
+    } else if segment.is_empty() {
+        None
+    } else {
+        Some(segment.to_string())
+    }
 }
 
 /// Facts collected from `snmpwalk -On` text output.
@@ -475,6 +523,10 @@ mod tests {
         assert_eq!(assets[0].hostname.as_deref(), Some("switch-a"));
         assert_eq!(
             assets[0].os_name.as_deref(),
+            Some("Linux")
+        );
+        assert_eq!(
+            assets[0].sys_descr.as_deref(),
             Some("Linux host 5.15.0-91-generic example")
         );
 
@@ -546,5 +598,40 @@ mod tests {
             None
         );
         assert_eq!(vendor_from_object_id(None), None);
+    }
+
+    #[test]
+    fn derive_os_from_known_sysdescr() {
+        assert_eq!(
+            derive_os_from_sysdescr(Some("Cisco IOS Software, IOSv")),
+            Some("Cisco IOS".into())
+        );
+        assert_eq!(
+            derive_os_from_sysdescr(Some("Juniper Networks Junos 23.4R1")),
+            Some("Juniper Junos".into())
+        );
+        assert_eq!(
+            derive_os_from_sysdescr(Some("Linux host 5.15.0-91-generic example")),
+            Some("Linux".into())
+        );
+        assert_eq!(
+            derive_os_from_sysdescr(Some("VMware ESXi 8.0 U2")),
+            Some("VMware ESXi".into())
+        );
+        assert_eq!(
+            derive_os_from_sysdescr(Some("FortiGate-60F v7.0")),
+            Some("FortiOS".into())
+        );
+    }
+
+    #[test]
+    fn derive_os_falls_back_to_first_segment() {
+        assert_eq!(
+            derive_os_from_sysdescr(Some("SomeVendor OS 3.0, Build 12345, (c) 2024")),
+            Some("SomeVendor OS 3.0".into())
+        );
+        assert_eq!(derive_os_from_sysdescr(None), None);
+        assert_eq!(derive_os_from_sysdescr(Some("")), None);
+        assert_eq!(derive_os_from_sysdescr(Some("   ")), None);
     }
 }

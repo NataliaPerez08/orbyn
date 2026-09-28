@@ -300,6 +300,7 @@ pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observa
         device_class: Some("server".into()),
         os_name: facts.os_name.clone(),
         os_version: facts.os_version.clone(),
+        sys_descr: None,
         environment: None,
         owner: None,
         criticality: None,

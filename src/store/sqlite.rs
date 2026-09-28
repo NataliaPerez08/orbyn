@@ -28,6 +28,7 @@ struct AssetRow {
     device_class: Option<String>,
     os_name: Option<String>,
     os_version: Option<String>,
+    sys_descr: Option<String>,
     environment: Option<String>,
     owner: Option<String>,
     criticality: Option<String>,
@@ -48,6 +49,7 @@ impl AssetRow {
             device_class: self.device_class,
             os_name: self.os_name,
             os_version: self.os_version,
+            sys_descr: self.sys_descr,
             environment: self.environment,
             owner: self.owner,
             criticality: self.criticality.and_then(|c| c.parse::<Criticality>().ok()),
@@ -378,13 +380,14 @@ impl crate::store::traits::Store for SqliteStore {
                 Observation::Asset(asset) => {
                     let ip = asset.ip.to_string();
                     sqlx::query(
-                        "INSERT INTO assets (id, ip, hostname, device_class, os_name, os_version, first_seen, last_seen) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) \
+                        "INSERT INTO assets (id, ip, hostname, device_class, os_name, os_version, sys_descr, first_seen, last_seen) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) \
                          ON CONFLICT(ip) DO UPDATE SET \
                            hostname = COALESCE(excluded.hostname, assets.hostname), \
                            device_class = COALESCE(excluded.device_class, assets.device_class), \
                            os_name = COALESCE(excluded.os_name, assets.os_name), \
                            os_version = COALESCE(excluded.os_version, assets.os_version), \
+                           sys_descr = COALESCE(excluded.sys_descr, assets.sys_descr), \
                            last_seen = excluded.last_seen",
                     )
                     .bind(&asset.id)
@@ -393,6 +396,7 @@ impl crate::store::traits::Store for SqliteStore {
                     .bind(&asset.device_class)
                     .bind(&asset.os_name)
                     .bind(&asset.os_version)
+                    .bind(&asset.sys_descr)
                     .bind(asset.first_seen.to_rfc3339())
                     .execute(&mut *tx)
                     .await
@@ -588,7 +592,7 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn list_assets(&self) -> Result<Vec<Asset>> {
         let rows = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets ORDER BY ip",
         )
@@ -600,7 +604,7 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets WHERE id = ?1",
         )
@@ -613,7 +617,7 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets WHERE ip = ?1",
         )
@@ -626,7 +630,7 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn get_asset_by_hostname(&self, hostname: &str) -> Result<Option<Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
-            "SELECT id, ip, hostname, device_class, os_name, os_version, \
+            "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
              FROM assets WHERE hostname = ?1 COLLATE NOCASE ORDER BY id ASC LIMIT 1",
         )

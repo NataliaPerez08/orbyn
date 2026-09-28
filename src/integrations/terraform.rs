@@ -74,6 +74,7 @@ mod tests {
             device_class: Some("server".into()),
             os_name: None,
             os_version: None,
+            sys_descr: None,
             environment: Some("prod".into()),
             owner: Some("platform".into()),
             criticality: Some(Criticality::High),

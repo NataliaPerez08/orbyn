@@ -2,4 +2,4 @@
 /data
 *.db
 .env
-.venv/
+.venv/opencode.json

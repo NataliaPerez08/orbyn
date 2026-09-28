@@ -314,6 +314,7 @@ pub fn linux_observations(ip: IpAddr, facts: &LinuxHostFacts) -> Vec<Observation
         device_class: Some("server".into()),
         os_name: facts.os_name.clone(),
         os_version: facts.kernel.clone(),
+        sys_descr: None,
         environment: None,
         owner: None,
         criticality: None,

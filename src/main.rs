@@ -1059,6 +1059,7 @@ async fn persist_imported_assets(
                 device_class: row.device_class.clone(),
                 os_name: row.os_name.clone(),
                 os_version: row.os_version.clone(),
+                sys_descr: None,
                 environment: None,
                 owner: None,
                 criticality: None,

@@ -35,6 +35,7 @@ impl Collector for StaticCollector {
             device_class: Some("example".into()),
             os_name: Some("Example OS".into()),
             os_version: None,
+            sys_descr: None,
             environment: None,
             owner: None,
             criticality: None,

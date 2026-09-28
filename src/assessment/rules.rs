@@ -437,6 +437,7 @@ mod tests {
             device_class: None,
             os_name: os_name.map(str::to_string),
             os_version: None,
+            sys_descr: None,
             environment: None,
             owner: None,
             criticality: None,

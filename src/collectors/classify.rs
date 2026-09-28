@@ -4,6 +4,32 @@
 //! SNMP `sysDescr`). Classification maps those facts onto a small set of
 //! human-meaningful device classes so the inventory is useful beyond raw port
 //! discovery. It is intentionally conservative: unknown inputs yield `None`.
+//!
+//! Substring matches use word boundaries where a short needle could otherwise
+//! produce false positives (e.g. "ios" inside "bios").
+
+/// Case-insensitive word-boundary substring test.
+///
+/// Returns true when `needle` appears in `haystack` at a position where it is
+/// preceded and followed by a non-alphanumeric character (or the string
+/// boundary). This prevents "ios" from matching inside "bios" or "radios".
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    let nlen = n.len();
+    if nlen == 0 || nlen > h.len() {
+        return false;
+    }
+    for i in 0..=h.len() - nlen {
+        if h[i..i + nlen].eq_ignore_ascii_case(n)
+            && (i == 0 || !h[i - 1].is_ascii_alphanumeric())
+            && (i + nlen == h.len() || !h[i + nlen].is_ascii_alphanumeric())
+        {
+            return true;
+        }
+    }
+    false
+}
 
 /// Classify a device from whatever evidence is available.
 ///
@@ -50,14 +76,15 @@ pub fn classify_device(
     ];
     if NETWORK_VENDORS
         .iter()
-        .any(|v| vendor.contains(v) || descr.contains(v))
+        .any(|v| vendor.contains(v) || descr.contains(v) || contains_word(&descr, v))
     {
         return Some("network-device".into());
     }
 
     // IOS/NX-OS/catalyst operating system banners also pin network gear even
-    // when the vendor word does not appear verbatim.
-    if os.contains("ios") || os.contains("nx-os") || descr.contains("iosv") {
+    // when the vendor word does not appear verbatim. Use word-boundary match
+    // for "ios" so "bios" does not trigger a false positive.
+    if contains_word(&os, "ios") || os.contains("nx-os") || descr.contains("iosv") {
         return Some("network-device".into());
     }
 
@@ -65,7 +92,7 @@ pub fn classify_device(
     const SECURITY_VENDORS: &[&str] = &["fortinet", "palo alto", "check point", "sonicwall"];
     if SECURITY_VENDORS
         .iter()
-        .any(|v| vendor.contains(v) || descr.contains(v))
+        .any(|v| vendor.contains(v) || descr.contains(v) || contains_word(&descr, v))
     {
         return Some("security-appliance".into());
     }
@@ -148,5 +175,29 @@ mod tests {
     #[test]
     fn unknown_is_none() {
         assert_eq!(classify_device(None, None, &[], None), None);
+    }
+
+    #[test]
+    fn ios_word_boundary_rejects_bios() {
+        assert_eq!(
+            classify_device(Some("BIOS 2.1"), None, &[], None),
+            None,
+            "'ios' inside 'bios' must not match"
+        );
+        assert_eq!(
+            classify_device(Some("Cisco IOS 15.4"), None, &[], None),
+            Some("network-device".into()),
+            "'ios' as a word must still match"
+        );
+    }
+
+    #[test]
+    fn contains_word_matches_at_boundaries() {
+        assert!(contains_word("cisco ios software", "ios"));
+        assert!(contains_word("IOS", "ios"));
+        assert!(contains_word("nx-os ios", "ios"));
+        assert!(!contains_word("bios", "ios"));
+        assert!(!contains_word("radios", "ios"));
+        assert!(!contains_word("apostrophe", "os"));
     }
 }

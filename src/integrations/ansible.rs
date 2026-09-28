@@ -126,6 +126,7 @@ mod tests {
             device_class: device_class.map(str::to_string),
             os_name: None,
             os_version: None,
+            sys_descr: None,
             environment: environment.map(str::to_string),
             owner: None,
             criticality: Some(Criticality::High),

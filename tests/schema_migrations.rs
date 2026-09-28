@@ -157,7 +157,7 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .fetch_one(upgraded.pool())
         .await
         .expect("count applied migrations");
-    assert_eq!(migration_count, 5, "all current migrations must be applied");
+    assert_eq!(migration_count, 6, "all current migrations must be applied");
     assert!(table_names(&upgraded)
         .await
         .iter()
@@ -190,6 +190,7 @@ async fn asset_can_receive_every_observation_family() {
         device_class: None,
         os_name: None,
         os_version: None,
+        sys_descr: None,
         environment: None,
         owner: None,
         criticality: None,

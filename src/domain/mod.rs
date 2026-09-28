@@ -20,6 +20,9 @@ pub struct Asset {
     pub device_class: Option<String>,
     pub os_name: Option<String>,
     pub os_version: Option<String>,
+    /// Raw SNMP `sysDescr` banner when observed, kept separate from the
+    /// derived, human-readable [`Asset::os_name`].
+    pub sys_descr: Option<String>,
     /// Free-form environment label (e.g. `prod`, `staging`, `dr`).
     pub environment: Option<String>,
     /// Owning team or operator responsible for the asset.

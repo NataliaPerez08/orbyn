@@ -243,6 +243,7 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
         device_class,
         os_name,
         os_version: None,
+        sys_descr: None,
         environment: None,
         owner: None,
         criticality: None,
