@@ -35,6 +35,16 @@ pub struct Asset {
     pub last_seen: DateTime<Utc>,
 }
 
+/// Deterministic asset id derived from the asset IP: separators become
+/// dashes (`10.0.0.1` -> `10-0-0-1`, `2001:db8::1` -> `2001-db8--1`).
+///
+/// Collectors and imports share this derivation so re-observed or re-imported
+/// assets reconcile to the same inventory row, and `asset_id` references in
+/// export files resolve back to the same id.
+pub fn asset_id(ip: IpAddr) -> String {
+    ip.to_string().replace(['.', ':'], "-")
+}
+
 /// A network interface observed on an asset.
 ///
 /// Collectors report whatever they can see: SNMP walks the full `ifTable`,

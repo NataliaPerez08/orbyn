@@ -19,7 +19,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use tokio::process::Command;
 
-use crate::domain::{Asset, Interface, Observation, Service};
+use crate::domain::{asset_id, Asset, Interface, Observation, Service};
 use crate::process::run_captured;
 
 use super::classify::classify_device;
@@ -223,7 +223,7 @@ fn parse_host(reader: &mut Reader<&[u8]>) -> Result<Option<Vec<Observation>>> {
     };
 
     let now = Utc::now();
-    let id = ip.to_string().replace(['.', ':'], "-");
+    let id = asset_id(ip);
     let open_services: Vec<&str> = ports
         .iter()
         .filter(|p| p.state.as_deref() == Some("open"))

@@ -53,6 +53,93 @@ fn import_export_round_trip_preserves_fields() {
 
 #[cfg(unix)]
 #[test]
+fn import_export_round_trip_keeps_interfaces_and_services() {
+    let a = TempDir::new("roundtrip-iface-a");
+    let b = TempDir::new("roundtrip-iface-b");
+
+    // asset_id references in IP form must resolve to the derived asset id.
+    let json = r#"{"assets":[
+  {"ip":"10.0.0.1","hostname":"web-01","device_class":"server"}
+],"interfaces":[
+  {"asset_id":"10.0.0.1","name":"eth0","mac":"00:11:22:33:44:55","ip":"10.0.0.1","vendor":"Intel","mtu":1500,"if_index":2,"is_up":true},
+  {"asset_id":"10.0.0.1","name":"eth1","is_up":false}
+],"services":[
+  {"asset_id":"10.0.0.1","proto":"tcp","port":443,"name":"https","state":"open","banner":"nginx"},
+  {"asset_id":"10.0.0.1","proto":"tcp","port":22,"name":"ssh","state":"open"}
+]}"#;
+    let out = run_ok_combined(
+        orbyn(&a)
+            .args(["import", "--format", "json", "--file"])
+            .arg(write_file(&a, "inventory.json", json)),
+    );
+    assert!(
+        out.contains("Imported 1 assets, 2 interfaces, 2 services"),
+        "{out}"
+    );
+
+    let ifaces = run_ok(orbyn(&a).args(["interfaces", "10.0.0.1", "--format", "csv"]));
+    assert!(ifaces.contains("eth0"), "{ifaces}");
+    assert!(ifaces.contains("00:11:22:33:44:55"), "{ifaces}");
+    assert!(ifaces.contains("1500"), "{ifaces}");
+    let services = run_ok(orbyn(&a).args(["services", "10.0.0.1", "--format", "csv"]));
+    assert!(services.contains("tcp,443,https,open,nginx"), "{services}");
+
+    // export CSV from the first DB and re-import it into a second one
+    let csv_path = a.path().join("inventory.csv");
+    run_ok(
+        orbyn(&a)
+            .args(["export", "--format", "csv", "--output"])
+            .arg(&csv_path),
+    );
+    let csv = std::fs::read_to_string(&csv_path).expect("read export");
+    assert!(csv.contains("#interfaces"), "{csv}");
+    assert!(csv.contains("#services"), "{csv}");
+
+    run_ok(
+        orbyn(&b)
+            .args(["import", "--format", "csv", "--file"])
+            .arg(&csv_path),
+    );
+
+    let ifaces_b = run_ok(orbyn(&b).args(["interfaces", "10.0.0.1", "--format", "csv"]));
+    assert!(ifaces_b.contains("eth0"), "{ifaces_b}");
+    assert!(ifaces_b.contains("00:11:22:33:44:55"), "{ifaces_b}");
+    assert!(ifaces_b.contains("Intel"), "{ifaces_b}");
+    let services_b = run_ok(orbyn(&b).args(["services", "10.0.0.1", "--format", "csv"]));
+    assert!(
+        services_b.contains("tcp,443,https,open,nginx"),
+        "{services_b}"
+    );
+    assert!(services_b.contains("tcp,22,ssh,open"), "{services_b}");
+}
+
+#[cfg(unix)]
+#[test]
+fn import_skips_interface_and_service_rows_referencing_unknown_assets() {
+    let dir = TempDir::new("import-unknown-refs");
+    let json = r#"{"assets":[
+  {"ip":"10.0.0.1","hostname":"web-01","device_class":"server"}
+],"interfaces":[
+  {"asset_id":"10.0.0.99","name":"eth0","mac":"00:11:22:33:44:55"}
+],"services":[
+  {"asset_id":"ghost","proto":"tcp","port":8080,"state":"open"}
+]}"#;
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["import", "--format", "json", "--file"])
+            .arg(write_file(&dir, "unknown-refs.json", json)),
+    );
+    assert!(out.contains("Imported 1 assets"), "{out}");
+    assert!(out.contains("unknown asset"), "warning expected: {out}");
+
+    let ifaces = run_ok(orbyn(&dir).args(["interfaces", "10.0.0.1", "--format", "csv"]));
+    assert_eq!(ifaces.lines().count(), 1, "header only: {ifaces}");
+    let services = run_ok(orbyn(&dir).args(["services", "10.0.0.1", "--format", "csv"]));
+    assert_eq!(services.lines().count(), 1, "header only: {services}");
+}
+
+#[cfg(unix)]
+#[test]
 fn import_accepts_compact_csv_without_section_header() {
     let dir = TempDir::new("compact-csv");
     let csv = "10.0.0.10,app-01,server,prod,team-a,high,\"a,b\"\n";

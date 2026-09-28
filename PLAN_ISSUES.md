@@ -5,8 +5,8 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
-dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #26, #28,
-#33, #34, #36 y #37**.
+dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #21, #26,
+#28, #33, #34, #36 y #37**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -31,9 +31,13 @@ matching inverso por PTR (#16).
 
 ## Fase 3 — Integridad de inventario e integraciones
 
-- **#21 Import descarta interfaces/services** — extender `ImportedAsset` y
-  `orbyn import` para un round-trip completo (interfaces y servicios), no solo
-  assets.
+Completado: **#21** — `orbyn import` (JSON/CSV) hace round-trip completo de
+interfaces y servicios: el CSV parsea las secciones `#interfaces` y
+`#services` del export, el JSON acepta el objeto completo de
+`export --format json`, los `asset_id` en forma de IP se resuelven al id
+canónico (`domain::asset_id`) y las filas que referencian assets
+desconocidos se omiten con aviso en lugar de fallar.
+
 - **#20 Import NetBox mínimo** — añadir `dcim/interfaces` + `ipam/ip-addresses`
   (`dns_name`) y valorar export hacia NetBox.
 - **#23 YAML Ansible** — segundo formato de inventario Ansible.

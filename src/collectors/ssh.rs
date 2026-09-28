@@ -24,7 +24,7 @@ use chrono::Utc;
 use tokio::process::Command;
 
 use crate::domain::{
-    Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
+    asset_id, Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
 };
 use crate::parsing::{parse_addr_port, split_sections};
 use crate::process::run_captured;
@@ -306,7 +306,7 @@ pub fn parse_snapshots(lines: &[String]) -> Vec<SnapshotFacts> {
 /// always comes first so foreign keys resolve inside the store transaction.
 pub fn linux_observations(ip: IpAddr, facts: &LinuxHostFacts) -> Vec<Observation> {
     let now = Utc::now();
-    let id = ip.to_string().replace(['.', ':'], "-");
+    let id = asset_id(ip);
     let mut observations = vec![Observation::Asset(Asset {
         id: id.clone(),
         ip,

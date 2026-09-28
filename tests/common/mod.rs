@@ -230,6 +230,13 @@ pub const INVENTORY_JSON: &str = r#"{"assets":[
   {"ip":"10.0.0.9","hostname":"cache-01","device_class":"server","environment":"prod"}
 ]}"#;
 
+/// Write a string to a file inside the test directory and return its path.
+pub fn write_file(dir: &TempDir, name: &str, contents: &str) -> PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, contents).expect("write file");
+    path
+}
+
 /// Import a JSON inventory through the CLI.
 pub fn import_json(dir: &TempDir, json: &str) -> String {
     let file = dir.path().join("inventory.json");

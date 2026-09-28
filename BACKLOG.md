@@ -123,7 +123,7 @@ added; today the product surface is `orbyn` subcommands.
 
 ### Phase 2 — Inventory integrity and integrations
 
-- [ ] **P1** Preserve interfaces and services during `orbyn import`.
+- [x] **P1** Preserve interfaces and services during `orbyn import`.
 - [ ] **P2** Add Ansible YAML inventory export.
 - [ ] **P2** Include complete supported metadata in Terraform export.
 - [ ] **P2** Add optional export to NetBox.

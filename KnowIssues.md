@@ -141,9 +141,15 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     (`dcim/interfaces`), `ipam/ip-addresses` (dns_name) and export-to-NetBox are
     not implemented.
 
-21. **Import drops interfaces/services** — `gap`
-    `orbyn import` (JSON/CSV) only imports assets; interfaces and services that
-    `orbyn export` emits are silently discarded on round-trip.
+21. **Import drops interfaces/services** — `gap` ~~FIXED~~
+    `orbyn import` now round-trips full exports: the CSV path parses the
+    `#interfaces` and `#services` worksheets alongside `#assets`, and the
+    JSON path accepts the `{"assets": [...], "interfaces": [...],
+    "services": [...]}` object emitted by `orbyn export --format json`.
+    `asset_id` references in IP form resolve to the canonical asset id, and
+    interface/service rows referencing an asset that is neither part of the
+    import nor already in the inventory are skipped with a warning instead
+    of failing. (Resolved in `src/import.rs` + `src/main.rs`.)
 
 22. **`export --format table` removed** — `quality`
     v1.1 narrowed `export` to `json|csv|ansible|terraform`; the old `table`

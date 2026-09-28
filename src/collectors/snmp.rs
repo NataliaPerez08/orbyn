@@ -23,7 +23,7 @@ use chrono::Utc;
 use tokio::process::Command;
 use uuid::Uuid;
 
-use crate::domain::{Asset, Interface, Observation};
+use crate::domain::{asset_id, Asset, Interface, Observation};
 use crate::process::run_captured;
 
 use super::classify::classify_device;
@@ -101,7 +101,7 @@ impl SnmpCollector {
         };
 
         let now = Utc::now();
-        let id = ip.to_string().replace(['.', ':'], "-");
+        let id = asset_id(ip);
         let vendor = vendor_from_object_id(facts.sys_object_id.as_deref());
         let device_class =
             classify_device(None, vendor.as_deref(), &[], facts.sys_descr.as_deref());

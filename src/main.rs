@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 
@@ -14,9 +15,10 @@ use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
 use orbyn::config::Config;
 use orbyn::domain::{
-    Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, JobOutcome, JobStatus, Observation,
+    asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, Interface, JobOutcome,
+    JobStatus, Observation, Service,
 };
-use orbyn::import::{parse_import_csv, ImportedAsset};
+use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, GroupBy};
 use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::terraform::render_terraform;
@@ -530,8 +532,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Import { format, file } => {
             let store = SqliteStore::open(&config.db_path).await?;
             let input = read_input(file.as_ref())?;
-            let count = import_inventory(&store, &input, format).await?;
-            eprintln!("Imported {count} assets.");
+            let stats = import_inventory(&store, &input, format).await?;
+            let mut parts = vec![format!("{} assets", stats.assets)];
+            if stats.interfaces > 0 {
+                parts.push(format!("{} interfaces", stats.interfaces));
+            }
+            if stats.services > 0 {
+                parts.push(format!("{} services", stats.services));
+            }
+            eprintln!("Imported {}.", parts.join(", "));
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
         }
@@ -568,10 +577,17 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?,
             );
-            let count = persist_imported_assets(&store, &rows, "netbox")
-                .await
-                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            eprintln!("Imported {count} assets from NetBox.");
+            let stats = persist_imported_inventory(
+                &store,
+                &ImportedInventory {
+                    assets: rows,
+                    ..Default::default()
+                },
+                "netbox",
+            )
+            .await
+            .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+            eprintln!("Imported {} assets from NetBox.", stats.assets);
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
         }
@@ -995,47 +1011,145 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
     Ok(())
 }
 
-/// Persist an imported inventory, recording an audit job for the operation.
-async fn import_inventory(store: &SqliteStore, input: &str, format: ImportFormat) -> Result<usize> {
-    let rows: Vec<ImportedAsset> = match format {
+/// Parse an imported inventory, recording an audit job for the operation.
+async fn import_inventory(
+    store: &SqliteStore,
+    input: &str,
+    format: ImportFormat,
+) -> Result<ImportedStats> {
+    let inv: ImportedInventory = match format {
         ImportFormat::Json => {
-            let raw: Vec<ImportedAsset> = if input.trim_start().starts_with('[') {
-                serde_json::from_str(input).with_context(|| {
+            if input.trim_start().starts_with('[') {
+                let assets = serde_json::from_str(input).with_context(|| {
                     "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
-                })?
+                })?;
+                ImportedInventory {
+                    assets,
+                    ..Default::default()
+                }
             } else {
                 let wrapper: serde_json::Value = serde_json::from_str(input).with_context(|| {
                     "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
                 })?;
-                serde_json::from_value(wrapper.get("assets").cloned().unwrap_or_default())
-                    .with_context(|| {
-                        "invalid JSON import; 'assets' must be an array of asset objects"
-                    })?
-            };
-            raw
+                if !["assets", "interfaces", "services"]
+                    .iter()
+                    .any(|key| wrapper.get(key).is_some())
+                {
+                    bail!(
+                        "invalid JSON import; expected an object with an assets, interfaces or services array"
+                    );
+                }
+                serde_json::from_value(wrapper).with_context(|| {
+                    "invalid JSON import; assets, interfaces and services must be arrays of row objects"
+                })?
+            }
         }
         ImportFormat::Csv => parse_import_csv(input)?,
     };
 
-    persist_imported_assets(store, &rows, "import").await
+    persist_imported_inventory(store, &inv, "import").await
 }
 
-/// Persist a batch of import rows as assets (with annotations), recording an
-/// audit job under the given collector name. Shared by `import` and `netbox`.
-async fn persist_imported_assets(
+/// Persist an imported inventory — assets plus the interfaces and services
+/// emitted by `orbyn export` — recording an audit job under the given
+/// collector name. Shared by `import` and `netbox`.
+///
+/// Interface and service rows whose `asset_id` matches neither an asset in
+/// this import nor an existing inventory row are skipped with a warning
+/// instead of failing the whole import.
+async fn persist_imported_inventory(
     store: &SqliteStore,
-    rows: &[ImportedAsset],
+    inv: &ImportedInventory,
     collector: &str,
-) -> Result<usize> {
-    let (rows, duplicates) = orbyn::import::deduplicate(rows.to_vec());
+) -> Result<ImportedStats> {
+    let (rows, duplicates) = orbyn::import::deduplicate(inv.assets.clone());
     if duplicates > 0 {
         tracing::warn!(
             duplicates,
             "skipped duplicate import rows that share an IP address"
         );
     }
-    if rows.is_empty() {
-        return Ok(0);
+
+    // Validate every asset row before writing anything, so a malformed input
+    // never leaves a half-applied import behind.
+    let mut assets = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let ip: std::net::IpAddr = row
+            .ip
+            .parse()
+            .with_context(|| format!("invalid IP '{}' in import", row.ip))?;
+        let criticality = row
+            .criticality
+            .as_deref()
+            .map(str::parse::<Criticality>)
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        assets.push((row, ip, criticality));
+    }
+
+    // Asset ids that interface/service rows may reference: the ids this
+    // import creates, plus everything already in the inventory.
+    let mut known_ids: HashSet<String> = assets.iter().map(|&(_, ip, _)| asset_id(ip)).collect();
+    for existing in store.list_assets().await? {
+        known_ids.insert(existing.id);
+    }
+
+    let mut observations = Vec::new();
+    let mut interfaces_persisted = 0usize;
+    let mut services_persisted = 0usize;
+    let mut skipped_refs = 0usize;
+    for iface in &inv.interfaces {
+        let asset_id = resolve_asset_id(&iface.asset_id);
+        if !known_ids.contains(&asset_id) {
+            skipped_refs += 1;
+            tracing::warn!(
+                asset = %iface.asset_id,
+                "skipped interface row referencing an unknown asset"
+            );
+            continue;
+        }
+        let mut interface = Interface::new(
+            &asset_id,
+            iface.name.as_deref(),
+            iface.mac.as_deref(),
+            iface.ip,
+        );
+        interface.vendor = iface.vendor.clone();
+        interface.mtu = iface.mtu;
+        interface.if_index = iface.if_index;
+        interface.is_up = iface.is_up;
+        interfaces_persisted += 1;
+        observations.push(Observation::Interface(interface));
+    }
+    for svc in &inv.services {
+        let asset_id = resolve_asset_id(&svc.asset_id);
+        if !known_ids.contains(&asset_id) {
+            skipped_refs += 1;
+            tracing::warn!(
+                asset = %svc.asset_id,
+                "skipped service row referencing an unknown asset"
+            );
+            continue;
+        }
+        services_persisted += 1;
+        observations.push(Observation::Service(Service {
+            asset_id,
+            proto: svc.proto.clone(),
+            port: svc.port,
+            name: svc.name.clone(),
+            state: svc.state.clone(),
+            banner: svc.banner.clone(),
+        }));
+    }
+    if skipped_refs > 0 {
+        tracing::warn!(
+            skipped_refs,
+            "skipped import rows referencing unknown assets"
+        );
+    }
+
+    if assets.is_empty() && observations.is_empty() {
+        return Ok(ImportedStats::default());
     }
 
     let job = DiscoveryJob {
@@ -1052,18 +1166,8 @@ async fn persist_imported_assets(
     store.create_job(job.clone()).await?;
 
     let mut persisted = 0u32;
-    for row in rows {
-        let ip: std::net::IpAddr = row
-            .ip
-            .parse()
-            .with_context(|| format!("invalid IP '{}' in import", row.ip))?;
-        let id = ip.to_string().replace(['.', ':'], "-");
-        let criticality = row
-            .criticality
-            .as_deref()
-            .map(str::parse::<Criticality>)
-            .transpose()
-            .map_err(anyhow::Error::msg)?;
+    for (row, ip, criticality) in assets {
+        let id = asset_id(ip);
 
         let now = Utc::now();
         store
@@ -1094,6 +1198,10 @@ async fn persist_imported_assets(
         persisted += 1;
     }
 
+    if !observations.is_empty() {
+        store.store_observations(observations).await?;
+    }
+
     store
         .finish_job(
             &job.id,
@@ -1101,12 +1209,16 @@ async fn persist_imported_assets(
             None,
             Some(JobOutcome {
                 assets_found: persisted,
-                services_found: 0,
+                services_found: services_persisted as u32,
             }),
         )
         .await?;
 
-    Ok(persisted as usize)
+    Ok(ImportedStats {
+        assets: persisted as usize,
+        interfaces: interfaces_persisted,
+        services: services_persisted,
+    })
 }
 
 fn read_input(file: Option<&PathBuf>) -> Result<String> {

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::domain::{
-    Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
+    asset_id, Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
 };
 use crate::parsing::{normalize_ip, split_csv_line, split_sections};
 
@@ -292,7 +292,7 @@ fn parse_windows_metric_lines(lines: &[String]) -> Vec<SnapshotFacts> {
 /// always comes first so foreign keys resolve inside the store transaction.
 pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observation> {
     let now = Utc::now();
-    let id = ip.to_string().replace(['.', ':'], "-");
+    let id = asset_id(ip);
     let mut observations = vec![Observation::Asset(Asset {
         id: id.clone(),
         ip,
