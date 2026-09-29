@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use super::{AssessmentInput, Finding, Severity};
-use crate::domain::{Dependency, Filesystem, Service};
+use crate::domain::{Dependency, EvidenceKind, Filesystem, Service};
 
 /// A rule in the catalog: stable id, human description, and its evaluator.
 pub struct Rule {
@@ -338,7 +338,7 @@ fn rule_dep_hub(input: &AssessmentInput, findings: &mut Vec<Finding>) {
         let dependants: Vec<&Dependency> = input
             .dependencies
             .iter()
-            .filter(|d| d.target_asset_id == asset.id && d.evidence_source != "dns")
+            .filter(|d| d.target_asset_id == asset.id && d.evidence_kind() != EvidenceKind::Dns)
             .collect();
         if dependants.len() < HUB_WARNING_THRESHOLD {
             continue;
@@ -401,7 +401,7 @@ fn rule_dep_unconfirmed(input: &AssessmentInput, findings: &mut Vec<Finding>) {
     let unconfirmed: Vec<&Dependency> = input
         .dependencies
         .iter()
-        .filter(|d| !d.confirmed && d.evidence_source != "dns")
+        .filter(|d| !d.confirmed && d.evidence_kind() != EvidenceKind::Dns)
         .collect();
     if unconfirmed.is_empty() {
         return;
@@ -418,7 +418,7 @@ fn rule_dep_unconfirmed(input: &AssessmentInput, findings: &mut Vec<Finding>) {
             input
                 .dependencies
                 .iter()
-                .filter(|d| d.evidence_source != "dns")
+                .filter(|d| d.evidence_kind() != EvidenceKind::Dns)
                 .count()
         )],
         asset_id: None,

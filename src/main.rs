@@ -15,8 +15,8 @@ use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
 use orbyn::config::Config;
 use orbyn::domain::{
-    asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, Interface, JobOutcome,
-    JobStatus, Observation, Service,
+    asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, EvidenceKind, Interface,
+    JobOutcome, JobStatus, Observation, Service,
 };
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
@@ -24,7 +24,7 @@ use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
 use orbyn::output::{Format, Inventory};
 use orbyn::store::sqlite::SqliteStore;
-use orbyn::store::traits::AssetAnnotations;
+use orbyn::store::traits::{AnnotationField, AssetAnnotations};
 use orbyn::store::Store;
 
 #[derive(Debug, Parser)]
@@ -71,6 +71,24 @@ enum ExportFormat {
     /// Ansible YAML inventory.
     AnsibleYaml,
     Terraform,
+}
+
+/// An annotation field clearable via `orbyn annotate --unset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum UnsetField {
+    Environment,
+    Owner,
+    Criticality,
+}
+
+impl From<UnsetField> for AnnotationField {
+    fn from(field: UnsetField) -> Self {
+        match field {
+            UnsetField::Environment => AnnotationField::Environment,
+            UnsetField::Owner => AnnotationField::Owner,
+            UnsetField::Criticality => AnnotationField::Criticality,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -132,6 +150,9 @@ enum Command {
         /// low | medium | high | critical.
         #[arg(long)]
         criticality: Option<String>,
+        /// Clear a field (repeatable): environment | owner | criticality.
+        #[arg(long, value_enum, action = ArgAction::Append)]
+        unset: Vec<UnsetField>,
         /// Add a tag (repeatable).
         #[arg(long, action = ArgAction::Append)]
         add_tag: Vec<String>,
@@ -430,6 +451,7 @@ async fn main() -> anyhow::Result<()> {
             environment,
             owner,
             criticality,
+            unset,
             add_tag,
             remove_tag,
             format,
@@ -449,6 +471,7 @@ async fn main() -> anyhow::Result<()> {
                         environment,
                         owner,
                         criticality,
+                        unset: unset.into_iter().map(AnnotationField::from).collect(),
                         add_tags: add_tag,
                         remove_tags: remove_tag,
                     },
@@ -684,6 +707,9 @@ async fn discover(
         error: None,
         assets_found: None,
         services_found: None,
+        filesystems_found: None,
+        running_services_found: None,
+        connections_found: None,
     };
     store.create_job(job.clone()).await?;
 
@@ -720,6 +746,9 @@ async fn discover(
                     Some(JobOutcome {
                         assets_found: assets as u32,
                         services_found: services as u32,
+                        filesystems_found: filesystems as u32,
+                        running_services_found: running as u32,
+                        connections_found: connections as u32,
                     }),
                 )
                 .await?;
@@ -887,7 +916,7 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
                         target_asset_id: target.id.clone(),
                         proto,
                         port,
-                        evidence_source: "manual".into(),
+                        evidence_source: EvidenceKind::Manual.as_str().into(),
                         confidence: 1.0,
                         confirmed: true,
                     }))
@@ -1173,6 +1202,9 @@ async fn persist_imported_inventory(
         error: None,
         assets_found: None,
         services_found: None,
+        filesystems_found: None,
+        running_services_found: None,
+        connections_found: None,
     };
     store.create_job(job.clone()).await?;
 
@@ -1202,6 +1234,7 @@ async fn persist_imported_inventory(
             environment: row.environment.clone(),
             owner: row.owner.clone(),
             criticality,
+            unset: Vec::new(),
             add_tags: row.tags.clone(),
             remove_tags: Vec::new(),
         };
@@ -1221,6 +1254,9 @@ async fn persist_imported_inventory(
             Some(JobOutcome {
                 assets_found: persisted,
                 services_found: services_persisted as u32,
+                filesystems_found: 0,
+                running_services_found: 0,
+                connections_found: 0,
             }),
         )
         .await?;

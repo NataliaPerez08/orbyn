@@ -157,7 +157,7 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .fetch_one(upgraded.pool())
         .await
         .expect("count applied migrations");
-    assert_eq!(migration_count, 6, "all current migrations must be applied");
+    assert_eq!(migration_count, 7, "all current migrations must be applied");
     assert!(table_names(&upgraded)
         .await
         .iter()

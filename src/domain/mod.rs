@@ -168,6 +168,46 @@ pub struct Service {
     pub banner: Option<String>,
 }
 
+/// The kind of evidence behind a dependency edge.
+///
+/// Edges store the free-form `evidence_source` string; this enum is the
+/// single point of truth for the values Orbyn itself produces, so
+/// behavior never hinges on scattered string literals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceKind {
+    /// Reconciled from active connections observed on a host.
+    ActiveConnections,
+    /// Derived from DNS records (CNAME chains / PTR): identity evidence,
+    /// not runtime coupling.
+    Dns,
+    /// Added by hand via `orbyn deps add`.
+    Manual,
+    /// A value Orbyn does not produce itself.
+    Other,
+}
+
+impl EvidenceKind {
+    /// The canonical `evidence_source` string for this kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ActiveConnections => "active-connections",
+            Self::Dns => "dns",
+            Self::Manual => "manual",
+            Self::Other => "other",
+        }
+    }
+
+    /// Classify a stored `evidence_source` value.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "active-connections" => Self::ActiveConnections,
+            "dns" => Self::Dns,
+            "manual" => Self::Manual,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// A directional dependency between two assets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Dependency {
@@ -178,6 +218,13 @@ pub struct Dependency {
     pub evidence_source: String,
     pub confidence: f32,
     pub confirmed: bool,
+}
+
+impl Dependency {
+    /// The typed evidence kind behind this edge.
+    pub fn evidence_kind(&self) -> EvidenceKind {
+        EvidenceKind::parse(&self.evidence_source)
+    }
 }
 
 /// An active network connection observed on a host (v0.4 dependency
@@ -260,6 +307,9 @@ pub enum JobStatus {
 pub struct JobOutcome {
     pub assets_found: u32,
     pub services_found: u32,
+    pub filesystems_found: u32,
+    pub running_services_found: u32,
+    pub connections_found: u32,
 }
 
 /// Metadata about a discovery run.
@@ -276,6 +326,12 @@ pub struct DiscoveryJob {
     pub assets_found: Option<u32>,
     /// Services persisted by this job (None until the job finishes).
     pub services_found: Option<u32>,
+    /// Filesystems persisted by this job (None until the job finishes).
+    pub filesystems_found: Option<u32>,
+    /// Running services persisted by this job (None until the job finishes).
+    pub running_services_found: Option<u32>,
+    /// Connections persisted by this job (None until the job finishes).
+    pub connections_found: Option<u32>,
 }
 
 /// Audit record for a mutating CLI operation.
@@ -353,5 +409,35 @@ mod tests {
         let a = Interface::new("10-0-0-10", Some("eth0"), Some("00:11:22:33:44:55"), None);
         let b = Interface::new("10-0-0-10", Some("eth0"), Some("00:11:22:33:44:55"), None);
         assert_eq!(a.id, b.id);
+    }
+
+    #[test]
+    fn evidence_kind_round_trips_canonical_values() {
+        for kind in [
+            EvidenceKind::ActiveConnections,
+            EvidenceKind::Dns,
+            EvidenceKind::Manual,
+        ] {
+            assert_eq!(EvidenceKind::parse(kind.as_str()), kind);
+        }
+        assert_eq!(EvidenceKind::parse("something-else"), EvidenceKind::Other);
+    }
+
+    #[test]
+    fn dependency_evidence_kind_classifies_stored_sources() {
+        let mut dep = Dependency {
+            source_asset_id: "a".into(),
+            target_asset_id: "b".into(),
+            proto: "dns".into(),
+            port: 0,
+            evidence_source: "dns".into(),
+            confidence: 0.5,
+            confirmed: false,
+        };
+        assert_eq!(dep.evidence_kind(), EvidenceKind::Dns);
+        dep.evidence_source = "manual".into();
+        assert_eq!(dep.evidence_kind(), EvidenceKind::Manual);
+        dep.evidence_source = "custom".into();
+        assert_eq!(dep.evidence_kind(), EvidenceKind::Other);
     }
 }

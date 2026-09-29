@@ -95,6 +95,9 @@ fn sample_job() -> DiscoveryJob {
         error: None,
         assets_found: Some(2),
         services_found: Some(2),
+        filesystems_found: Some(1),
+        running_services_found: Some(1),
+        connections_found: Some(2),
     }
 }
 
@@ -277,6 +280,7 @@ async fn annotation_merges_and_preserves() {
                 criticality: Some(Criticality::Critical),
                 add_tags: vec!["core".into(), "postgres".into()],
                 remove_tags: vec![],
+                unset: Vec::new(),
             },
         )
         .await
@@ -324,6 +328,7 @@ async fn annotation_merges_and_preserves() {
                 criticality: None,
                 add_tags: vec![],
                 remove_tags: vec!["core".into()],
+                unset: Vec::new(),
             },
         )
         .await
@@ -331,6 +336,30 @@ async fn annotation_merges_and_preserves() {
     let db = store.get_asset("asset-db").await.expect("fetch").unwrap();
     assert_eq!(db.tags, vec!["postgres".to_string()]);
     assert_eq!(db.criticality, Some(Criticality::Critical));
+
+    // Unset clears fields a previous annotation set.
+    store
+        .annotate_asset(
+            "asset-db",
+            AssetAnnotations {
+                environment: None,
+                owner: None,
+                criticality: None,
+                add_tags: vec![],
+                remove_tags: vec![],
+                unset: vec![
+                    orbyn::store::traits::AnnotationField::Owner,
+                    orbyn::store::traits::AnnotationField::Criticality,
+                ],
+            },
+        )
+        .await
+        .expect("unset fields");
+    let db = store.get_asset("asset-db").await.expect("fetch").unwrap();
+    assert_eq!(db.owner, None, "owner cleared");
+    assert_eq!(db.criticality, None, "criticality cleared");
+    assert_eq!(db.environment.as_deref(), Some("prod"), "environment kept");
+    assert_eq!(db.tags, vec!["postgres".to_string()], "tags kept");
 }
 
 #[tokio::test]
@@ -349,6 +378,9 @@ async fn job_history_round_trip() {
             Some(JobOutcome {
                 assets_found: 2,
                 services_found: 2,
+                filesystems_found: 1,
+                running_services_found: 1,
+                connections_found: 2,
             }),
         )
         .await
@@ -359,6 +391,9 @@ async fn job_history_round_trip() {
     assert_eq!(jobs[0].collector, "nmap");
     assert_eq!(jobs[0].assets_found, Some(2));
     assert_eq!(jobs[0].services_found, Some(2));
+    assert_eq!(jobs[0].filesystems_found, Some(1));
+    assert_eq!(jobs[0].running_services_found, Some(1));
+    assert_eq!(jobs[0].connections_found, Some(2));
     assert_eq!(jobs[0].status, JobStatus::Succeeded);
 
     let job = store.get_job("job-1").await.expect("get job").unwrap();

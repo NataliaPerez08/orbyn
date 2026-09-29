@@ -31,7 +31,7 @@ use anyhow::Result;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
-use crate::domain::{Asset, Dependency};
+use crate::domain::{Asset, Dependency, EvidenceKind};
 use crate::process::run_captured;
 
 /// Confidence attached to DNS-derived relationship evidence.
@@ -271,7 +271,7 @@ fn dns_edge(source: &Asset, target: &Asset) -> Dependency {
         target_asset_id: target.id.clone(),
         proto: "dns".into(),
         port: 0,
-        evidence_source: "dns".into(),
+        evidence_source: EvidenceKind::Dns.as_str().into(),
         confidence: DNS_CONFIDENCE,
         confirmed: false,
     }

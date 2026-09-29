@@ -277,7 +277,8 @@ orbyn deps remove <src> <tgt> [--proto --port]        Delete edges
 orbyn deps dns                                        Derive relationship edges from DNS
 orbyn assess [--format ...] [--rules]             Migration assessment report / rule catalog
 orbyn annotate <id-or-ip> --environment prod --owner <team> \
-    --criticality high --add-tag core --remove-tag dr  Enrich inventory metadata
+    --criticality high --add-tag core --remove-tag dr [--unset <field>] \
+                                                       Enrich or clear inventory metadata
 orbyn jobs [--limit 50] [--format ...]            Discovery history with per-job outcomes
 orbyn audit [--limit 50] [--format ...]           Mutating CLI operations and their outcomes
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)

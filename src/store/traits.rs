@@ -6,6 +6,14 @@ use crate::domain::{
     Interface, JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
 
+/// An annotation field that can be cleared with `orbyn annotate --unset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationField {
+    Environment,
+    Owner,
+    Criticality,
+}
+
 /// Inventory annotation edits applied to an asset.
 #[derive(Debug, Clone, Default)]
 pub struct AssetAnnotations {
@@ -16,6 +24,9 @@ pub struct AssetAnnotations {
     pub add_tags: Vec<String>,
     /// Tags to remove.
     pub remove_tags: Vec<String>,
+    /// Fields to clear. Applied after the setters, so unsetting a field
+    /// that is also being set clears it.
+    pub unset: Vec<AnnotationField>,
 }
 
 /// Storage contracts used across Orbyn.

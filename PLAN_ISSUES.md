@@ -6,7 +6,7 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
 dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #20, #21,
-#23, #24, #26, #28, #33, #34, #36 y #37**.
+#23, #24, #26, #28, #30, #31, #33, #34, #35, #36 y #37**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -50,14 +50,20 @@ Completada. Resumen de lo implementado:
   export hacia NetBox queda fuera por diseño: Orbyn es de solo lectura
   contra NetBox.
 
-## Fase 4 — CLI y datos operativos
+## Fase 4 — CLI y datos operativos ✅
 
-- **#30 `annotate --unset`** — flag para limpiar environment/owner/criticality
-  (hoy solo se pueden quitar tags con `--remove-tag`).
-- **#31 Job outcome completo** — persistir los counts de filesystems, servicios
-  en ejecución y conexiones, no solo assets/services.
-- **#35 Magic strings DNS** — sustituir los literales `"dns"` /
-  `evidence_source != "dns"` por una columna/`evidence_kind`.
+Completada:
+
+- **#30** — `orbyn annotate --unset <field>` (repetible: environment | owner
+  | criticality) limpia anotaciones; `AssetAnnotations` gana un campo
+  `unset` que se aplica tras los setters.
+- **#31** — los jobs persisten `filesystems_found`,
+  `running_services_found` y `connections_found` (migración `0007`), y
+  `orbyn jobs` los muestra en tabla y CSV.
+- **#35** — `domain::EvidenceKind` centraliza los valores de evidencia y
+  `Dependency::evidence_kind()` sustituye los literales `"dns"` en reglas
+  de assessment, grouping y render; el literal del SQL de reconcile queda
+  fijado por test al valor canónico.
 
 ## Fase 5 — Escala y plataforma
 

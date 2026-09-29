@@ -13,7 +13,7 @@ use crate::domain::{
     Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
     Interface, JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
 };
-use crate::store::traits::AssetAnnotations;
+use crate::store::traits::{AnnotationField, AssetAnnotations};
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -265,6 +265,9 @@ struct JobRow {
     error: Option<String>,
     assets_found: Option<i64>,
     services_found: Option<i64>,
+    filesystems_found: Option<i64>,
+    running_services_found: Option<i64>,
+    connections_found: Option<i64>,
 }
 
 #[derive(Debug, FromRow)]
@@ -311,6 +314,9 @@ impl JobRow {
             error: self.error,
             assets_found: self.assets_found.map(|v| v as u32),
             services_found: self.services_found.map(|v| v as u32),
+            filesystems_found: self.filesystems_found.map(|v| v as u32),
+            running_services_found: self.running_services_found.map(|v| v as u32),
+            connections_found: self.connections_found.map(|v| v as u32),
         }
     }
 }
@@ -358,13 +364,16 @@ impl SqliteStore {
 /// Re-create dependency edges from every recorded connection against the
 /// current asset inventory. Run after each persisted observation batch and
 /// exposed for re-scanning so no edge is missing because of collection order.
+///
+/// The evidence literal must stay in sync with
+/// [`crate::domain::EvidenceKind::ActiveConnections`]; a test pins it.
 const RECONCILE_DEPENDENCIES_SQL: &str = "
     INSERT OR IGNORE INTO dependencies \
        (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
-     SELECT c.asset_id, a.id, c.proto, c.remote_port, 'active-connections', 0.9, 0 \
-     FROM asset_connections c \
-     JOIN assets a ON a.ip = c.remote_ip \
-     WHERE c.asset_id != a.id";
+      SELECT c.asset_id, a.id, c.proto, c.remote_port, 'active-connections', 0.9, 0 \
+      FROM asset_connections c \
+      JOIN assets a ON a.ip = c.remote_ip \
+      WHERE c.asset_id != a.id";
 
 #[async_trait::async_trait]
 impl crate::store::traits::Store for SqliteStore {
@@ -840,18 +849,31 @@ impl crate::store::traits::Store for SqliteStore {
             }
         }
 
-        let environment = match annotations.environment {
-            Some(v) => Some(v),
-            None => row.try_get("environment")?,
+        let environment = if annotations.unset.contains(&AnnotationField::Environment) {
+            None
+        } else {
+            match annotations.environment {
+                Some(v) => Some(v),
+                None => row.try_get("environment")?,
+            }
         };
-        let owner = match annotations.owner {
-            Some(v) => Some(v),
-            None => row.try_get("owner")?,
+        let owner = if annotations.unset.contains(&AnnotationField::Owner) {
+            None
+        } else {
+            match annotations.owner {
+                Some(v) => Some(v),
+                None => row.try_get("owner")?,
+            }
         };
-        let criticality: Option<String> = match annotations.criticality {
-            Some(c) => Some(c.to_string()),
-            None => row.try_get("criticality")?,
-        };
+        let criticality: Option<String> =
+            if annotations.unset.contains(&AnnotationField::Criticality) {
+                None
+            } else {
+                match annotations.criticality {
+                    Some(c) => Some(c.to_string()),
+                    None => row.try_get("criticality")?,
+                }
+            };
 
         sqlx::query(
             "UPDATE assets SET environment = ?2, owner = ?3, criticality = ?4, tags = ?5 \
@@ -871,8 +893,9 @@ impl crate::store::traits::Store for SqliteStore {
     async fn create_job(&self, job: DiscoveryJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO discovery_jobs \
-               (id, collector, targets, status, started_at, finished_at, error, assets_found, services_found) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+               (id, collector, targets, status, started_at, finished_at, error, \
+                assets_found, services_found, filesystems_found, running_services_found, connections_found) \
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(&job.id)
         .bind(&job.collector)
@@ -883,6 +906,9 @@ impl crate::store::traits::Store for SqliteStore {
         .bind(&job.error)
         .bind(job.assets_found.map(|n| n as i64))
         .bind(job.services_found.map(|n| n as i64))
+        .bind(job.filesystems_found.map(|n| n as i64))
+        .bind(job.running_services_found.map(|n| n as i64))
+        .bind(job.connections_found.map(|n| n as i64))
         .execute(&self.pool)
         .await
         .context("creating discovery job")?;
@@ -892,7 +918,8 @@ impl crate::store::traits::Store for SqliteStore {
     async fn get_job(&self, id: &str) -> Result<Option<DiscoveryJob>> {
         let row = sqlx::query_as::<_, JobRow>(
             "SELECT id, collector, targets, status, started_at, finished_at, error, \
-                    assets_found, services_found \
+                    assets_found, services_found, filesystems_found, \
+                    running_services_found, connections_found \
              FROM discovery_jobs WHERE id = ?1",
         )
         .bind(id)
@@ -905,7 +932,8 @@ impl crate::store::traits::Store for SqliteStore {
     async fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<DiscoveryJob>> {
         let mut sql = String::from(
             "SELECT id, collector, targets, status, started_at, finished_at, error, \
-                    assets_found, services_found \
+                    assets_found, services_found, filesystems_found, \
+                    running_services_found, connections_found \
              FROM discovery_jobs ORDER BY started_at DESC",
         );
         if let Some(limit) = limit {
@@ -927,11 +955,17 @@ impl crate::store::traits::Store for SqliteStore {
     ) -> Result<()> {
         let assets_found = outcome.map(|o| o.assets_found as i64);
         let services_found = outcome.map(|o| o.services_found as i64);
+        let filesystems_found = outcome.map(|o| o.filesystems_found as i64);
+        let running_services_found = outcome.map(|o| o.running_services_found as i64);
+        let connections_found = outcome.map(|o| o.connections_found as i64);
         sqlx::query(
             "UPDATE discovery_jobs \
              SET status = ?2, finished_at = ?3, error = ?4, \
                  assets_found = COALESCE(?5, assets_found), \
-                 services_found = COALESCE(?6, services_found) \
+                 services_found = COALESCE(?6, services_found), \
+                 filesystems_found = COALESCE(?7, filesystems_found), \
+                 running_services_found = COALESCE(?8, running_services_found), \
+                 connections_found = COALESCE(?9, connections_found) \
              WHERE id = ?1",
         )
         .bind(id)
@@ -940,6 +974,9 @@ impl crate::store::traits::Store for SqliteStore {
         .bind(&error)
         .bind(assets_found)
         .bind(services_found)
+        .bind(filesystems_found)
+        .bind(running_services_found)
+        .bind(connections_found)
         .execute(&self.pool)
         .await
         .context("finishing discovery job")?;
@@ -1016,5 +1053,19 @@ fn parse_status(status: &str) -> JobStatus {
         "succeeded" => JobStatus::Succeeded,
         "failed" => JobStatus::Failed,
         _ => JobStatus::Pending,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::EvidenceKind;
+
+    /// The reconcile SQL hardcodes the evidence literal; it must stay in
+    /// sync with the canonical `EvidenceKind` value.
+    #[test]
+    fn reconcile_sql_uses_canonical_evidence_kind() {
+        assert!(RECONCILE_DEPENDENCIES_SQL
+            .contains(format!("'{}'", EvidenceKind::ActiveConnections.as_str()).as_str()));
     }
 }

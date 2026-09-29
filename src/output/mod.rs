@@ -11,8 +11,8 @@ use comfy_table::{Cell, ContentArrangement, Table};
 use crate::assessment::rules::Rule;
 use crate::assessment::{AssessmentReport, Severity};
 use crate::domain::{
-    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
-    Interface, JobStatus, RunningService, Service,
+    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, EvidenceKind,
+    Filesystem, Interface, JobStatus, RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -417,11 +417,12 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
         Format::Json => json(jobs),
         Format::Csv => {
             let mut out = String::from(
-                "id,collector,status,targets,started_at,finished_at,assets_found,services_found,error\n",
+                "id,collector,status,targets,started_at,finished_at,assets_found,services_found,\
+                 filesystems_found,running_services_found,connections_found,error\n",
             );
             for j in jobs {
                 out.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     csv(&j.id),
                     csv(&j.collector),
                     job_status_str(j.status),
@@ -430,6 +431,15 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
                     j.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
                     j.assets_found.map(|n| n.to_string()).unwrap_or_default(),
                     j.services_found.map(|n| n.to_string()).unwrap_or_default(),
+                    j.filesystems_found
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                    j.running_services_found
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                    j.connections_found
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
                     csv(&j.error.clone().unwrap_or_default()),
                 ));
             }
@@ -449,6 +459,9 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
                 "Duration",
                 "Assets",
                 "Services",
+                "Filesystems",
+                "Running",
+                "Conns",
             ]);
             for j in jobs {
                 table.add_row(vec![
@@ -465,6 +478,21 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
                     ),
                     Cell::new(
                         j.services_found
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                    Cell::new(
+                        j.filesystems_found
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                    Cell::new(
+                        j.running_services_found
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                    Cell::new(
+                        j.connections_found
                             .map(|n| n.to_string())
                             .unwrap_or_else(|| "-".into()),
                     ),
@@ -753,7 +781,7 @@ fn asset_label(assets: &[Asset], id: &str) -> String {
 }
 
 fn edge_via(d: &Dependency) -> String {
-    if d.proto == "dns" {
+    if d.evidence_kind() == EvidenceKind::Dns {
         "dns".into()
     } else {
         format!("{}/{}", d.proto, d.port)
@@ -761,7 +789,7 @@ fn edge_via(d: &Dependency) -> String {
 }
 
 fn mermaid_edge_label(d: &Dependency) -> String {
-    if d.proto == "dns" {
+    if d.evidence_kind() == EvidenceKind::Dns {
         format!("dns {:.0}%", d.confidence * 100.0)
     } else {
         format!("{}/{} {:.0}%", d.proto, d.port, d.confidence * 100.0)
@@ -1144,6 +1172,9 @@ mod tests {
             error: None,
             assets_found: None,
             services_found: None,
+            filesystems_found: None,
+            running_services_found: None,
+            connections_found: None,
         };
         assert_eq!(duration_label(&running), "-");
 

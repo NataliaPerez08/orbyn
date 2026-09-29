@@ -167,6 +167,13 @@ fn ssh_discovery_collects_host_facts_and_edges() {
     );
     assert!(out.contains("2 filesystems, 2 running services, 3 connections"));
 
+    // the job record stores the full outcome, not only assets/services
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(
+        jobs.contains(",1,0,2,2,3,"),
+        "assets=1 services=0 filesystems=2 running=2 conns=3 in csv: {jobs}"
+    );
+
     // capacity
     let cap = run_ok(orbyn(&dir).args(["capacity", "10.0.0.5"]));
     assert!(cap.contains("Intel(R) Xeon(R) Gold 6138"));

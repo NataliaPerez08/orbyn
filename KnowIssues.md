@@ -201,13 +201,18 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 
 ## CLI & miscellaneous
 
-30. **`annotate` cannot unset environment/owner/criticality** — `gap`
-    `AssetAnnotations` treats `None` as "keep", so there is no way to clear a
-    value; only tags are removable via `--remove-tag`.
+30. **`annotate` cannot unset environment/owner/criticality** — `gap` ~~FIXED~~
+    `orbyn annotate --unset <field>` (repeatable: environment | owner |
+    criticality) clears annotation fields; unsetting wins over setting the
+    same field in one invocation. (Resolved in `src/store/traits.rs` +
+    `src/store/sqlite.rs`.)
 
-31. **Job outcome only stores asset/service counts** — `quality`
-    `finish_job` persists `assets_found`/`services_found`; filesystem, running
-    service and connection counts appear in the CLI summary but are not stored.
+31. **Job outcome only stores asset/service counts** — `quality` ~~FIXED~~
+    Discovery jobs now persist `filesystems_found`,
+    `running_services_found` and `connections_found` alongside
+    assets/services (migration `0007`), and `orbyn jobs` renders them in
+    table and CSV output. (Resolved in `src/domain/mod.rs` +
+    `src/store/sqlite.rs`.)
 
 32. **E2E tests are Unix-only** — `quality`
     The fake collector binaries are bash scripts and the E2E tests are
@@ -223,10 +228,13 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     wins) via `orbyn::import::deduplicate` and warns about skipped duplicates.
     (Resolved in `src/import.rs` + `src/main.rs`.)
 
-35. **Magic strings for DNS evidence** — `quality`
-    DNS edges use `proto: "dns"` / `port: 0` and are excluded via literal
-    `evidence_source != "dns"` in `dep.hub`, `dep.unconfirmed` and grouping.
-    Fragile if more evidence kinds need the same treatment.
+35. **Magic strings for DNS evidence** — `quality` ~~FIXED~~
+    `domain::EvidenceKind` is now the single point of truth for the
+    evidence values Orbyn produces (`active-connections`, `dns`, `manual`),
+    and `Dependency::evidence_kind()` replaces the scattered
+    `evidence_source != "dns"` / `proto == "dns"` literals in assessment
+    rules, grouping and rendering. The reconcile SQL literal is pinned to
+    the canonical value by a test. (Resolved in `src/domain/mod.rs`.)
 
 ---
 

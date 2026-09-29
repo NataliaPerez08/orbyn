@@ -229,6 +229,50 @@ fn machine_readable_formats_parse_as_json() {
 
 #[cfg(unix)]
 #[test]
+fn annotate_unset_clears_fields() {
+    let dir = TempDir::new("annotate-unset");
+    import_json(&dir, THREE_ASSETS_JSON);
+
+    // api-01 arrives with environment/owner/criticality set.
+    run_ok_combined(orbyn(&dir).args([
+        "annotate",
+        "api-01",
+        "--unset",
+        "environment",
+        "--unset",
+        "owner",
+    ]));
+    let out = run_ok(orbyn(&dir).args(["asset", "api-01", "--format", "json"]));
+    let v: serde_json::Value = serde_json::from_str(&out).expect("asset JSON");
+    let a = &v["asset"];
+    assert!(a["environment"].is_null(), "environment cleared: {out}");
+    assert!(a["owner"].is_null(), "owner cleared: {out}");
+    assert_eq!(a["criticality"], "high", "criticality untouched: {out}");
+    assert_eq!(
+        a["tags"],
+        serde_json::json!(["core", "api"]),
+        "tags untouched: {out}"
+    );
+
+    // unsetting everything, including criticality
+    run_ok_combined(orbyn(&dir).args(["annotate", "api-01", "--unset", "criticality"]));
+    let out = run_ok(orbyn(&dir).args(["asset", "api-01", "--format", "json"]));
+    let v: serde_json::Value = serde_json::from_str(&out).expect("asset JSON");
+    assert!(
+        v["asset"]["criticality"].is_null(),
+        "criticality cleared: {out}"
+    );
+
+    // an unset of an already-empty field is a no-op, not an error
+    run_ok_combined(orbyn(&dir).args(["annotate", "api-01", "--unset", "owner"]));
+
+    // bad field name fails cleanly
+    let out = run_fail(orbyn(&dir).args(["annotate", "api-01", "--unset", "bogus"]));
+    assert!(out.contains("invalid value"), "got: {out}");
+}
+
+#[cfg(unix)]
+#[test]
 fn audit_records_successful_and_failed_mutations() {
     let dir = TempDir::new("audit");
     import_json(&dir, THREE_ASSETS_JSON);

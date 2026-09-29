@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use super::ApplicationGroup;
-use crate::domain::{Asset, Dependency};
+use crate::domain::{Asset, Dependency, EvidenceKind};
 
 /// Group assets connected by non-DNS dependency edges.
 ///
@@ -17,7 +17,7 @@ use crate::domain::{Asset, Dependency};
 pub fn application_groups(assets: &[Asset], dependencies: &[Dependency]) -> Vec<ApplicationGroup> {
     let edges: Vec<&Dependency> = dependencies
         .iter()
-        .filter(|d| d.evidence_source != "dns")
+        .filter(|d| d.evidence_kind() != EvidenceKind::Dns)
         .collect();
     if edges.is_empty() {
         return Vec::new();
