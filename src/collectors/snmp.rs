@@ -209,6 +209,12 @@ impl SnmpCollector {
             .arg(agent)
             .arg(oid)
             .env("SNMPCONFPATH", config_dir)
+            // Secret-bearing variables never reach the child environment
+            // (audit OY-02): a hijacked binary must not be able to read the
+            // community, the NetBox token or the database URL password.
+            .env_remove("ORBYN_SNMP_COMMUNITY")
+            .env_remove("ORBYN_NETBOX_TOKEN")
+            .env_remove("ORBYN_DB")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

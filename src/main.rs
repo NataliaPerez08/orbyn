@@ -393,7 +393,7 @@ enum NetboxAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
+    load_dotenv_from(std::path::Path::new(".env"));
 
     let cli = Cli::parse();
     init_logging(cli.verbose);
@@ -645,6 +645,12 @@ async fn main() -> anyhow::Result<()> {
                      connections can be silently intercepted."
                 );
             }
+            if is_plain_http(&url) {
+                eprintln!(
+                    "WARNING: --url uses plain HTTP; the NetBox token will travel \
+                     unencrypted over the network (audit OY-12)."
+                );
+            }
             let store = open_store(&config).await?;
             let mut redactor = orbyn::redact::Redactor::from_env();
             if let Some(token) = &token {
@@ -783,6 +789,49 @@ fn validate_ssh_user(user: Option<&str>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// True when a NetBox URL uses plaintext HTTP: the Authorization token
+/// would travel unencrypted (audit OY-12).
+fn is_plain_http(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("http://")
+}
+
+/// Load `.env` from `path` only — never from parent directories (audit
+/// OY-01: `dotenvy::dotenv()` ascends the tree, so a stray `.env` in an
+/// ancestor could execute arbitrary binaries via `ORBYN_*_BIN`).
+///
+/// Preserves `dotenvy` semantics: variables already present in the
+/// environment win over file values. Warns when the file overrides an
+/// `ORBYN_*_BIN` with anything but the built-in default binary name —
+/// Orbyn executes that binary, and the operator should see it.
+fn load_dotenv_from(path: &std::path::Path) {
+    let Ok(iter) = dotenvy::from_path_iter(path) else {
+        return;
+    };
+    for (key, value) in iter.flatten() {
+        if key.starts_with("ORBYN_") && key.ends_with("_BIN") && !is_default_bin(&key, &value) {
+            eprintln!(
+                "WARNING: {} configures {key}={value}; Orbyn will execute that binary.",
+                path.display()
+            );
+        }
+        if std::env::var_os(&key).is_none() {
+            std::env::set_var(&key, value);
+        }
+    }
+}
+
+/// True when `key`/`value` reproduce the built-in binary default, in which
+/// case the `.env` line changes nothing and deserves no warning.
+fn is_default_bin(key: &str, value: &str) -> bool {
+    matches!(
+        (key, value),
+        ("ORBYN_NMAP_BIN", "nmap")
+            | ("ORBYN_SNMP_BIN", "snmpwalk")
+            | ("ORBYN_SSH_BIN", "ssh")
+            | ("ORBYN_CURL_BIN", "curl")
+    )
 }
 
 /// Run one discovery job over the given targets, fanning them out over a
@@ -1480,6 +1529,53 @@ mod tests {
         assert!(validate_ssh_user(Some("-Jevil.example")).is_err());
         assert!(validate_ssh_user(Some("deploy")).is_ok());
         assert!(validate_ssh_user(None).is_ok());
+    }
+
+    #[test]
+    fn plain_http_urls_are_detected() {
+        assert!(is_plain_http("http://netbox.example.com"));
+        assert!(is_plain_http("  HTTP://netbox.example.com  "));
+        assert!(!is_plain_http("https://netbox.example.com"));
+        assert!(!is_plain_http("https://netbox.example.com/http://x"));
+    }
+
+    #[test]
+    fn dotenv_loads_only_the_given_file_without_overwrite() {
+        let dir = std::env::temp_dir().join(format!("orbyn-dotenv-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create dotenv test dir");
+        let env_file = dir.join(".env");
+        std::fs::write(
+            &env_file,
+            "ORBYN_DOTENV_TEST_NEW=loaded\nORBYN_DOTENV_TEST_EXISTING=from_file\n",
+        )
+        .expect("write test .env");
+        std::env::set_var("ORBYN_DOTENV_TEST_EXISTING", "from_env");
+
+        load_dotenv_from(&env_file);
+
+        assert_eq!(
+            std::env::var("ORBYN_DOTENV_TEST_NEW").expect("new var loaded"),
+            "loaded"
+        );
+        assert_eq!(
+            std::env::var("ORBYN_DOTENV_TEST_EXISTING").expect("existing var kept"),
+            "from_env",
+            "environment must win over the .env file"
+        );
+        std::env::remove_var("ORBYN_DOTENV_TEST_NEW");
+        std::env::remove_var("ORBYN_DOTENV_TEST_EXISTING");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_bin_overrides_are_recognized() {
+        assert!(is_default_bin("ORBYN_NMAP_BIN", "nmap"));
+        assert!(is_default_bin("ORBYN_SNMP_BIN", "snmpwalk"));
+        assert!(is_default_bin("ORBYN_SSH_BIN", "ssh"));
+        assert!(is_default_bin("ORBYN_CURL_BIN", "curl"));
+        assert!(!is_default_bin("ORBYN_NMAP_BIN", "/tmp/evil-nmap"));
+        assert!(!is_default_bin("ORBYN_NMAP_BIN", "nmap-backup"));
+        assert!(!is_default_bin("ORBYN_DB", "nmap"));
     }
 
     #[test]

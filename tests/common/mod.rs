@@ -156,6 +156,9 @@ pub const FAKE_SNMPWALK_SCRIPT: &str = r#"#!/usr/bin/env bash
 if [[ -n "$ORBYN_SNMP_ARGS_LOG" ]]; then
   printf '%s\n' "$@" >> "$ORBYN_SNMP_ARGS_LOG"
 fi
+if [[ -n "$ORBYN_SNMP_ENV_LOG" ]]; then
+  env > "$ORBYN_SNMP_ENV_LOG"
+fi
 if [[ -n "$ORBYN_SNMP_CONF_LOG" && -n "$SNMPCONFPATH" ]]; then
   cat "$SNMPCONFPATH/snmp.conf" >> "$ORBYN_SNMP_CONF_LOG"
 fi

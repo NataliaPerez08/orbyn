@@ -9,6 +9,26 @@
   (RustSec, 251 crates).
 - **Severidades**: Alta / Media / Baja / Informativa.
 
+## Estado de remediación
+
+| ID | Estado | Detalle |
+|----|--------|---------|
+| OY-01 | ✅ Corregido | `.env` se carga solo del directorio actual (sin ascender) + warning cuando define un `ORBYN_*_BIN` no estándar |
+| OY-02 | ✅ Corregido | `env_remove` de `ORBYN_SNMP_COMMUNITY`/`ORBYN_NETBOX_TOKEN`/`ORBYN_DB` en los 4 spawns (nmap, snmpwalk, ssh, curl) + test E2E |
+| OY-03 | ✅ Corregido | `hide_env_values = true` en `--community` y `--token` + test de help |
+| OY-04 | ✅ Corregido | `csv()` neutraliza fórmulas (`= + - @ \t \r`) con prefijo `'` + tests |
+| OY-05 | ✅ Corregido | SQLite pre-creado `0600`, directorio nuevo `0700`, WAL/SHM restringidos post-migrate + test |
+| OY-11 | ✅ Corregido | `validate_ssh_user` rechaza valores con `-` inicial + tests |
+| OY-12 | ✅ Corregido | Warning obligatorio para `--url http://` + test del predicado |
+| OY-13 | ✅ Corregido | Umbral del Redactor bajado de 6 a 4 chars + test (`cisco` cubierto) |
+| OY-14 | ✅ Corregido | `resolve_secret` rechaza `\n`/`\r`/`\0` en ambas rutas (flag y stdin) + test |
+| OY-15 | ✅ Corregido | Truncado por caracteres en `derive_os_from_sysdescr` + test de regresión multibyte |
+| OY-06, OY-07, OY-08, OY-09, OY-10, OY-16 | ⏳ Pendiente | Medio plazo (ver plan abajo) |
+| OY-17–OY-27 | ⏳ Pendiente | Residuales documentados / informativas |
+
+Todos los fix verificados con los PoC del informe re-ejecutados contra el binario
+recompilado, además de `cargo fmt`, `clippy -D warnings` y la suite completa.
+
 ## Resumen ejecutivo
 
 | Severidad    | Cantidad |

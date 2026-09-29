@@ -1043,11 +1043,21 @@ fn human_kb(kb: u64) -> String {
     }
 }
 
+/// Quote a CSV field, neutralizing spreadsheet formula injection (audit
+/// OY-04): a field starting with `=`, `+`, `-`, `@`, tab or CR is prefixed
+/// with `'` so Excel/LibreOffice treat it as text. Device-controlled values
+/// (SNMP `sysName`, PTR hostnames, imported tags) reach the export, and a
+/// hostile `=HYPERLINK(...)` or DDE payload must never execute.
 fn csv(field: &str) -> String {
+    let field = if field.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{field}")
+    } else {
+        field.to_string()
+    };
     if field.contains(',') || field.contains('"') || field.contains('\n') {
         format!("\"{}\"", field.replace('"', "\"\""))
     } else {
-        field.to_string()
+        field
     }
 }
 
@@ -1197,6 +1207,27 @@ mod tests {
         assert_eq!(csv("has,comma"), "\"has,comma\"");
         assert_eq!(csv("has\"quote"), "\"has\"\"quote\"");
         assert_eq!(csv("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    #[test]
+    fn csv_neutralizes_formula_injection() {
+        assert_eq!(
+            csv("=HYPERLINK(\"http://evil\",\"x\")"),
+            "\"'=HYPERLINK(\"\"http://evil\"\",\"\"x\"\")\""
+        );
+        assert_eq!(csv("=cmd|'/c calc'!A1"), "'=cmd|'/c calc'!A1");
+        assert_eq!(
+            csv("+WEBSERVICE(\"http://evil\")"),
+            "\"'+WEBSERVICE(\"\"http://evil\"\")\""
+        );
+        assert_eq!(csv("@evil"), "'@evil");
+        assert_eq!(csv("-2+3|cmd"), "'-2+3|cmd");
+        assert_eq!(csv("\ttab-led"), "'\ttab-led");
+        // Neutralized fields still get quoted when they carry separators.
+        assert_eq!(csv("=1,2"), "\"'=1,2\"");
+        // Ordinary values are untouched.
+        assert_eq!(csv("web-01"), "web-01");
+        assert_eq!(csv("10.0.0.5"), "10.0.0.5");
     }
 
     #[test]

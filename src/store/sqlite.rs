@@ -28,9 +28,33 @@ impl SqliteStore {
     /// Open (creating if necessary) the database at `path` and run migrations.
     pub async fn open(path: &std::path::Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating database directory {}", parent.display()))?;
+                #[cfg(unix)]
+                restrict_permissions(parent, 0o700)?;
+            }
+        }
+
+        // Create the database file ourselves with owner-only permissions
+        // (audit OY-05): sqlx would create it with the process umask,
+        // typically 0644, leaving the whole inventory world-readable on
+        // multi-user hosts.
+        if !path.exists() {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(_) => {
+                    #[cfg(unix)]
+                    restrict_permissions(path, 0o600)?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("creating database file {}", path.display()));
+                }
             }
         }
 
@@ -50,12 +74,35 @@ impl SqliteStore {
             .await
             .context("running database migrations")?;
 
+        // The migrator switches the database into WAL mode, so the -wal and
+        // -shm sidecar files carry inventory data too; restrict them as
+        // well (best effort — they may not exist yet).
+        #[cfg(unix)]
+        {
+            for suffix in ["-wal", "-shm"] {
+                let mut sidecar = std::ffi::OsString::from(path.as_os_str());
+                sidecar.push(suffix);
+                let sidecar = std::path::PathBuf::from(sidecar);
+                if sidecar.exists() {
+                    restrict_permissions(&sidecar, 0o600)?;
+                }
+            }
+        }
+
         Ok(Self { pool })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+}
+
+/// Restrict a path to owner-only access on Unix (audit OY-05).
+#[cfg(unix)]
+fn restrict_permissions(path: &std::path::Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .with_context(|| format!("restricting permissions on {}", path.display()))
 }
 
 /// Re-create dependency edges from every recorded connection against the
@@ -802,5 +849,34 @@ mod tests {
     fn reconcile_sql_uses_canonical_evidence_kind() {
         assert!(RECONCILE_DEPENDENCIES_SQL
             .contains(format!("'{}'", EvidenceKind::ActiveConnections.as_str()).as_str()));
+    }
+
+    /// A freshly created database must be owner-only (audit OY-05): sqlx
+    /// would otherwise leave a world-readable 0644 file behind.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fresh_database_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("orbyn-sqlite-perms-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let db = dir.join("orbyn.db");
+
+        let store = SqliteStore::open(&db).await.expect("open fresh store");
+        let mode = std::fs::metadata(&db)
+            .expect("db metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "database file must be 0600");
+        let dir_mode = std::fs::metadata(&dir)
+            .expect("dir metadata")
+            .permissions()
+            .mode();
+        assert_eq!(dir_mode & 0o777, 0o755, "pre-existing dir is left alone");
+
+        // Re-opening an existing database keeps working.
+        drop(store);
+        SqliteStore::open(&db).await.expect("reopen existing store");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

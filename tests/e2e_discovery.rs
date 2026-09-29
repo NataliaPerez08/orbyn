@@ -198,6 +198,39 @@ fn snmp_community_from_stdin_reaches_the_walk() {
 
 #[cfg(unix)]
 #[test]
+fn snmp_community_not_inherited_by_child_environment() {
+    let dir = TempDir::new("snmp-env");
+    let bin = fake_bin(&dir, "snmpwalk", FAKE_SNMPWALK_SCRIPT);
+    let env_log = dir.path().join("snmp-env.log");
+    let conf_log = dir.path().join("snmp-conf.log");
+
+    // Audit OY-02: the community must reach the walk through the config
+    // file, but never through the environment inherited by the child —
+    // a hijacked snmpwalk could otherwise read it straight from `env`.
+    let out = run_ok(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.8", "--collector", "snmp"])
+            .env("ORBYN_SNMP_BIN", &bin)
+            .env("ORBYN_SNMP_COMMUNITY", "super-secret-community")
+            .env("ORBYN_SNMP_ENV_LOG", &env_log)
+            .env("ORBYN_SNMP_CONF_LOG", &conf_log),
+    );
+    assert!(out.contains("switch-core-1"), "walk still succeeds: {out}");
+
+    let child_env = std::fs::read_to_string(&env_log).expect("child env log");
+    assert!(
+        !child_env.contains("super-secret-community"),
+        "community must not be inherited by the child: {child_env}"
+    );
+    let conf = std::fs::read_to_string(&conf_log).expect("conf log");
+    assert!(
+        conf.contains("defCommunity super-secret-community"),
+        "community still reaches the walk config: {conf}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn discover_failure_redacts_cli_community() {
     let dir = TempDir::new("snmp-redact");
     // A failing fake snmpwalk whose stderr carries the secret: proves a
