@@ -27,7 +27,7 @@ use crate::domain::{
     asset_id, Asset, Capacity, Connection, Filesystem, MetricSample, Observation, RunningService,
 };
 use crate::parsing::{parse_addr_port, split_sections};
-use crate::process::run_captured;
+use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES, MAX_STDOUT_CAPTURE_BYTES};
 
 use super::credentials::CredentialProfile;
 use super::types::{Collector, CpuFacts, ScanTarget};
@@ -123,7 +123,8 @@ impl SshTransport {
         let captured = run_captured(
             child,
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             SSH_PROBE_TIMEOUT,
             format!("ssh timed out connecting to {destination}"),
         )
@@ -134,6 +135,13 @@ impl SshTransport {
                 "ssh exited with {} against {destination}: {}",
                 captured.status,
                 captured.stderr.trim()
+            ));
+        }
+        if captured.stdout_truncated {
+            return Err(anyhow!(
+                "ssh probe output from {destination} exceeded the {} byte \
+                 capture limit",
+                MAX_STDOUT_CAPTURE_BYTES
             ));
         }
         Ok(captured.stdout)

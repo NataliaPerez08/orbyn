@@ -265,16 +265,21 @@ ORBYN_DB="postgres://orbyn@db.example.com:5432/orbyn?sslmode=require" orbyn disc
 ```
 
 TLS is negotiated when the server offers it (`sslmode=prefer` by default);
-use `?sslmode=require` for remote databases. Credentials embedded in the
-URL are visible in argv and the environment like any connection string —
-prefer a least-privilege role and, where possible, certificate or
-password-file authentication over inline passwords.
+use `?sslmode=require` for remote databases. A URL without a password falls
+back to `ORBYN_PG_PASSWORD` (or the standard `PGPASSWORD`) so the credential
+never appears in the process arguments; a URL that does embed a password
+prints a warning, since argv is readable by any local user (`ps`,
+`/proc/<pid>/cmdline`). Prefer a least-privilege role and, where possible,
+certificate or password-file authentication over inline passwords.
 
 ## CLI reference
 
 ```text
 orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
-    [--rate-limit <n>] [--collector ...]  Scan targets (parallel worker pool)
+    [--rate-limit <n>] [--collector ...] [--allow-large-cidr]
+                                                  Scan targets (parallel worker pool);
+                                                  CIDR wider than /16 (IPv4) or /48
+                                                  (IPv6) needs --allow-large-cidr
 orbyn assets [--format table|json|csv]
 orbyn asset <id-or-ip> [--format ...]             Full record: annotations, interfaces, capacity, disks, units
 orbyn services <id-or-ip> [--format ...]          Network services (ports)

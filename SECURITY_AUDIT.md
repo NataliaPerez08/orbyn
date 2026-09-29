@@ -18,16 +18,22 @@
 | OY-03 | ✅ Corregido | `hide_env_values = true` en `--community` y `--token` + test de help |
 | OY-04 | ✅ Corregido | `csv()` neutraliza fórmulas (`= + - @ \t \r`) con prefijo `'` + tests |
 | OY-05 | ✅ Corregido | SQLite pre-creado `0600`, directorio nuevo `0700`, WAL/SHM restringidos post-migrate + test |
+| OY-06 | ✅ Corregido | URLs sin password aceptan `ORBYN_PG_PASSWORD`/`PGPASSWORD` (estilo libpq); URL con password embebido dispara warning y el valor queda registrado en el Redactor |
+| OY-07 | ✅ Corregido | `resolve_secret` advierte cuando el secreto llega como valor literal de flag (no con `-`/env), recomendando stdin o variable de entorno |
+| OY-08 | ✅ Corregido | `run_captured` exige topes de stdout y stderr (16 MiB / 1 MiB por defecto) con drenaje del excedente y flag de truncado; los collectors fallan con error explícito si la salida se corta |
+| OY-09 | ✅ Corregido | Piso de prefijo por defecto: IPv4 /16, IPv6 /48 (`MIN_IPV4_PREFIX`/`MIN_IPV6_PREFIX`); `--allow-large-cidr` es el opt-in explícito y `/0` sigue rechazado bajo cualquier política |
+| OY-10 | ✅ Corregido | Las 21 referencias a actions de CI y release quedan fijadas por SHA de commit (con comentario de versión) y los tokens siguen el mínimo privilegio (`contents: read` salvo el job que publica) |
 | OY-11 | ✅ Corregido | `validate_ssh_user` rechaza valores con `-` inicial + tests |
 | OY-12 | ✅ Corregido | Warning obligatorio para `--url http://` + test del predicado |
 | OY-13 | ✅ Corregido | Umbral del Redactor bajado de 6 a 4 chars + test (`cisco` cubierto) |
 | OY-14 | ✅ Corregido | `resolve_secret` rechaza `\n`/`\r`/`\0` en ambas rutas (flag y stdin) + test |
 | OY-15 | ✅ Corregido | Truncado por caracteres en `derive_os_from_sysdescr` + test de regresión multibyte |
-| OY-06, OY-07, OY-08, OY-09, OY-10, OY-16 | ⏳ Pendiente | Medio plazo (ver plan abajo) |
-| OY-17–OY-27 | ⏳ Pendiente | Residuales documentados / informativas |
+| OY-16 | ✅ Corregido | `hcl_string` escapa `\n`/`\r`/`\t`/controles como `\uXXXX` y dobla `${` a `$${` (también cierra la inyección de interpolación de Terraform) + tests |
+| OY-17–OY-27 | 📄 Residuales | Documentados como riesgo residual aceptado en `THREAT_MODEL.md` (R-8..R-12); ver detalle abajo |
 
 Todos los fix verificados con los PoC del informe re-ejecutados contra el binario
-recompilado, además de `cargo fmt`, `clippy -D warnings` y la suite completa.
+recompilado (y el fallback `PGPASSWORD` probado contra un PostgreSQL vivo),
+además de `cargo fmt`, `clippy -D warnings` y la suite completa.
 
 ## Resumen ejecutivo
 
@@ -403,26 +409,31 @@ contra el binario compilado.
 - **`.env` está en `.gitignore`** y no hay secretos en el repo.
 - **quick-xml sin resolución de entidades** (sin XXE en el parser de nmap).
 - **`run_captured`**: lecturas concurrentes de pipes (sin deadlock), timeout único
-  de ciclo de vida, `kill_on_drop` en todos los spawns.
+  de ciclo de vida, `kill_on_drop` en todos los spawns, topes de captura por
+  stream con drenaje del excedente y reporte de truncado (OY-08).
 - **Errores de conexión PostgreSQL no revelan** URL ni password (verificado con
   password incorrecto y URL malformada).
 - **Sin `unsafe`** y sin invocación de shell en todo el árbol.
-- **`validate_target`** rechaza `0.0.0.0/0`, `::/0`, cualquier `/0` y `0.0.0.0/8`
-  (parcial: ver OY-09).
+- **`validate_target`** rechaza `0.0.0.0/0`, `::/0`, cualquier `/0`, `0.0.0.0/8`
+  y, desde la remediación de OY-09, todo prefijo por debajo de /16 (IPv4) o
+  /48 (IPv6) salvo `--allow-large-cidr`.
 
 ## Plan de remediación sugerido
 
 1. **Inmediato (horas, sin cambios de comportamiento)**: OY-03
    (`hide_env_values`), OY-14 (validación CRLF del token), OY-15 (slicing UTF-8),
    OY-11 (rechazar `--user` con `-` inicial), OY-13 (umbral del redactor).
+   **Completado.**
 2. **Corto plazo (días)**: OY-02 (`env_remove` de secretos en hijos + test E2E),
    OY-05 (SQLite `0600`), OY-04 (neutralizar fórmulas CSV), OY-12 (warning
    `http://`), OY-01 (dotenvy opt-in o sin ascenso de directorios).
+   **Completado.**
 3. **Medio plazo**: OY-06/OY-07 (password de DB fuera de argv + registro en el
    Redactor), OY-08 (topes de captura para todos los hijos), OY-09 (mínimo de
    prefijo CIDR), OY-10 (pin SHA + `permissions:` en CI), OY-16 (escapes HCL).
+   **Completado.**
 4. **Documentar como residuales**: OY-17, OY-18, OY-19, OY-20, OY-21–OY-27 en
-   THREAT_MODEL.md / SECURITY.md.
+   THREAT_MODEL.md / SECURITY.md. **Completado** (THREAT_MODEL.md R-8..R-12).
 
 ## Nota metodológica
 

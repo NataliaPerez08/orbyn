@@ -95,7 +95,7 @@ Assets that matter:
 | D-1 A second local user reads the SQLite db (inventory is sensitive) | Information disclosure | SQLite file inherits the operator's umask; default path is `./data/orbyn.db`. | Present: documented. **Residual**: no encrypted-at-rest store; operator should keep the db private (chmod/dir perms). |
 | D-2 The db file is corrupted/missing and `sqlx` auto-migrates blindly | Integrity/DoS | Migrations are compile-time embedded and idempotent; `PRAGMA foreign_keys=ON`. | Present. |
 | D-3 A job audit row leaks a redacted secret in cleartext | Information disclosure | `finish_job` stores only the redacted error string. | Present: redactor applied at the write boundary (`main.rs`). |
-| D-4 The PostgreSQL backend leaks the connection password (URL in argv/env, plaintext on the wire) | Information disclosure / Spoofing | Orbyn stores no database credentials; the operator-supplied URL is the only secret carrier. TLS is negotiated when offered (`sslmode=prefer` default) and enforceable with `?sslmode=require`; sqlx error messages do not echo the password. | Present. **Residual**: URL credentials are visible in argv/env like any connection string — operators should use a least-privilege role and certificate or password-file authentication for remote databases. |
+| D-4 The PostgreSQL backend leaks the connection password (URL in argv/env, plaintext on the wire) | Information disclosure / Spoofing | Orbyn stores no database credentials; the operator-supplied URL is the only secret carrier. A URL without a password falls back to `ORBYN_PG_PASSWORD`/`PGPASSWORD` (libpq-style) so the credential need not appear in argv; a URL that embeds one warns at runtime and the value is registered with the redactor. TLS is negotiated when offered (`sslmode=prefer` default) and enforceable with `?sslmode=require`; sqlx error messages do not echo the password. | Present. **Residual**: an operator who still embeds the password in the URL keeps it in argv — use the env fallback, a least-privilege role, and certificate or password-file authentication for remote databases. |
 
 ### E — Output
 
@@ -114,7 +114,8 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 1. Targets → argument vectors, never shell strings.
 2. No `sh -c`; binary paths are the only external code executed.
 3. Secrets exist in process memory only; redact before any write boundary.
-4. Scope is validated (`0.0.0.0/0` rejected) before any tool runs.
+4. Scope is validated (`0.0.0.0/0` rejected; prefixes below /16 IPv4 or
+   /48 IPv6 require `--allow-large-cidr`) before any tool runs.
 5. Collectors are read-only.
 6. No credential storage (ssh-agent / key files referenced by path only).
 
@@ -131,6 +132,11 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 | R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Resolved in Phase 1 |
 | R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved and verified for the tagged `v1.0.2` release |
 | R-7 | RustSec `rsa` Marvin advisory | Resolved: the PostgreSQL backend compiles `rsa` through SQLx, and the locked `rsa` 0.9.10 is patched (the advisory affects < 0.9.0); the audit job keeps watching for regressions |
+| R-8 | SSH probes accept unknown host keys on first connection (TOFU, audit OY-17) | Accepted residual: reasonable for a discovery tool; a `--strict-host-key` mode is a small future follow-up. High-security environments should pre-seed a managed `known_hosts` |
+| R-9 | `--no-verify` disables NetBox TLS verification (audit OY-18) | Accepted residual: exists by design for self-signed instances with a prominent warning; consider expiring it in favor of `--ca-bundle` |
+| R-10 | `orbyn import` reads files/stdin without a size cap (audit OY-19) | Open, low: a future input byte cap (e.g. 64 MB) with a clear error |
+| R-11 | Windows: the temporary `snmp.conf` relies on per-user `%TEMP%` ACLs (audit OY-20) | Accepted residual: risk is low (per-user directory); explicit ACL hardening is a small future follow-up |
+| R-12 | Informativas de la auditoría (OY-21–OY-27): secretos sin zeroize y `Debug` de `DbTarget`, eco de terminal al leer secretos por stdin, carrera benigna en la limpieza stale, audit trail sin anti-tamper, `export --output` sobrescribe, escapes ANSI/OSC de hostnames hostiles en terminales antiguos, consultas DNS derivadas del inventario | Documentadas en `SECURITY_AUDIT.md`; ninguna es explotable sin un escenario adicional de compromiso local o de terminal |
 
 ## 5. Review checklist
 

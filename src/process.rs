@@ -16,9 +16,19 @@ use std::process::ExitStatus;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::time::timeout;
+
+/// Default cap for captured child stdout (audit OY-08): 16 MiB, matching the
+/// NetBox response limit. A child that exceeds it is drained (so finite
+/// output still lets the child exit) but the excess is discarded — a hostile
+/// device streaming forever can no longer grow the capture without bound.
+pub const MAX_STDOUT_CAPTURE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Default cap for captured child stderr (audit OY-08): diagnostics rarely
+/// approach 1 MiB; anything larger is drained and discarded.
+pub const MAX_STDERR_CAPTURE_BYTES: u64 = 1024 * 1024;
 
 /// The captured result of a finished child process.
 #[derive(Debug)]
@@ -26,6 +36,10 @@ pub struct CapturedProcess {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    /// stdout exceeded `max_stdout_bytes` and was truncated.
+    pub stdout_truncated: bool,
+    /// stderr exceeded `max_stderr_bytes` and was truncated.
+    pub stderr_truncated: bool,
 }
 
 /// Run `child` to completion, reading stdout and stderr concurrently under a
@@ -34,16 +48,18 @@ pub struct CapturedProcess {
 /// - `stdin_payload` is written to the child's stdin (when piped) and the
 ///   pipe is closed; pass `None` to close a piped stdin immediately, or when
 ///   stdin is null/inherited.
-/// - `max_stdout_bytes` caps how much stdout is buffered. The remainder is
-///   still drained (and discarded) so a finite response lets the child exit
-///   normally; an endless stream is bounded by `limit`.
+/// - `max_stdout_bytes` / `max_stderr_bytes` cap how much of each stream is
+///   buffered. The remainder is still drained (and discarded) so a finite
+///   response lets the child exit normally; an endless stream is bounded by
+///   `limit`.
 /// - `limit` bounds the complete lifecycle: concurrent reads plus `wait`.
 /// - `timeout_msg` becomes the error when the limit expires; the child is
 ///   killed (SIGKILL / TerminateProcess) and reaped before returning.
 pub async fn run_captured(
     mut child: Child,
     stdin_payload: Option<&str>,
-    max_stdout_bytes: Option<u64>,
+    max_stdout_bytes: u64,
+    max_stderr_bytes: u64,
     limit: Duration,
     timeout_msg: String,
 ) -> Result<CapturedProcess> {
@@ -53,6 +69,8 @@ pub async fn run_captured(
 
     let mut stdout = String::new();
     let mut stderr = String::new();
+    let mut stdout_truncated = false;
+    let mut stderr_truncated = false;
 
     let work = async {
         let write_stdin = async {
@@ -78,41 +96,16 @@ pub async fn run_captured(
 
         let read_stdout = async {
             if let Some(mut pipe) = stdout_pipe.take() {
-                match max_stdout_bytes {
-                    Some(max) => {
-                        let mut limited = pipe.take(max + 1);
-                        limited
-                            .read_to_string(&mut stdout)
-                            .await
-                            .map_err(|e| anyhow!("reading child stdout: {e}"))?;
-                        // Discard the remainder so a child with a finite
-                        // (but oversized) response can still exit; a child
-                        // that streams forever is bounded by `limit`.
-                        let mut rest = limited.into_inner();
-                        let mut discard = [0u8; 8192];
-                        loop {
-                            match rest.read(&mut discard).await {
-                                Ok(0) => break,
-                                Ok(_) => continue,
-                                Err(e) => return Err(anyhow!("reading child stdout: {e}")),
-                            }
-                        }
-                    }
-                    None => {
-                        pipe.read_to_string(&mut stdout)
-                            .await
-                            .map_err(|e| anyhow!("reading child stdout: {e}"))?;
-                    }
-                }
+                stdout_truncated =
+                    read_capped(&mut pipe, max_stdout_bytes, &mut stdout, "stdout").await?;
             }
             Ok::<(), anyhow::Error>(())
         };
 
         let read_stderr = async {
             if let Some(mut pipe) = stderr_pipe.take() {
-                pipe.read_to_string(&mut stderr)
-                    .await
-                    .map_err(|e| anyhow!("reading child stderr: {e}"))?;
+                stderr_truncated =
+                    read_capped(&mut pipe, max_stderr_bytes, &mut stderr, "stderr").await?;
             }
             Ok::<(), anyhow::Error>(())
         };
@@ -133,6 +126,8 @@ pub async fn run_captured(
             status,
             stdout,
             stderr,
+            stdout_truncated,
+            stderr_truncated,
         }),
         Ok(Err(e)) => Err(e),
         Err(_) => {
@@ -143,6 +138,33 @@ pub async fn run_captured(
             Err(anyhow!(timeout_msg))
         }
     }
+}
+
+/// Read up to `max` bytes from `pipe` into `buf`, then drain and discard the
+/// remainder so a finite (but oversized) response still lets the child exit.
+/// Returns whether the output was truncated.
+async fn read_capped<R>(pipe: &mut R, max: u64, buf: &mut String, what: &str) -> Result<bool>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut limited = pipe.take(max + 1);
+    limited
+        .read_to_string(buf)
+        .await
+        .map_err(|e| anyhow!("reading child {what}: {e}"))?;
+    let truncated = buf.len() as u64 > max;
+    if truncated {
+        let rest = limited.into_inner();
+        let mut discard = [0u8; 8192];
+        loop {
+            match rest.read(&mut discard).await {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(e) => return Err(anyhow!("draining child {what}: {e}")),
+            }
+        }
+    }
+    Ok(truncated)
 }
 
 #[cfg(test)]
@@ -207,7 +229,8 @@ sleep 30"#,
         let result = run_captured(
             spawn(&path, std::process::Stdio::null()),
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(2),
             "child timed out".to_string(),
         )
@@ -237,7 +260,8 @@ echo marker"#,
         let captured = run_captured(
             spawn(&path, std::process::Stdio::null()),
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(30),
             "child timed out".to_string(),
         )
@@ -272,7 +296,8 @@ echo marker"#,
         let captured = run_captured(
             spawn(&path, std::process::Stdio::piped()),
             Some("hello stdin\n"),
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(15),
             "child timed out".to_string(),
         )
@@ -298,7 +323,8 @@ echo marker"#,
         let captured = run_captured(
             spawn(&path, std::process::Stdio::piped()),
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(15),
             "child timed out".to_string(),
         )
@@ -322,7 +348,8 @@ echo marker"#,
         let captured = run_captured(
             spawn(&path, std::process::Stdio::null()),
             None,
-            Some(10),
+            10,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(15),
             "child timed out".to_string(),
         )
@@ -334,6 +361,40 @@ echo marker"#,
             11,
             "at most max+1 bytes are buffered"
         );
+        assert!(captured.stdout_truncated, "truncation must be reported");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stderr_cap_buffers_max_plus_one_and_drains_the_rest() {
+        let dir = temp_dir("stderr-cap");
+        let path = script(
+            &dir,
+            "big-err.sh",
+            r#"for i in $(seq 1 20000); do echo "err err err err err err err err" >&2; done
+echo done"#,
+        );
+
+        let captured = run_captured(
+            spawn(&path, std::process::Stdio::null()),
+            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            1024,
+            Duration::from_secs(15),
+            "child timed out".to_string(),
+        )
+        .await
+        .expect("oversized but finite stderr still completes");
+        assert!(captured.status.success());
+        assert_eq!(
+            captured.stderr.len(),
+            1025,
+            "at most max+1 bytes are buffered"
+        );
+        assert!(captured.stderr_truncated, "truncation must be reported");
+        assert!(!captured.stdout_truncated);
+        assert_eq!(captured.stdout.trim(), "done");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -346,7 +407,8 @@ echo marker"#,
         let captured = run_captured(
             spawn(&path, std::process::Stdio::null()),
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             Duration::from_secs(15),
             "child timed out".to_string(),
         )

@@ -148,8 +148,32 @@ fn host_name(asset: &Asset) -> String {
 }
 
 /// Escape a string for inclusion in an HCL double-quoted literal.
+///
+/// Beyond `\` and `"`, control characters (newlines, tabs, anything the HCL
+/// grammar does not allow raw) are escaped, and `${` is doubled to `$${` so
+/// a hostile hostname cannot inject Terraform interpolation into the
+/// generated file (audit OY-16).
 fn hcl_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '$' if chars.peek() == Some(&'{') => {
+                out.push_str("$${");
+                chars.next();
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -257,6 +281,41 @@ mod tests {
             out.contains("weird\\\"name\\\\x"),
             "hostname escaped: {out}"
         );
+    }
+
+    #[test]
+    fn escapes_newlines_and_control_characters() {
+        let assets = vec![Asset {
+            hostname: Some("line1\nline2\r\ttab\u{1}".into()),
+            ..asset("a", "10.0.0.1", None, &[])
+        }];
+        let out = render_terraform(&assets);
+        assert!(
+            out.contains("line1\\nline2\\r\\ttab\\u0001"),
+            "control characters must be escaped, not emitted raw: {out}"
+        );
+        // The quoted key itself must stay on a single line.
+        assert!(!out.contains("\"line1\nline2"), "raw newline leaked: {out}");
+    }
+
+    #[test]
+    fn escapes_terraform_interpolation_sequences() {
+        let assets = vec![Asset {
+            hostname: Some("evil${local.pwned}end".into()),
+            ..asset("a", "10.0.0.1", None, &[])
+        }];
+        let out = render_terraform(&assets);
+        assert!(
+            out.contains("evil$${local.pwned}end"),
+            "${{ must be doubled so Terraform treats it as a literal: {out}"
+        );
+        // A lone $ without { stays untouched.
+        let assets = vec![Asset {
+            hostname: Some("cost$5".into()),
+            ..asset("a", "10.0.0.1", None, &[])
+        }];
+        let out = render_terraform(&assets);
+        assert!(out.contains("cost$5"), "lone $ must stay literal: {out}");
     }
 
     #[test]

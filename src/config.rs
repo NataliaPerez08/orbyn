@@ -27,6 +27,33 @@ impl DbTarget {
     }
 }
 
+/// Extract the password embedded in a `postgres://` URL's userinfo
+/// (`postgres://user:password@host/db`), as written in the URL.
+///
+/// Returns `None` for URLs without userinfo, without a password separator,
+/// or with an empty password. The value is only used to register redaction
+/// and to decide whether the env fallback applies (audit OY-06).
+pub fn postgres_password_value(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let (userinfo, _) = rest.split_once('@')?;
+    let (_, password) = userinfo.split_once(':')?;
+    if password.is_empty() {
+        None
+    } else {
+        Some(password.to_string())
+    }
+}
+
+/// Password supplied out-of-band for a PostgreSQL URL without one:
+/// `ORBYN_PG_PASSWORD` (Orbyn-specific) wins over the standard `PGPASSWORD`,
+/// mirroring libpq's env fallback so the password never lands in argv
+/// (audit OY-06).
+pub fn postgres_env_password() -> Option<String> {
+    std::env::var("ORBYN_PG_PASSWORD")
+        .ok()
+        .or_else(|| std::env::var("PGPASSWORD").ok())
+}
+
 /// Runtime configuration resolved for a CLI invocation.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -73,6 +100,39 @@ mod tests {
         assert_eq!(
             DbTarget::parse("./backups/postgres://notes.db".into()),
             DbTarget::Sqlite(PathBuf::from("./backups/postgres://notes.db"))
+        );
+    }
+
+    #[test]
+    fn postgres_password_value_extracts_userinfo_passwords() {
+        assert_eq!(
+            postgres_password_value("postgres://orbyn:secret@localhost/orbyn"),
+            Some("secret".to_string())
+        );
+        assert_eq!(
+            postgres_password_value("postgresql://orbyn:p%40ss@db.example.com:5432/orbyn"),
+            Some("p%40ss".to_string()),
+            "the raw userinfo substring is what argv exposes"
+        );
+        assert_eq!(
+            postgres_password_value("postgres://orbyn@localhost/orbyn"),
+            None,
+            "no password separator"
+        );
+        assert_eq!(
+            postgres_password_value("postgres://orbyn:@localhost/orbyn"),
+            None,
+            "empty password is no password"
+        );
+        assert_eq!(
+            postgres_password_value("postgres://localhost/orbyn"),
+            None,
+            "no userinfo at all"
+        );
+        assert_eq!(
+            postgres_password_value("./data/orbyn.db"),
+            None,
+            "SQLite paths have no password"
         );
     }
 

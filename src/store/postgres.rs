@@ -32,8 +32,17 @@ impl PostgresStore {
     /// Connect to the database at `url` (`postgres://` or `postgresql://`)
     /// and run migrations. TLS is negotiated when the server offers it
     /// (`sslmode=prefer` by default); require it with `?sslmode=require`.
+    ///
+    /// When the URL carries no password, `ORBYN_PG_PASSWORD` (or the
+    /// standard `PGPASSWORD`) supplies one so the credential never has to
+    /// appear in the process arguments (audit OY-06).
     pub async fn open(url: &str) -> Result<Self> {
-        let options: PgConnectOptions = url.parse().context("parsing database URL")?;
+        let mut options: PgConnectOptions = url.parse().context("parsing database URL")?;
+        if crate::config::postgres_password_value(url).is_none() {
+            if let Some(password) = crate::config::postgres_env_password() {
+                options = options.password(&password);
+            }
+        }
 
         let pool = PgPoolOptions::new()
             .max_connections(5)

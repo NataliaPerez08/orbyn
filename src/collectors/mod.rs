@@ -16,7 +16,10 @@ pub mod types;
 pub mod windows;
 
 pub use credentials::CredentialProfile;
-pub use types::{Collector, ScanTarget, ScanTargetError};
+pub use types::{
+    validate_target_with_policy, Collector, ScanTarget, ScanTargetError, MIN_IPV4_PREFIX,
+    MIN_IPV6_PREFIX,
+};
 
 /// Validate a discovery target expression (IPv4, IPv6, or CIDR).
 ///

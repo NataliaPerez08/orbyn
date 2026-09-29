@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::import::{ImportedAsset, ImportedInterface, ImportedInventory};
-use crate::process::run_captured;
+use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES};
 
 /// Paginated NetBox envelope.
 #[derive(Debug, Deserialize)]
@@ -566,7 +566,8 @@ impl NetBoxClient {
         let captured = run_captured(
             child,
             stdin_payload.as_deref(),
-            Some(NETBOX_MAX_RESPONSE_BYTES),
+            NETBOX_MAX_RESPONSE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             NETBOX_REQUEST_TIMEOUT,
             format!("curl timed out against {url}"),
         )

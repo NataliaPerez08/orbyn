@@ -194,6 +194,10 @@ automated test, or an explicitly accepted exception.
 
 ### Phase 2 — Inventory integrity and integrations
 
+**Status:** mostly implemented (import round-trip, Ansible YAML, Terraform
+metadata). Virtualization metadata is pending; export back to NetBox is
+descoped by design (Orbyn stays read-only against NetBox).
+
 **Goal:** ensure import/export cycles do not silently lose inventory data.
 
 - Preserve interfaces and services during `orbyn import`.
@@ -223,6 +227,11 @@ reproducible recommendation; an asset without sufficient data produces an
 explicit warning.
 
 ### Phase 4 — Scale and operations
+
+**Status:** partially implemented (bulk reads, batch queries, bounded
+concurrent discovery with rate limiting, per-job metrics, capped collector
+output). Controlled retries and performance tests with representative
+inventories are pending.
 
 **Goal:** support large inventories and long-running discovery operations.
 

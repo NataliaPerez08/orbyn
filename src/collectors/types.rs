@@ -48,11 +48,34 @@ pub enum ScanTargetError {
     NotIpCidr(String),
 }
 
-/// Parse and validate an IPv4/IPv6/IP or CIDR target.
+/// Smallest IPv4 prefix accepted by default (audit OY-09): a /16 covers a
+/// classic enterprise scope (65 536 addresses) while stopping accidental
+/// internet-wide ranges such as `1.0.0.0/1`.
+pub const MIN_IPV4_PREFIX: u8 = 16;
+
+/// Smallest IPv6 prefix accepted by default: a /48 is a site allocation;
+/// anything wider is never a realistic authorized scan scope.
+pub const MIN_IPV6_PREFIX: u8 = 48;
+
+/// Parse and validate an IPv4/IPv6/IP or CIDR target with the default
+/// scope policy.
 ///
 /// Rejects `0.0.0.0/0` and other oversized/unrestricted scopes by default,
 /// and requires a real IP base plus a numeric in-range prefix for CIDR form.
 pub fn validate_target(raw: &str) -> Result<ScanTarget, ScanTargetError> {
+    validate_target_with_policy(raw, false)
+}
+
+/// Parse and validate a target, optionally allowing CIDR scopes wider than
+/// the default floor (`MIN_IPV4_PREFIX` / `MIN_IPV6_PREFIX`).
+///
+/// `allow_large_cidr` is the explicit operator opt-in for wide authorized
+/// scopes (e.g. a whole private `10.0.0.0/8`); unrestricted `/0` ranges and
+/// `0.0.0.0`/`::` bases are rejected under any policy.
+pub fn validate_target_with_policy(
+    raw: &str,
+    allow_large_cidr: bool,
+) -> Result<ScanTarget, ScanTargetError> {
     if let Some((base, prefix)) = raw.split_once('/') {
         if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_digit()) {
             return Err(ScanTargetError::Invalid(raw.to_string()));
@@ -72,6 +95,16 @@ pub fn validate_target(raw: &str) -> Result<ScanTarget, ScanTargetError> {
         }
         if prefix == 0 {
             return Err(ScanTargetError::TooLarge(raw.to_string()));
+        }
+        if !allow_large_cidr {
+            let min = if addr.is_ipv4() {
+                MIN_IPV4_PREFIX
+            } else {
+                MIN_IPV6_PREFIX
+            };
+            if prefix < min {
+                return Err(ScanTargetError::TooLarge(raw.to_string()));
+            }
         }
         return Ok(ScanTarget::Cidr(raw.to_string()));
     }
@@ -129,6 +162,42 @@ mod tests {
             validate_target("0.0.0.0/8"),
             Err(ScanTargetError::TooLarge("0.0.0.0/8".to_string()))
         );
+    }
+
+    #[test]
+    fn rejects_internet_wide_prefixes_by_default() {
+        for target in [
+            "1.0.0.0/1",
+            "128.0.0.0/1",
+            "10.0.0.0/8",
+            "203.0.113.0/12",
+            "2001:db8::/32",
+        ] {
+            assert_eq!(
+                validate_target(target),
+                Err(ScanTargetError::TooLarge(target.to_string())),
+                "target {target} must be rejected by the default scope floor"
+            );
+        }
+    }
+
+    #[test]
+    fn allow_large_cidr_policy_accepts_wide_authorized_scopes() {
+        for target in ["1.0.0.0/1", "10.0.0.0/8", "2001:db8::/32"] {
+            assert_eq!(
+                validate_target_with_policy(target, true),
+                Ok(ScanTarget::Cidr(target.to_string())),
+                "target {target} must be accepted with the explicit override"
+            );
+        }
+        // Unrestricted scopes stay rejected under any policy.
+        for target in ["0.0.0.0/0", "::/0", "10.0.0.0/0", "0.0.0.0/8"] {
+            assert_eq!(
+                validate_target_with_policy(target, true),
+                Err(ScanTargetError::TooLarge(target.to_string())),
+                "target {target} must stay rejected even with the override"
+            );
+        }
     }
 
     #[test]

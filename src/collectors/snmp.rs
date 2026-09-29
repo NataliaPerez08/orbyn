@@ -26,7 +26,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::domain::{asset_id, Asset, Interface, Observation};
-use crate::process::run_captured;
+use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES, MAX_STDOUT_CAPTURE_BYTES};
 
 use super::classify::classify_device;
 use super::types::{Collector, ScanTarget};
@@ -225,7 +225,8 @@ impl SnmpCollector {
         let captured = run_captured(
             child,
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             SNMP_WALK_TIMEOUT,
             format!("snmpwalk timed out against {agent}"),
         )
@@ -236,6 +237,13 @@ impl SnmpCollector {
                 "snmpwalk exited with {} against {agent}: {}",
                 captured.status,
                 captured.stderr.trim()
+            ));
+        }
+        if captured.stdout_truncated {
+            return Err(anyhow!(
+                "snmpwalk output against {agent} exceeded the {} byte \
+                 capture limit; the walk result is incomplete",
+                MAX_STDOUT_CAPTURE_BYTES
             ));
         }
         Ok(captured.stdout)

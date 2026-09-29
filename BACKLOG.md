@@ -59,9 +59,10 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Terraform-friendly export (HCL `locals.orbyn_inventory`).
 - [x] **P1** Plugin/collector SDK definition (trait contract + example + PLUGINS.md).
 - [ ] **P2** vCenter collector/importer (deferred: SOAP session client).
-- [ ] **P2** NetBox export (write Orbyn inventory back to NetBox).
-- [ ] **P2** Ansible YAML inventory format.
-- [ ] **P3** Terraform `import` block generation.
+- [ ] **P2** NetBox export (write Orbyn inventory back to NetBox) — descoped
+  by design: Orbyn stays read-only against NetBox (see PLAN_ISSUES.md).
+- [x] **P2** Ansible YAML inventory format (`orbyn export --format ansible-yaml`).
+- [x] **P3** Terraform `import` block generation (`orbyn export --format terraform --tf-import <type>`).
 
 ## Dependencies
 
@@ -126,7 +127,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Preserve interfaces and services during `orbyn import`.
 - [x] **P2** Add Ansible YAML inventory export.
 - [x] **P2** Include complete supported metadata in Terraform export.
-- [ ] **P2** Add optional export to NetBox.
+- [ ] **P2** Add optional export to NetBox — descoped by design (read-only
+  against NetBox, see PLAN_ISSUES.md).
 - [ ] **P2** Add virtualization metadata.
 - [x] **P1** Add import/export round-trip coverage for every supported field.
 
@@ -141,11 +143,16 @@ added; today the product surface is `orbyn` subcommands.
 
 ### Phase 4 — Scale and operations
 
-- [ ] **P1** Remove N+1 queries from assessment and export.
-- [ ] **P1** Add batch queries to the store.
-- [ ] **P2** Add bounded concurrent discovery and rate limiting.
-- [ ] **P2** Add response and memory limits for large inventories.
-- [ ] **P2** Persist complete discovery-job metrics.
+- [x] **P1** Remove N+1 queries from assessment and export (bulk reads,
+  one query per table).
+- [x] **P1** Add batch queries to the store.
+- [x] **P2** Add bounded concurrent discovery and rate limiting
+  (`--concurrency`, `--rate-limit`).
+- [ ] **P2** Add response and memory limits for large inventories — partially
+  done (NetBox 16 MB cap; collector output capped at 16 MiB/1 MiB per run,
+  audit OY-08); `orbyn import` input remains uncapped (audit OY-19).
+- [x] **P2** Persist complete discovery-job metrics (filesystems, running
+  services, connections per job).
 - [ ] **P2** Add controlled retries for external APIs.
 - [ ] **P2** Add performance tests with representative inventories.
 

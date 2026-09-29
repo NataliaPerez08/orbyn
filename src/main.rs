@@ -14,7 +14,7 @@ use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
 use orbyn::collectors::ssh::LinuxCollector;
 use orbyn::collectors::windows::WindowsCollector;
-use orbyn::collectors::{validate_target, Collector, ScanTarget};
+use orbyn::collectors::{validate_target_with_policy, Collector, ScanTarget, ScanTargetError};
 use orbyn::config::{Config, DbTarget};
 use orbyn::domain::{
     asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, EvidenceKind, Interface,
@@ -114,6 +114,10 @@ enum Command {
         /// Maximum target launches per second (default: no pacing).
         #[arg(long)]
         rate_limit: Option<u32>,
+        /// Accept CIDR scopes wider than the default floor (IPv4 /16,
+        /// IPv6 /48), e.g. an authorized whole-private-range scan.
+        #[arg(long)]
+        allow_large_cidr: bool,
         /// SNMP v1/v2c community string: from ORBYN_SNMP_COMMUNITY, or `-`
         /// to read one line from stdin so it never lands in argv.
         #[arg(long, env = "ORBYN_SNMP_COMMUNITY", hide_env_values = true)]
@@ -406,6 +410,7 @@ async fn main() -> anyhow::Result<()> {
             collector,
             concurrency,
             rate_limit,
+            allow_large_cidr,
             community,
             snmp_version,
             snmp_port,
@@ -422,9 +427,12 @@ async fn main() -> anyhow::Result<()> {
             }
             let mut scan_targets = Vec::with_capacity(target.len());
             for raw in &target {
-                scan_targets.push(validate_target(raw).map_err(|e| anyhow!(e.to_string()))?);
+                scan_targets.push(
+                    validate_target_with_policy(raw, allow_large_cidr)
+                        .map_err(|e| anyhow!(large_scope_hint(&e, allow_large_cidr)))?,
+                );
             }
-            let community = resolve_secret(community, "--community")?;
+            let community = resolve_secret(community, "--community", "ORBYN_SNMP_COMMUNITY")?;
             validate_ssh_user(user.as_deref())?;
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
             let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
@@ -636,7 +644,7 @@ async fn main() -> anyhow::Result<()> {
                     no_verify,
                 },
         } => {
-            let token = resolve_secret(token, "--token")?;
+            let token = resolve_secret(token, "--token", "ORBYN_NETBOX_TOKEN")?;
             if no_verify {
                 tracing::warn!("--no-verify disables TLS certificate verification for NetBox");
                 eprintln!(
@@ -743,7 +751,25 @@ async fn open_store(config: &Config) -> Result<Arc<dyn Store>> {
             Ok(Arc::new(store))
         }
         DbTarget::Postgres(url) => {
-            let store = PostgresStore::open(url).await?;
+            if orbyn::config::postgres_password_value(url).is_some() {
+                eprintln!(
+                    "WARNING: the --db URL embeds the PostgreSQL password, which \
+                     is visible in the process arguments (ps, /proc); prefer a \
+                     URL without a password plus ORBYN_PG_PASSWORD or PGPASSWORD \
+                     (audit OY-06)."
+                );
+            }
+            // Defense in depth: register the password (URL userinfo or env
+            // fallback) so it is redacted if it ever reaches an error string.
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            if let Some(password) = orbyn::config::postgres_password_value(url)
+                .or_else(orbyn::config::postgres_env_password)
+            {
+                redactor.add_value(password);
+            }
+            let store = PostgresStore::open(url)
+                .await
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
             Ok(Arc::new(store))
         }
     }
@@ -754,7 +780,11 @@ async fn open_store(config: &Config) -> Result<Arc<dyn Store>> {
 /// value passes through unchanged. Values containing newlines or NUL bytes
 /// are rejected: they would split the temporary SNMP config file or curl's
 /// `-H @-` header stream (config/header injection).
-fn resolve_secret(value: Option<String>, flag: &str) -> Result<Option<String>> {
+///
+/// A literal value warns on stderr: it sits in the process arguments (and
+/// shell history) for the whole process lifetime (audit OY-07). Values
+/// sourced from `env_var` (clap's env fallback) do not warn.
+fn resolve_secret(value: Option<String>, flag: &str, env_var: &str) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -770,12 +800,38 @@ fn resolve_secret(value: Option<String>, flag: &str) -> Result<Option<String>> {
         }
         secret.to_string()
     } else {
+        if secret_needs_argv_warning(&value, env_var) {
+            eprintln!(
+                "WARNING: {flag} passed as a literal value is visible in the \
+                 process arguments (ps, shell history); prefer '-' to read it \
+                 from stdin, or set {env_var} (audit OY-07)."
+            );
+        }
         value
     };
     if secret.contains(['\n', '\r', '\0']) {
         bail!("{flag} cannot contain newlines or NUL bytes");
     }
     Ok(Some(secret))
+}
+
+/// True when a secret arrived as a literal flag value (not the stdin marker
+/// and not matching the env fallback), leaving it exposed in argv.
+fn secret_needs_argv_warning(value: &str, env_var: &str) -> bool {
+    value != "-" && std::env::var(env_var).ok().as_deref() != Some(value)
+}
+
+/// Extend an oversized-scope validation error with the override hint when
+/// the default CIDR floor rejected the target (audit OY-09).
+fn large_scope_hint(e: &ScanTargetError, allow_large_cidr: bool) -> String {
+    if !allow_large_cidr && matches!(e, ScanTargetError::TooLarge(_)) {
+        format!(
+            "{e}; pass --allow-large-cidr to override the default minimum \
+             prefix (IPv4 /16, IPv6 /48)"
+        )
+    } else {
+        e.to_string()
+    }
 }
 
 /// Reject SSH usernames that the ssh binary would parse as options: the
@@ -1513,14 +1569,49 @@ mod tests {
 
     #[test]
     fn resolve_secret_rejects_control_characters() {
-        assert!(resolve_secret(Some("bad\nsecret".into()), "--community").is_err());
-        assert!(resolve_secret(Some("bad\rsecret".into()), "--token").is_err());
-        assert!(resolve_secret(Some("bad\0secret".into()), "--token").is_err());
+        assert!(resolve_secret(
+            Some("bad\nsecret".into()),
+            "--community",
+            "ORBYN_SNMP_COMMUNITY"
+        )
+        .is_err());
+        assert!(
+            resolve_secret(Some("bad\rsecret".into()), "--token", "ORBYN_NETBOX_TOKEN").is_err()
+        );
+        assert!(
+            resolve_secret(Some("bad\0secret".into()), "--token", "ORBYN_NETBOX_TOKEN").is_err()
+        );
         assert_eq!(
-            resolve_secret(Some("good-secret".into()), "--token").unwrap(),
+            resolve_secret(Some("good-secret".into()), "--token", "ORBYN_NETBOX_TOKEN").unwrap(),
             Some("good-secret".to_string())
         );
-        assert_eq!(resolve_secret(None, "--token").unwrap(), None);
+        assert_eq!(
+            resolve_secret(None, "--token", "ORBYN_NETBOX_TOKEN").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn literal_secrets_warn_but_env_sourced_do_not() {
+        // A throwaway env var keeps this test independent from a developer
+        // shell that exports the real secret variables.
+        let var = "ORBYN_TEST_SECRET_WARN";
+        std::env::remove_var(var);
+        assert!(
+            secret_needs_argv_warning("literal-value", var),
+            "literal flag values are exposed in argv and must warn"
+        );
+        assert!(
+            !secret_needs_argv_warning("-", var),
+            "the stdin marker never warns"
+        );
+        std::env::set_var(var, "from-env");
+        assert!(
+            !secret_needs_argv_warning("from-env", var),
+            "values matching the env fallback do not warn"
+        );
+        assert!(secret_needs_argv_warning("other", var));
+        std::env::remove_var(var);
     }
 
     #[test]

@@ -20,14 +20,14 @@ use quick_xml::Reader;
 use tokio::process::Command;
 
 use crate::domain::{asset_id, Asset, Interface, Observation, Service};
-use crate::process::run_captured;
+use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES, MAX_STDOUT_CAPTURE_BYTES};
 
 use super::classify::classify_device;
 use super::types::{Collector, ScanTarget};
 
-/// Default whole-process timeout for an nmap run. Generous on purpose: CIDR
-/// targets down to /1 are accepted and `-sV` probes are slow. Override with
-/// `ORBYN_NMAP_TIMEOUT_SECS`.
+/// Default whole-process timeout for an nmap run. Generous on purpose: wide
+/// authorized CIDR scopes (down to /1 with `--allow-large-cidr`) make `-sV`
+/// probes slow. Override with `ORBYN_NMAP_TIMEOUT_SECS`.
 const DEFAULT_NMAP_TIMEOUT_SECS: u64 = 1800;
 
 pub struct NmapCollector {
@@ -81,7 +81,8 @@ impl Collector for NmapCollector {
         let captured = run_captured(
             child,
             None,
-            None,
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
             self.timeout,
             format!(
                 "nmap timed out against {target} after {}s \
@@ -96,6 +97,13 @@ impl Collector for NmapCollector {
                 "nmap exited with {}: {}",
                 captured.status,
                 captured.stderr.trim()
+            ));
+        }
+        if captured.stdout_truncated {
+            return Err(anyhow!(
+                "nmap XML output exceeded the {} byte capture limit; \
+                 scan a narrower CIDR so the report stays parseable",
+                MAX_STDOUT_CAPTURE_BYTES
             ));
         }
 

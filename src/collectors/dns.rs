@@ -32,7 +32,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 use crate::domain::{Asset, Dependency, EvidenceKind};
-use crate::process::run_captured;
+use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES};
 
 /// Confidence attached to DNS-derived relationship evidence.
 pub const DNS_CONFIDENCE: f32 = 0.4;
@@ -98,7 +98,8 @@ async fn dig_short(args: &[&str]) -> Option<String> {
     let captured = run_captured(
         child,
         None,
-        Some(DIG_STDOUT_CAP),
+        DIG_STDOUT_CAP,
+        MAX_STDERR_CAPTURE_BYTES,
         DNS_TIMEOUT,
         format!("dig timed out resolving {args:?}"),
     )
