@@ -95,6 +95,7 @@ Assets that matter:
 | D-1 A second local user reads the SQLite db (inventory is sensitive) | Information disclosure | SQLite file inherits the operator's umask; default path is `./data/orbyn.db`. | Present: documented. **Residual**: no encrypted-at-rest store; operator should keep the db private (chmod/dir perms). |
 | D-2 The db file is corrupted/missing and `sqlx` auto-migrates blindly | Integrity/DoS | Migrations are compile-time embedded and idempotent; `PRAGMA foreign_keys=ON`. | Present. |
 | D-3 A job audit row leaks a redacted secret in cleartext | Information disclosure | `finish_job` stores only the redacted error string. | Present: redactor applied at the write boundary (`main.rs`). |
+| D-4 The PostgreSQL backend leaks the connection password (URL in argv/env, plaintext on the wire) | Information disclosure / Spoofing | Orbyn stores no database credentials; the operator-supplied URL is the only secret carrier. TLS is negotiated when offered (`sslmode=prefer` default) and enforceable with `?sslmode=require`; sqlx error messages do not echo the password. | Present. **Residual**: URL credentials are visible in argv/env like any connection string — operators should use a least-privilege role and certificate or password-file authentication for remote databases. |
 
 ### E — Output
 
@@ -129,7 +130,7 @@ network reach) meets untrusted input. Secure-coding rules that gate review:
 | R-4 | Treat URL credentials (`https://user:pass@host`) as forbidden target/URL input | Resolved: `url_origin` rejects userinfo in NetBox base and pagination URLs |
 | R-5 | NetBox pagination + response-size cap to bound malformed/large responses | Resolved in Phase 1 |
 | R-6 | Publish build provenance (reproducible release artifacts + checksums) for the release workflow | Resolved and verified for the tagged `v1.0.2` release |
-| R-7 | RustSec `rsa` Marvin advisory | Accepted exception: `rsa` is an optional, unused SQLx backend dependency in the lockfile; no fixed release exists. Revisit if backend features change. |
+| R-7 | RustSec `rsa` Marvin advisory | Resolved: the PostgreSQL backend compiles `rsa` through SQLx, and the locked `rsa` 0.9.10 is patched (the advisory affects < 0.9.0); the audit job keeps watching for regressions |
 
 ## 5. Review checklist
 

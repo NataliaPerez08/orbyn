@@ -49,6 +49,41 @@ jobs:
       - name: release build
         run: cargo build --locked --release
 
+  postgres:
+    name: test (postgres store)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: orbyn
+          POSTGRES_PASSWORD: orbyn
+          POSTGRES_DB: orbyn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orbyn"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build
+        run: cargo build --locked --all-targets
+
+      # The postgres_store suite skips itself when ORBYN_PG_TEST_URL is
+      # unset, so the regular test job stays hermetic.
+      - name: test (postgres)
+        run: cargo test --locked --test postgres_store
+        env:
+          ORBYN_PG_TEST_URL: postgres://orbyn:orbyn@localhost:5432/orbyn_test
+
   windows:
     name: build + test (windows)
     runs-on: windows-latest

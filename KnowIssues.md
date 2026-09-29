@@ -174,7 +174,18 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     `src/integrations/terraform.rs`.)
 
 25. **No PostgreSQL backend** — `gap`
-    The `Store` trait exists but only `SqliteStore` is implemented.
+    ~~FIXED~~
+    `PostgresStore` (`src/store/postgres.rs`) implements the full `Store`
+    contract over `sqlx`'s PostgreSQL driver: `--db`/`ORBYN_DB` accept any
+    `postgres://`/`postgresql://` URL (filesystem paths keep selecting
+    SQLite), the schema lives in `migrations/postgres/` and is applied
+    automatically on open, and row decoding is shared with SQLite through
+    `src/store/rows.rs`. TLS is negotiated when the server offers it
+    (`?sslmode=require` enforces it). Coverage: `tests/postgres_store.rs`
+    runs a six-test suite (round-trip of every observation kind, bulk reads,
+    dependency confirm/remove, annotations, jobs/audit, metric limits)
+    against a live database when `ORBYN_PG_TEST_URL` is set, and CI runs it
+    against a `postgres:16` service container.
 
 26. **No CI pipeline** — `gap` ~~FIXED~~
     `.github/workflows/ci.yml` runs `fmt`, `clippy -D warnings`, `build`,

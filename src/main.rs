@@ -15,7 +15,7 @@ use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
 use orbyn::collectors::ssh::LinuxCollector;
 use orbyn::collectors::windows::WindowsCollector;
 use orbyn::collectors::{validate_target, Collector, ScanTarget};
-use orbyn::config::Config;
+use orbyn::config::{Config, DbTarget};
 use orbyn::domain::{
     asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, EvidenceKind, Interface,
     JobOutcome, JobStatus, Observation, Service,
@@ -25,6 +25,7 @@ use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml
 use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
 use orbyn::output::{Format, Inventory};
+use orbyn::store::postgres::PostgresStore;
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::{AnnotationField, AssetAnnotations};
 use orbyn::store::Store;
@@ -37,9 +38,10 @@ use tokio::task::JoinHandle;
     version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
-    /// Path to the SQLite database (default: ./data/orbyn.db).
+    /// Path to the SQLite database, or a postgres:// URL for the
+    /// PostgreSQL backend (default: ./data/orbyn.db).
     #[arg(long, global = true, env = "ORBYN_DB")]
-    db: Option<PathBuf>,
+    db: Option<String>,
 
     /// Increase log verbosity (repeatable: -v, -vv).
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
@@ -411,7 +413,7 @@ async fn main() -> anyhow::Result<()> {
             port,
             identity_file,
         } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             if concurrency == 0 {
                 bail!("--concurrency must be at least 1");
             }
@@ -443,7 +445,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             discover(
-                &store,
+                store.as_ref(),
                 &scan_targets,
                 collector,
                 concurrency,
@@ -473,14 +475,14 @@ async fn main() -> anyhow::Result<()> {
             })?;
         }
         Command::Assets { format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let assets = store.list_assets().await?;
             print!("{}", orbyn::output::assets(&assets, format));
         }
         Command::Asset { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
-            let rendered = render_asset_detail(&store, &asset, format).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
+            let rendered = render_asset_detail(store.as_ref(), &asset, format).await?;
             print!("{rendered}");
         }
         Command::Annotate {
@@ -493,14 +495,19 @@ async fn main() -> anyhow::Result<()> {
             remove_tag,
             format,
         } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let criticality = criticality
                 .map(|c| c.parse::<Criticality>())
                 .transpose()
                 .map_err(anyhow::Error::msg)?;
-            let audit =
-                begin_audit(&store, "annotate", &asset.id, Some("asset annotation")).await?;
+            let audit = begin_audit(
+                store.as_ref(),
+                "annotate",
+                &asset.id,
+                Some("asset annotation"),
+            )
+            .await?;
             let result = store
                 .annotate_asset(
                     &asset.id,
@@ -514,48 +521,48 @@ async fn main() -> anyhow::Result<()> {
                     },
                 )
                 .await;
-            finish_audit_result(&store, audit, result).await?;
+            finish_audit_result(store.as_ref(), audit, result).await?;
             let updated = store.get_asset(&asset.id).await?.expect("asset exists");
-            let rendered = render_asset_detail(&store, &updated, format).await?;
+            let rendered = render_asset_detail(store.as_ref(), &updated, format).await?;
             print!("{rendered}");
         }
         Command::Services { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let services = store.list_services(&asset.id).await?;
             print!("{}", orbyn::output::services(&services, format));
         }
         Command::Interfaces { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let ifaces = store.list_interfaces(&asset.id).await?;
             print!("{}", orbyn::output::interfaces(&ifaces, format));
         }
         Command::Capacity { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let capacity = store.get_capacity(&asset.id).await?;
             print!("{}", orbyn::output::capacity(capacity.as_ref(), format));
         }
         Command::Disks { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let filesystems = store.list_filesystems(&asset.id).await?;
             print!("{}", orbyn::output::filesystems(&filesystems, format));
         }
         Command::HostServices { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let running = store.list_running_services(&asset.id).await?;
             print!("{}", orbyn::output::running_services(&running, format));
         }
         Command::Jobs { limit, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let jobs = store.list_jobs(Some(limit)).await?;
             print!("{}", orbyn::output::jobs(&jobs, format));
         }
         Command::Audit { limit, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let events = store.list_audit_events(Some(limit)).await?;
             print!("{}", orbyn::output::audit_events(&events, format));
         }
@@ -568,7 +575,7 @@ async fn main() -> anyhow::Result<()> {
             if tf_import.is_some() && format != ExportFormat::Terraform {
                 bail!("--tf-import requires --format terraform");
             }
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let assets = store.list_assets().await?;
 
             let rendered = match format {
@@ -606,9 +613,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::Import { format, file } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let input = read_input(file.as_ref())?;
-            let stats = import_inventory(&store, &input, format).await?;
+            let stats = import_inventory(store.as_ref(), &input, format).await?;
             let mut parts = vec![format!("{} assets", stats.assets)];
             if stats.interfaces > 0 {
                 parts.push(format!("{} interfaces", stats.interfaces));
@@ -637,7 +644,7 @@ async fn main() -> anyhow::Result<()> {
                      connections can be silently intercepted."
                 );
             }
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let mut redactor = orbyn::redact::Redactor::from_env();
             if let Some(token) = &token {
                 redactor.add_value(token);
@@ -648,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
                 .fetch_inventory()
                 .await
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-            let stats = persist_imported_inventory(&store, &inventory, "netbox")
+            let stats = persist_imported_inventory(store.as_ref(), &inventory, "netbox")
                 .await
                 .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
             let mut parts = vec![format!("{} assets", stats.assets)];
@@ -664,11 +671,11 @@ async fn main() -> anyhow::Result<()> {
             mermaid,
             asset,
         } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             let mut edges = store.list_dependencies().await?;
             let assets = store.list_assets().await?;
             if let Some(key) = asset {
-                let asset = resolve_asset(&store, &key).await?;
+                let asset = resolve_asset(store.as_ref(), &key).await?;
                 edges.retain(|d| d.source_asset_id == asset.id || d.target_asset_id == asset.id);
             }
             if mermaid {
@@ -678,8 +685,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::Connections { asset, format } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let conns = store.list_connections(&asset.id).await?;
             print!("{}", orbyn::output::connections(&conns, format));
         }
@@ -688,18 +695,18 @@ async fn main() -> anyhow::Result<()> {
             samples,
             format,
         } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            let asset = resolve_asset(&store, &asset).await?;
+            let store = open_store(&config).await?;
+            let asset = resolve_asset(store.as_ref(), &asset).await?;
             let collected = store.list_metric_samples(&asset.id, samples).await?;
             let stats = orbyn::metrics::summarize(&collected);
             print!("{}", orbyn::output::metrics(stats.as_ref(), format));
         }
         Command::Deps { action } => {
-            let store = SqliteStore::open(&config.db_path).await?;
-            deps(&store, action).await?;
+            let store = open_store(&config).await?;
+            deps(store.as_ref(), action).await?;
         }
         Command::Assess { format, rules } => {
-            let store = SqliteStore::open(&config.db_path).await?;
+            let store = open_store(&config).await?;
             if rules {
                 print!(
                     "{}",
@@ -709,7 +716,7 @@ async fn main() -> anyhow::Result<()> {
                     )
                 );
             } else {
-                let input = assessment_input(&store).await?;
+                let input = assessment_input(store.as_ref()).await?;
                 let report = run_assessment(&input);
                 print!("{}", orbyn::output::report(&report, format));
             }
@@ -717,6 +724,22 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Open the configured store: a SQLite file (filesystem path) or a
+/// PostgreSQL database (`postgres://`/`postgresql://` URL). Migrations run
+/// automatically on open for both backends.
+async fn open_store(config: &Config) -> Result<Arc<dyn Store>> {
+    match &config.db {
+        DbTarget::Sqlite(path) => {
+            let store = SqliteStore::open(path).await?;
+            Ok(Arc::new(store))
+        }
+        DbTarget::Postgres(url) => {
+            let store = PostgresStore::open(url).await?;
+            Ok(Arc::new(store))
+        }
+    }
 }
 
 /// Resolve a secret flag value: the literal `-` reads one trimmed line from
@@ -750,7 +773,7 @@ fn resolve_secret(value: Option<String>, flag: &str) -> Result<Option<String>> {
 /// partial data. Errors are scrubbed with `redactor` before they are
 /// persisted or printed.
 async fn discover(
-    store: &SqliteStore,
+    store: &dyn Store,
     scan_targets: &[ScanTarget],
     collector: Arc<dyn Collector>,
     concurrency: usize,
@@ -900,7 +923,7 @@ fn target_label(target: &ScanTarget) -> String {
 }
 
 /// Gather the full inventory snapshot the assessment engine evaluates.
-async fn assessment_input(store: &SqliteStore) -> Result<AssessmentInput> {
+async fn assessment_input(store: &dyn Store) -> Result<AssessmentInput> {
     let assets = store.list_assets().await?;
     let services = store.list_all_services().await?;
     let filesystems = store.list_all_filesystems().await?;
@@ -919,7 +942,7 @@ async fn assessment_input(store: &SqliteStore) -> Result<AssessmentInput> {
 
 /// Resolve an asset reference that may be an id, an IP address, or a
 /// hostname (exact, case-insensitive).
-async fn resolve_asset(store: &SqliteStore, key: &str) -> Result<Asset> {
+async fn resolve_asset(store: &dyn Store, key: &str) -> Result<Asset> {
     if let Some(asset) = store.get_asset(key).await? {
         return Ok(asset);
     }
@@ -933,7 +956,7 @@ async fn resolve_asset(store: &SqliteStore, key: &str) -> Result<Asset> {
 }
 
 /// Fetch every asset facet from the store and render the composite detail.
-async fn render_asset_detail(store: &SqliteStore, asset: &Asset, format: Format) -> Result<String> {
+async fn render_asset_detail(store: &dyn Store, asset: &Asset, format: Format) -> Result<String> {
     let services = store.list_services(&asset.id).await?;
     let ifaces = store.list_interfaces(&asset.id).await?;
     let capacity = store.get_capacity(&asset.id).await?;
@@ -951,11 +974,7 @@ async fn render_asset_detail(store: &SqliteStore, asset: &Asset, format: Format)
 }
 
 /// Resolve both endpoints of a dependency pair, rejecting self-edges.
-async fn resolve_dep_pair(
-    store: &SqliteStore,
-    source: &str,
-    target: &str,
-) -> Result<(Asset, Asset)> {
+async fn resolve_dep_pair(store: &dyn Store, source: &str, target: &str) -> Result<(Asset, Asset)> {
     let source = resolve_asset(store, source).await?;
     let target = resolve_asset(store, target).await?;
     if source.id == target.id {
@@ -968,7 +987,7 @@ async fn resolve_dep_pair(
 }
 
 async fn begin_audit(
-    store: &SqliteStore,
+    store: &dyn Store,
     action: &str,
     target: &str,
     details: Option<&str>,
@@ -988,7 +1007,7 @@ async fn begin_audit(
 }
 
 async fn finish_audit_result<T>(
-    store: &SqliteStore,
+    store: &dyn Store,
     event: AuditEvent,
     result: Result<T>,
 ) -> Result<T> {
@@ -1013,7 +1032,7 @@ async fn finish_audit_result<T>(
 }
 
 /// Handle `orbyn deps <action>`.
-async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
+async fn deps(store: &dyn Store, action: DepsAction) -> Result<()> {
     match action {
         DepsAction::Add {
             source,
@@ -1174,7 +1193,7 @@ async fn deps(store: &SqliteStore, action: DepsAction) -> Result<()> {
 
 /// Parse an imported inventory, recording an audit job for the operation.
 async fn import_inventory(
-    store: &SqliteStore,
+    store: &dyn Store,
     input: &str,
     format: ImportFormat,
 ) -> Result<ImportedStats> {
@@ -1219,7 +1238,7 @@ async fn import_inventory(
 /// this import nor an existing inventory row are skipped with a warning
 /// instead of failing the whole import.
 async fn persist_imported_inventory(
-    store: &SqliteStore,
+    store: &dyn Store,
     inv: &ImportedInventory,
     collector: &str,
 ) -> Result<ImportedStats> {

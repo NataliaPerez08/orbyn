@@ -39,10 +39,14 @@ or authorization service and must not be used as one.
   `snmp.conf` inside a `0700` directory; directories left behind by abruptly
   terminated runs are removed (best effort, current-user owned, age-gated)
   on the first SNMP walk of a process.
-- Dependency audits run through RustSec. The only current advisory exception is
-  `RUSTSEC-2023-0071` for `rsa`, an optional SQLx backend dependency retained in
-  the lockfile but not enabled by Orbyn's SQLite-only feature set; no fixed
-  upstream release exists.
+- Dependency audits run through RustSec. The former `RUSTSEC-2023-0071`
+  exception for `rsa` is resolved: the PostgreSQL backend compiles `rsa`
+  through SQLx, and the locked `rsa` 0.9.10 carries the upstream fix (the
+  advisory affects versions below 0.9.0).
+- The PostgreSQL backend connects with the credentials in the URL the
+  operator provides; Orbyn stores no database credentials itself. TLS is
+  negotiated when the server offers it (`sslmode=prefer` by default) and
+  can be enforced with `?sslmode=require`.
 
 ## Reporting a vulnerability
 

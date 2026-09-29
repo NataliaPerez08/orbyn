@@ -4,6 +4,8 @@
 //! traded for PostgreSQL (or another store) without touching collectors or
 //! assessment logic.
 
+pub mod postgres;
+pub mod rows;
 pub mod sqlite;
 pub mod traits;
 

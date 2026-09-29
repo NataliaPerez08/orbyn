@@ -1,18 +1,22 @@
-//! SQLite store implemented with `sqlx`.
+//! PostgreSQL store implemented with `sqlx`.
 //!
-//! Database schema lives in the top-level `migrations/` directory and is
-//! applied at startup through `sqlx::migrate!`. Row decoding and domain
-//! conversions are shared with the PostgreSQL store through
+//! Mirrors [`crate::store::sqlite::SqliteStore`] over the same
+//! [`crate::store::traits::Store`] contract. The schema lives in
+//! `migrations/postgres/` and is applied at startup through
+//! `sqlx::migrate!`; row decoding is shared with SQLite through
 //! [`crate::store::rows`].
+//!
+//! Dialect differences against the SQLite store:
+//! - `$N` placeholders instead of `?N`;
+//! - `INSERT ... ON CONFLICT DO NOTHING` instead of `INSERT OR IGNORE`;
+//! - `LOWER(hostname) = LOWER($1)` instead of `COLLATE NOCASE`;
+//! - explicit parameter casts where a bare `$N` is ambiguous.
 
 use anyhow::{anyhow, Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{PgPool, Row};
 
-use crate::domain::{
-    Asset, AuditEvent, Capacity, Connection, Dependency, DiscoveryJob, Filesystem, Interface,
-    JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
-};
+use crate::domain::Observation;
 use crate::store::rows::{
     status_as_str, AssetRow, AuditEventRow, CapacityRow, ConnectionRow, DependencyRow,
     FilesystemRow, InterfaceRow, JobRow, MetricSampleRow, RunningServiceRow, ServiceRow,
@@ -20,32 +24,24 @@ use crate::store::rows::{
 use crate::store::traits::{AnnotationField, AssetAnnotations};
 
 #[derive(Debug, Clone)]
-pub struct SqliteStore {
-    pool: SqlitePool,
+pub struct PostgresStore {
+    pool: PgPool,
 }
 
-impl SqliteStore {
-    /// Open (creating if necessary) the database at `path` and run migrations.
-    pub async fn open(path: &std::path::Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating database directory {}", parent.display()))?;
-            }
-        }
+impl PostgresStore {
+    /// Connect to the database at `url` (`postgres://` or `postgresql://`)
+    /// and run migrations. TLS is negotiated when the server offers it
+    /// (`sslmode=prefer` by default); require it with `?sslmode=require`.
+    pub async fn open(url: &str) -> Result<Self> {
+        let options: PgConnectOptions = url.parse().context("parsing database URL")?;
 
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-
-        let pool = SqlitePoolOptions::new()
+        let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect_with(options)
             .await
-            .context("connecting to sqlite database")?;
+            .context("connecting to postgres database")?;
 
-        sqlx::migrate!()
+        sqlx::migrate!("migrations/postgres")
             .run(&pool)
             .await
             .context("running database migrations")?;
@@ -53,7 +49,7 @@ impl SqliteStore {
         Ok(Self { pool })
     }
 
-    pub fn pool(&self) -> &SqlitePool {
+    pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 }
@@ -65,17 +61,18 @@ impl SqliteStore {
 /// The evidence literal must stay in sync with
 /// [`crate::domain::EvidenceKind::ActiveConnections`]; a test pins it.
 const RECONCILE_DEPENDENCIES_SQL: &str = "
-    INSERT OR IGNORE INTO dependencies \
+    INSERT INTO dependencies \
        (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
-      SELECT c.asset_id, a.id, c.proto, c.remote_port, 'active-connections', 0.9, 0 \
+      SELECT c.asset_id, a.id, c.proto, c.remote_port, 'active-connections', 0.9, FALSE \
       FROM asset_connections c \
       JOIN assets a ON a.ip = c.remote_ip \
-      WHERE c.asset_id != a.id";
+      WHERE c.asset_id != a.id \
+      ON CONFLICT DO NOTHING";
 
 #[async_trait::async_trait]
-impl crate::store::traits::Store for SqliteStore {
+impl crate::store::traits::Store for PostgresStore {
     fn database_type(&self) -> &'static str {
-        "sqlite"
+        "postgres"
     }
 
     async fn store_observations(&self, observations: Vec<Observation>) -> Result<()> {
@@ -87,14 +84,14 @@ impl crate::store::traits::Store for SqliteStore {
                     let ip = asset.ip.to_string();
                     sqlx::query(
                         "INSERT INTO assets (id, ip, hostname, device_class, os_name, os_version, sys_descr, first_seen, last_seen) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) \
                          ON CONFLICT(ip) DO UPDATE SET \
-                           hostname = COALESCE(excluded.hostname, assets.hostname), \
-                           device_class = COALESCE(excluded.device_class, assets.device_class), \
-                           os_name = COALESCE(excluded.os_name, assets.os_name), \
-                           os_version = COALESCE(excluded.os_version, assets.os_version), \
-                           sys_descr = COALESCE(excluded.sys_descr, assets.sys_descr), \
-                           last_seen = excluded.last_seen",
+                           hostname = COALESCE(EXCLUDED.hostname, assets.hostname), \
+                           device_class = COALESCE(EXCLUDED.device_class, assets.device_class), \
+                           os_name = COALESCE(EXCLUDED.os_name, assets.os_name), \
+                           os_version = COALESCE(EXCLUDED.os_version, assets.os_version), \
+                           sys_descr = COALESCE(EXCLUDED.sys_descr, assets.sys_descr), \
+                           last_seen = EXCLUDED.last_seen",
                     )
                     .bind(&asset.id)
                     .bind(&ip)
@@ -110,9 +107,10 @@ impl crate::store::traits::Store for SqliteStore {
                 }
                 Observation::Service(service) => {
                     sqlx::query(
-                        "INSERT OR IGNORE INTO services \
+                        "INSERT INTO services \
                            (asset_id, proto, port, name, state, banner) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         VALUES ($1, $2, $3, $4, $5, $6) \
+                         ON CONFLICT DO NOTHING",
                     )
                     .bind(&service.asset_id)
                     .bind(&service.proto)
@@ -127,12 +125,12 @@ impl crate::store::traits::Store for SqliteStore {
                 Observation::Interface(interface) => {
                     sqlx::query(
                         "INSERT INTO asset_interfaces (id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                          ON CONFLICT(id) DO UPDATE SET \
-                           name = COALESCE(excluded.name, asset_interfaces.name), \
-                           vendor = COALESCE(excluded.vendor, asset_interfaces.vendor), \
-                           mtu = COALESCE(excluded.mtu, asset_interfaces.mtu), \
-                           is_up = COALESCE(excluded.is_up, asset_interfaces.is_up)",
+                           name = COALESCE(EXCLUDED.name, asset_interfaces.name), \
+                           vendor = COALESCE(EXCLUDED.vendor, asset_interfaces.vendor), \
+                           mtu = COALESCE(EXCLUDED.mtu, asset_interfaces.mtu), \
+                           is_up = COALESCE(EXCLUDED.is_up, asset_interfaces.is_up)",
                     )
                     .bind(&interface.id)
                     .bind(&interface.asset_id)
@@ -149,9 +147,10 @@ impl crate::store::traits::Store for SqliteStore {
                 }
                 Observation::Dependency(dep) => {
                     sqlx::query(
-                        "INSERT OR IGNORE INTO dependencies \
+                        "INSERT INTO dependencies \
                            (source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                         ON CONFLICT DO NOTHING",
                     )
                     .bind(&dep.source_asset_id)
                     .bind(&dep.target_asset_id)
@@ -173,14 +172,14 @@ impl crate::store::traits::Store for SqliteStore {
                     sqlx::query(
                         "INSERT INTO asset_capacity \
                            (asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7) \
                          ON CONFLICT(asset_id) DO UPDATE SET \
-                           cpu_model = excluded.cpu_model, \
-                           cpu_sockets = excluded.cpu_sockets, \
-                           cpu_cores = excluded.cpu_cores, \
-                           cpu_threads = excluded.cpu_threads, \
-                           ram_total_mb = excluded.ram_total_mb, \
-                           collected_at = excluded.collected_at",
+                           cpu_model = EXCLUDED.cpu_model, \
+                           cpu_sockets = EXCLUDED.cpu_sockets, \
+                           cpu_cores = EXCLUDED.cpu_cores, \
+                           cpu_threads = EXCLUDED.cpu_threads, \
+                           ram_total_mb = EXCLUDED.ram_total_mb, \
+                           collected_at = EXCLUDED.collected_at",
                     )
                     .bind(&capacity.asset_id)
                     .bind(&capacity.cpu_model)
@@ -197,14 +196,14 @@ impl crate::store::traits::Store for SqliteStore {
                     sqlx::query(
                         "INSERT INTO asset_filesystems \
                            (asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                          ON CONFLICT(asset_id, mount) DO UPDATE SET \
-                           device = COALESCE(excluded.device, asset_filesystems.device), \
-                           fs_type = COALESCE(excluded.fs_type, asset_filesystems.fs_type), \
-                           size_kb = excluded.size_kb, \
-                           used_kb = excluded.used_kb, \
-                           available_kb = excluded.available_kb, \
-                           used_pct = excluded.used_pct",
+                           device = COALESCE(EXCLUDED.device, asset_filesystems.device), \
+                           fs_type = COALESCE(EXCLUDED.fs_type, asset_filesystems.fs_type), \
+                           size_kb = EXCLUDED.size_kb, \
+                           used_kb = EXCLUDED.used_kb, \
+                           available_kb = EXCLUDED.available_kb, \
+                           used_pct = EXCLUDED.used_pct",
                     )
                     .bind(&fs.asset_id)
                     .bind(&fs.device)
@@ -221,10 +220,10 @@ impl crate::store::traits::Store for SqliteStore {
                 Observation::RunningService(svc) => {
                     sqlx::query(
                         "INSERT INTO asset_running_services (asset_id, name, state, description) \
-                         VALUES (?1, ?2, ?3, ?4) \
+                         VALUES ($1, $2, $3, $4) \
                          ON CONFLICT(asset_id, name) DO UPDATE SET \
-                           state = excluded.state, \
-                           description = COALESCE(excluded.description, asset_running_services.description)",
+                           state = EXCLUDED.state, \
+                           description = COALESCE(EXCLUDED.description, asset_running_services.description)",
                     )
                     .bind(&svc.asset_id)
                     .bind(&svc.name)
@@ -240,12 +239,12 @@ impl crate::store::traits::Store for SqliteStore {
                     sqlx::query(
                         "INSERT INTO asset_connections \
                            (asset_id, proto, local_ip, local_port, remote_ip, remote_port, process, first_seen, last_seen) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) \
                          ON CONFLICT(asset_id, proto, remote_ip, remote_port) DO UPDATE SET \
-                           local_ip = COALESCE(excluded.local_ip, asset_connections.local_ip), \
-                           local_port = COALESCE(excluded.local_port, asset_connections.local_port), \
-                           process = COALESCE(excluded.process, asset_connections.process), \
-                           last_seen = excluded.last_seen",
+                           local_ip = COALESCE(EXCLUDED.local_ip, asset_connections.local_ip), \
+                           local_port = COALESCE(EXCLUDED.local_port, asset_connections.local_port), \
+                           process = COALESCE(EXCLUDED.process, asset_connections.process), \
+                           last_seen = EXCLUDED.last_seen",
                     )
                     .bind(&conn.asset_id)
                     .bind(&conn.proto)
@@ -264,7 +263,7 @@ impl crate::store::traits::Store for SqliteStore {
                         "INSERT INTO metric_samples \
                            (id, asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
                             ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                     )
                     .bind(uuid::Uuid::new_v4().to_string())
                     .bind(&sample.asset_id)
@@ -296,7 +295,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn list_assets(&self) -> Result<Vec<Asset>> {
+    async fn list_assets(&self) -> Result<Vec<crate::domain::Asset>> {
         let rows = sqlx::query_as::<_, AssetRow>(
             "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
@@ -308,11 +307,11 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(AssetRow::into_asset).collect())
     }
 
-    async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
+    async fn get_asset(&self, id: &str) -> Result<Option<crate::domain::Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
             "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
-             FROM assets WHERE id = ?1",
+             FROM assets WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -321,11 +320,11 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(AssetRow::into_asset))
     }
 
-    async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<Asset>> {
+    async fn get_asset_by_ip(&self, ip: &str) -> Result<Option<crate::domain::Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
             "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
-             FROM assets WHERE ip = ?1",
+             FROM assets WHERE ip = $1",
         )
         .bind(ip)
         .fetch_optional(&self.pool)
@@ -334,11 +333,11 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(AssetRow::into_asset))
     }
 
-    async fn get_asset_by_hostname(&self, hostname: &str) -> Result<Option<Asset>> {
+    async fn get_asset_by_hostname(&self, hostname: &str) -> Result<Option<crate::domain::Asset>> {
         let row = sqlx::query_as::<_, AssetRow>(
             "SELECT id, ip, hostname, device_class, os_name, os_version, sys_descr, \
                     environment, owner, criticality, tags, first_seen, last_seen \
-             FROM assets WHERE hostname = ?1 COLLATE NOCASE ORDER BY id ASC LIMIT 1",
+             FROM assets WHERE LOWER(hostname) = LOWER($1) ORDER BY id ASC LIMIT 1",
         )
         .bind(hostname)
         .fetch_optional(&self.pool)
@@ -347,7 +346,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(AssetRow::into_asset))
     }
 
-    async fn list_dependencies(&self) -> Result<Vec<Dependency>> {
+    async fn list_dependencies(&self) -> Result<Vec<crate::domain::Dependency>> {
         let rows = sqlx::query_as::<_, DependencyRow>(
             "SELECT source_asset_id, target_asset_id, proto, port, evidence_source, confidence, confirmed \
              FROM dependencies ORDER BY source_asset_id, port",
@@ -369,10 +368,10 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn list_services(&self, asset_id: &str) -> Result<Vec<Service>> {
+    async fn list_services(&self, asset_id: &str) -> Result<Vec<crate::domain::Service>> {
         let rows = sqlx::query_as::<_, ServiceRow>(
             "SELECT asset_id, proto, port, name, state, banner \
-             FROM services WHERE asset_id = ?1 ORDER BY port",
+             FROM services WHERE asset_id = $1 ORDER BY port",
         )
         .bind(asset_id)
         .fetch_all(&self.pool)
@@ -381,10 +380,10 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(ServiceRow::into_service).collect())
     }
 
-    async fn list_interfaces(&self, asset_id: &str) -> Result<Vec<Interface>> {
+    async fn list_interfaces(&self, asset_id: &str) -> Result<Vec<crate::domain::Interface>> {
         let rows = sqlx::query_as::<_, InterfaceRow>(
             "SELECT id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up \
-             FROM asset_interfaces WHERE asset_id = ?1 ORDER BY if_index, name",
+             FROM asset_interfaces WHERE asset_id = $1 ORDER BY if_index, name",
         )
         .bind(asset_id)
         .fetch_all(&self.pool)
@@ -393,10 +392,10 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(InterfaceRow::into_interface).collect())
     }
 
-    async fn get_capacity(&self, asset_id: &str) -> Result<Option<Capacity>> {
+    async fn get_capacity(&self, asset_id: &str) -> Result<Option<crate::domain::Capacity>> {
         let row = sqlx::query_as::<_, CapacityRow>(
             "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
-             FROM asset_capacity WHERE asset_id = ?1",
+             FROM asset_capacity WHERE asset_id = $1",
         )
         .bind(asset_id)
         .fetch_optional(&self.pool)
@@ -405,10 +404,10 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(CapacityRow::into_capacity))
     }
 
-    async fn list_filesystems(&self, asset_id: &str) -> Result<Vec<Filesystem>> {
+    async fn list_filesystems(&self, asset_id: &str) -> Result<Vec<crate::domain::Filesystem>> {
         let rows = sqlx::query_as::<_, FilesystemRow>(
             "SELECT asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct \
-             FROM asset_filesystems WHERE asset_id = ?1 ORDER BY mount",
+             FROM asset_filesystems WHERE asset_id = $1 ORDER BY mount",
         )
         .bind(asset_id)
         .fetch_all(&self.pool)
@@ -420,10 +419,10 @@ impl crate::store::traits::Store for SqliteStore {
             .collect())
     }
 
-    async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>> {
+    async fn list_connections(&self, asset_id: &str) -> Result<Vec<crate::domain::Connection>> {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT asset_id, proto, local_ip, local_port, remote_ip, remote_port, process \
-             FROM asset_connections WHERE asset_id = ?1 ORDER BY remote_ip, remote_port",
+             FROM asset_connections WHERE asset_id = $1 ORDER BY remote_ip, remote_port",
         )
         .bind(asset_id)
         .fetch_all(&self.pool)
@@ -435,7 +434,7 @@ impl crate::store::traits::Store for SqliteStore {
             .collect())
     }
 
-    async fn list_all_services(&self) -> Result<Vec<Service>> {
+    async fn list_all_services(&self) -> Result<Vec<crate::domain::Service>> {
         let rows = sqlx::query_as::<_, ServiceRow>(
             "SELECT asset_id, proto, port, name, state, banner \
              FROM services ORDER BY asset_id, port",
@@ -446,7 +445,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(ServiceRow::into_service).collect())
     }
 
-    async fn list_all_interfaces(&self) -> Result<Vec<Interface>> {
+    async fn list_all_interfaces(&self) -> Result<Vec<crate::domain::Interface>> {
         let rows = sqlx::query_as::<_, InterfaceRow>(
             "SELECT id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up \
              FROM asset_interfaces ORDER BY asset_id, if_index, name",
@@ -457,7 +456,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(InterfaceRow::into_interface).collect())
     }
 
-    async fn list_all_filesystems(&self) -> Result<Vec<Filesystem>> {
+    async fn list_all_filesystems(&self) -> Result<Vec<crate::domain::Filesystem>> {
         let rows = sqlx::query_as::<_, FilesystemRow>(
             "SELECT asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct \
              FROM asset_filesystems ORDER BY asset_id, mount",
@@ -471,7 +470,7 @@ impl crate::store::traits::Store for SqliteStore {
             .collect())
     }
 
-    async fn list_all_capacities(&self) -> Result<Vec<Capacity>> {
+    async fn list_all_capacities(&self) -> Result<Vec<crate::domain::Capacity>> {
         let rows = sqlx::query_as::<_, CapacityRow>(
             "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
              FROM asset_capacity ORDER BY asset_id",
@@ -482,7 +481,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(rows.into_iter().map(CapacityRow::into_capacity).collect())
     }
 
-    async fn list_all_connections(&self) -> Result<Vec<Connection>> {
+    async fn list_all_connections(&self) -> Result<Vec<crate::domain::Connection>> {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT asset_id, proto, local_ip, local_port, remote_ip, remote_port, process \
              FROM asset_connections ORDER BY asset_id, remote_ip, remote_port",
@@ -500,11 +499,11 @@ impl crate::store::traits::Store for SqliteStore {
         &self,
         asset_id: &str,
         limit: Option<usize>,
-    ) -> Result<Vec<MetricSample>> {
+    ) -> Result<Vec<crate::domain::MetricSample>> {
         const SELECT_METRICS: &str =
             "SELECT asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
                         ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m \
-                 FROM metric_samples WHERE asset_id = ?1 ORDER BY sampled_at DESC";
+                 FROM metric_samples WHERE asset_id = $1 ORDER BY sampled_at DESC";
         let sql = match limit {
             Some(n) => format!("{SELECT_METRICS} LIMIT {n}"),
             None => SELECT_METRICS.to_string(),
@@ -526,10 +525,10 @@ impl crate::store::traits::Store for SqliteStore {
         port: Option<u16>,
     ) -> Result<usize> {
         let result = sqlx::query(
-            "UPDATE dependencies SET confirmed = 1, confidence = 1.0 \
-             WHERE source_asset_id = ?1 AND target_asset_id = ?2 \
-               AND (?3 IS NULL OR proto = ?3) \
-               AND (?4 IS NULL OR port = ?4)",
+            "UPDATE dependencies SET confirmed = TRUE, confidence = 1.0 \
+             WHERE source_asset_id = $1 AND target_asset_id = $2 \
+               AND ($3::text IS NULL OR proto = $3) \
+               AND ($4::bigint IS NULL OR port = $4)",
         )
         .bind(source)
         .bind(target)
@@ -550,9 +549,9 @@ impl crate::store::traits::Store for SqliteStore {
     ) -> Result<usize> {
         let result = sqlx::query(
             "DELETE FROM dependencies \
-             WHERE source_asset_id = ?1 AND target_asset_id = ?2 \
-               AND (?3 IS NULL OR proto = ?3) \
-               AND (?4 IS NULL OR port = ?4)",
+             WHERE source_asset_id = $1 AND target_asset_id = $2 \
+               AND ($3::text IS NULL OR proto = $3) \
+               AND ($4::bigint IS NULL OR port = $4)",
         )
         .bind(source)
         .bind(target)
@@ -564,10 +563,13 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(result.rows_affected() as usize)
     }
 
-    async fn list_running_services(&self, asset_id: &str) -> Result<Vec<RunningService>> {
+    async fn list_running_services(
+        &self,
+        asset_id: &str,
+    ) -> Result<Vec<crate::domain::RunningService>> {
         let rows = sqlx::query_as::<_, RunningServiceRow>(
             "SELECT asset_id, name, state, description \
-             FROM asset_running_services WHERE asset_id = ?1 ORDER BY name",
+             FROM asset_running_services WHERE asset_id = $1 ORDER BY name",
         )
         .bind(asset_id)
         .fetch_all(&self.pool)
@@ -581,7 +583,7 @@ impl crate::store::traits::Store for SqliteStore {
 
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()> {
         let row =
-            sqlx::query("SELECT environment, owner, criticality, tags FROM assets WHERE id = ?1")
+            sqlx::query("SELECT environment, owner, criticality, tags FROM assets WHERE id = $1")
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await
@@ -629,8 +631,8 @@ impl crate::store::traits::Store for SqliteStore {
             };
 
         sqlx::query(
-            "UPDATE assets SET environment = ?2, owner = ?3, criticality = ?4, tags = ?5 \
-             WHERE id = ?1",
+            "UPDATE assets SET environment = $2, owner = $3, criticality = $4, tags = $5 \
+             WHERE id = $1",
         )
         .bind(id)
         .bind(&environment)
@@ -643,12 +645,12 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn create_job(&self, job: DiscoveryJob) -> Result<()> {
+    async fn create_job(&self, job: crate::domain::DiscoveryJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO discovery_jobs \
                (id, collector, targets, status, started_at, finished_at, error, \
                 assets_found, services_found, filesystems_found, running_services_found, connections_found) \
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(&job.id)
         .bind(&job.collector)
@@ -668,12 +670,12 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn get_job(&self, id: &str) -> Result<Option<DiscoveryJob>> {
+    async fn get_job(&self, id: &str) -> Result<Option<crate::domain::DiscoveryJob>> {
         let row = sqlx::query_as::<_, JobRow>(
             "SELECT id, collector, targets, status, started_at, finished_at, error, \
                     assets_found, services_found, filesystems_found, \
                     running_services_found, connections_found \
-             FROM discovery_jobs WHERE id = ?1",
+             FROM discovery_jobs WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -682,7 +684,7 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(row.map(JobRow::into_job))
     }
 
-    async fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<DiscoveryJob>> {
+    async fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<crate::domain::DiscoveryJob>> {
         let mut sql = String::from(
             "SELECT id, collector, targets, status, started_at, finished_at, error, \
                     assets_found, services_found, filesystems_found, \
@@ -702,9 +704,9 @@ impl crate::store::traits::Store for SqliteStore {
     async fn finish_job(
         &self,
         id: &str,
-        status: JobStatus,
+        status: crate::domain::JobStatus,
         error: Option<String>,
-        outcome: Option<JobOutcome>,
+        outcome: Option<crate::domain::JobOutcome>,
     ) -> Result<()> {
         let assets_found = outcome.map(|o| o.assets_found as i64);
         let services_found = outcome.map(|o| o.services_found as i64);
@@ -713,13 +715,13 @@ impl crate::store::traits::Store for SqliteStore {
         let connections_found = outcome.map(|o| o.connections_found as i64);
         sqlx::query(
             "UPDATE discovery_jobs \
-             SET status = ?2, finished_at = ?3, error = ?4, \
-                 assets_found = COALESCE(?5, assets_found), \
-                 services_found = COALESCE(?6, services_found), \
-                 filesystems_found = COALESCE(?7, filesystems_found), \
-                 running_services_found = COALESCE(?8, running_services_found), \
-                 connections_found = COALESCE(?9, connections_found) \
-             WHERE id = ?1",
+             SET status = $2, finished_at = $3, error = $4, \
+                 assets_found = COALESCE($5::bigint, assets_found), \
+                 services_found = COALESCE($6::bigint, services_found), \
+                 filesystems_found = COALESCE($7::bigint, filesystems_found), \
+                 running_services_found = COALESCE($8::bigint, running_services_found), \
+                 connections_found = COALESCE($9::bigint, connections_found) \
+             WHERE id = $1",
         )
         .bind(id)
         .bind(status_as_str(status))
@@ -736,11 +738,11 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn create_audit_event(&self, event: AuditEvent) -> Result<()> {
+    async fn create_audit_event(&self, event: crate::domain::AuditEvent) -> Result<()> {
         sqlx::query(
             "INSERT INTO audit_events \
                (id, action, target, status, started_at, finished_at, details, error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&event.id)
         .bind(&event.action)
@@ -756,7 +758,10 @@ impl crate::store::traits::Store for SqliteStore {
         Ok(())
     }
 
-    async fn list_audit_events(&self, limit: Option<usize>) -> Result<Vec<AuditEvent>> {
+    async fn list_audit_events(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::domain::AuditEvent>> {
         let mut sql = String::from(
             "SELECT id, action, target, status, started_at, finished_at, details, error \
              FROM audit_events ORDER BY started_at DESC",
@@ -774,11 +779,11 @@ impl crate::store::traits::Store for SqliteStore {
     async fn finish_audit_event(
         &self,
         id: &str,
-        status: JobStatus,
+        status: crate::domain::JobStatus,
         error: Option<String>,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE audit_events SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+            "UPDATE audit_events SET status = $2, finished_at = $3, error = $4 WHERE id = $1",
         )
         .bind(id)
         .bind(status_as_str(status))

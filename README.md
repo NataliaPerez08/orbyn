@@ -253,6 +253,23 @@ The SQLite database is created and migrated automatically at:
 
 Point any command at a different database with `--db <path>` (or `ORBYN_DB`).
 
+### PostgreSQL backend
+
+`--db` (and `ORBYN_DB`) also accept a PostgreSQL URL: any value starting
+with `postgres://` or `postgresql://` selects the PostgreSQL backend, with
+the same schema applied automatically on open.
+
+```bash
+orbyn --db postgres://orbyn@localhost:5432/orbyn assets
+ORBYN_DB="postgres://orbyn@db.example.com:5432/orbyn?sslmode=require" orbyn discover --target 10.0.0.0/24
+```
+
+TLS is negotiated when the server offers it (`sslmode=prefer` by default);
+use `?sslmode=require` for remote databases. Credentials embedded in the
+URL are visible in argv and the environment like any connection string —
+prefer a least-privilege role and, where possible, certificate or
+password-file authentication over inline passwords.
+
 ## CLI reference
 
 ```text
@@ -350,7 +367,7 @@ clean for piping.
 
 | Variable     | Default           | Purpose              |
 | ------------ | ----------------- | -------------------- |
-| `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path |
+| `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path, or a `postgres://` URL |
 | `ORBYN_LOG`  | `orbyn=warn`      | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 | `ORBYN_NMAP_TIMEOUT_SECS` | `1800` | Whole-process timeout for an nmap run |

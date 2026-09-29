@@ -6,8 +6,8 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
 dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #20, #21,
-#23, #24, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, #38 y
-#39**.
+#23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37,
+#38 y #39**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -80,8 +80,8 @@ Completada:
 - **#32** — job `windows-latest` en CI (build + test): los fakes E2E
   compilan vacíos en Windows y las suites unitarias y de store corren ahí.
 
-Diferidos (ver "Aceptados / fuera de plan"): **#17 WinRM**, **#18 vCenter**,
-**#25 PostgreSQL**.
+Diferidos (ver "Aceptados / fuera de plan"): **#17 WinRM**, **#18 vCenter**.
+**#25 PostgreSQL** se retomó y completó como Fase 7.
 
 ## Fase 6 — Endurecimiento de seguridad restante ✅
 
@@ -100,6 +100,26 @@ Completada:
   borrado post-walk existente se conserva. Cobertura unitaria: stale
   eliminado, fresco conservado, nombres ajenos intactos.
 
+## Fase 7 — Backend PostgreSQL (#25) ✅
+
+Completada:
+
+- **#25** — `PostgresStore` (`src/store/postgres.rs`) implementa el
+  contrato `Store` completo sobre el driver PostgreSQL de sqlx (feature
+  `postgres` + TLS rustls/webpki). `--db`/`ORBYN_DB` aceptan URLs
+  `postgres://`/`postgresql://` (`DbTarget` en `src/config.rs`); los paths
+  de filesystem siguen seleccionando SQLite. El esquema vive en
+  `migrations/postgres/` (BIGINT/DOUBLE PRECISION/BOOLEAN) y se aplica
+  automáticamente al abrir; el mapeo de filas se comparte con SQLite vía
+  `src/store/rows.rs`. TLS se negocia cuando el servidor lo ofrece
+  (`?sslmode=require` lo exige). Cobertura: `tests/postgres_store.rs`
+  (seis tests: round-trip de todos los tipos de observación, bulk reads,
+  confirm/remove de dependencias, anotaciones, jobs/audit, límites de
+  métricas) corre contra una base viva cuando `ORBYN_PG_TEST_URL` está
+  definido, y CI la ejecuta contra un servicio `postgres:16`. La excepción
+  de auditoría `RUSTSEC-2023-0071` queda resuelta: el `rsa` 0.9.10 fijado
+  en el lockfile ya contiene el parche.
+
 ## Aceptados / fuera de plan
 
 - **#22 `export --format table` eliminado** — cambio incompatible documentado
@@ -111,5 +131,3 @@ Completada:
   que no vale la pena mantener ahora.
 - **#18 vCenter** — diferido: requiere cliente SOAP/sesiones; queda para una
   fase de integraciones de virtualización.
-- **#25 PostgreSQL** — diferido: el trait `Store` existe para permitirlo, pero
-  SQLite cubre el caso de uso actual (CLI local, un solo archivo).
