@@ -43,6 +43,7 @@ src/
 │   ├── ssh.rs            # SSH transport + Linux host collector (v0.3)
 │   ├── windows.rs        # Windows host collector over PowerShell (v0.3)
 │   ├── winrm.rs          # native WS-Man/WinRM transport over HTTPS (v0.3)
+│   ├── virt.rs           # hypervisor detection/normalization (Phase 2)
 │   └── dns.rs            # DNS relationship evidence (v0.4)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
@@ -285,8 +286,19 @@ asset_capacity
 - cpu_cores
 - cpu_threads
 - ram_total_mb
+- hypervisor                         -- canonical id (kvm, vmware, virtualbox,
+                                      -- hyperv, xen, lxc, docker, podman,
+                                      -- systemd-nspawn, wsl, bhyve, bochs,
+                                      -- uml, unknown); NULL = bare metal
 - collected_at
 ```
+
+The host probes gather virtualization evidence on every scan
+(`systemd-detect-virt` plus DMI sysfs files on Linux,
+`Win32_ComputerSystem` manufacturer/model on Windows) and normalize it in
+`src/collectors/virt.rs`; a CPU `hypervisor` flag without identifiable
+platform evidence yields `unknown`, and no evidence at all yields `NULL`
+(bare metal).
 
 ### Utilization
 

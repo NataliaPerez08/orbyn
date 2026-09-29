@@ -220,9 +220,9 @@ automated test, or an explicitly accepted exception.
 
 ### Phase 2 — Inventory integrity and integrations
 
-**Status:** mostly implemented (import round-trip, Ansible YAML, Terraform
-metadata). Virtualization metadata is pending; export back to NetBox is
-descoped by design (Orbyn stays read-only against NetBox).
+**Status:** implemented (import round-trip, Ansible YAML, Terraform
+metadata, virtualization metadata). Export back to NetBox is descoped by
+design (Orbyn stays read-only against NetBox).
 
 **Goal:** ensure import/export cycles do not silently lose inventory data.
 
@@ -230,7 +230,9 @@ descoped by design (Orbyn stays read-only against NetBox).
 - Add Ansible YAML inventory export.
 - Include complete supported metadata in Terraform export.
 - Add optional export back to NetBox.
-- Add virtualization metadata.
+- Add virtualization metadata (host probes detect the hypervisor —
+  `systemd-detect-virt`/DMI on Linux, `Win32_ComputerSystem` on Windows —
+  and normalize it into a canonical vocabulary stored on capacity rows).
 - Expand round-trip and format compatibility tests.
 
 **Exit criterion:** exporting and importing an inventory preserves every

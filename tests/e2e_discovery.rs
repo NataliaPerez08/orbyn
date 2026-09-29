@@ -286,6 +286,10 @@ fn ssh_discovery_collects_host_facts_and_edges() {
     assert!(cap.contains("Intel(R) Xeon(R) Gold 6138"));
     assert!(cap.contains("8"));
     assert!(cap.contains("16001 MB"));
+    assert!(
+        cap.contains("Hypervisor : vmware"),
+        "virtualization metadata: {cap}"
+    );
 
     // disks
     let disks = run_ok(orbyn(&dir).args(["disks", "10.0.0.5"]));
@@ -366,6 +370,10 @@ fn windows_discovery_parses_powershell_csv() {
     assert!(detail.contains("Microsoft Windows Server 2022 Standard"));
     assert!(detail.contains("10.0 build 20348"));
     assert!(detail.contains("WIN-APP01"));
+    assert!(
+        detail.contains("Hypervisor : hyperv"),
+        "virtualization metadata: {detail}"
+    );
 
     let disks = run_ok(orbyn(&dir).args(["disks", "10.0.0.20", "--format", "csv"]));
     assert!(disks.contains("C:,NTFS"));

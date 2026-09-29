@@ -59,6 +59,9 @@ pub const WINDOWS_PROBE_SCRIPT: &str = "& { \
      '###conn'; Get-NetTCPConnection | Where-Object State -eq Established \
        | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort \
        | ConvertTo-Csv -NoTypeInformation; \
+     '###virt'; Get-CimInstance Win32_ComputerSystem \
+       | Select-Object Manufacturer,Model \
+       | ConvertTo-Csv -NoTypeInformation; \
      '###metric'; for ($i = 0; $i -lt 3; $i++) { \
        $cpu = [math]::Round((Get-CimInstance Win32_Processor \
          | Measure-Object LoadPercentage -Average).Average, 1); \
@@ -166,6 +169,9 @@ pub struct WindowsHostFacts {
     pub hostname: Option<String>,
     pub cpu: Option<CpuFacts>,
     pub ram_total_mb: Option<u64>,
+    /// Canonical hypervisor id when virtualization evidence was found
+    /// (see [`crate::collectors::virt`]).
+    pub hypervisor: Option<String>,
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
     pub connections: Vec<Connection>,
@@ -219,6 +225,12 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         .first()
         .and_then(|l| l.trim().parse::<u64>().ok())
         .map(|bytes| (bytes + 524_288) / 1_048_576);
+
+    // Virtualization evidence: Win32_ComputerSystem Manufacturer/Model.
+    let virt_rows = csv_rows(&section("virt"));
+    let hypervisor = virt_rows.first().and_then(|row| {
+        super::virt::detect_windows(field(row, 0).as_deref(), field(row, 1).as_deref())
+    });
 
     let mut filesystems = Vec::new();
     for row in csv_rows(&section("disk")) {
@@ -292,6 +304,7 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
         hostname,
         cpu,
         ram_total_mb,
+        hypervisor,
         filesystems,
         services,
         connections,
@@ -367,6 +380,7 @@ pub fn windows_observations(ip: IpAddr, facts: &WindowsHostFacts) -> Vec<Observa
             cpu_cores: cpu.cores,
             cpu_threads: cpu.threads,
             ram_total_mb: facts.ram_total_mb,
+            hypervisor: facts.hypervisor.clone(),
             collected_at: now,
         }));
     }
@@ -522,6 +536,37 @@ mod tests {
         assert_eq!(to_web.remote_ip.to_string(), "10.0.0.5");
         assert_eq!(to_web.local_port, Some(49222));
         assert_eq!(to_web.proto, "tcp");
+    }
+
+    #[test]
+    fn virt_section_becomes_capacity_hypervisor() {
+        let output = "###virt\n\
+\"Manufacturer\",\"Model\"\n\
+\"Microsoft Corporation\",\"Virtual Machine\"\n\
+###cpu\n\
+\"Name\",\"NumberOfCores\",\"NumberOfLogicalProcessors\"\n\
+\"Intel(R) Xeon(R) Silver 4310 CPU @ 2.20GHz\",\"12\",\"24\"\n";
+        let facts = parse_windows_probe(output);
+        assert_eq!(facts.hypervisor.as_deref(), Some("hyperv"));
+
+        let observations = windows_observations("10.0.0.20".parse().unwrap(), &facts);
+        let capacity = observations
+            .iter()
+            .find_map(|o| match o {
+                Observation::Capacity(c) => Some(c),
+                _ => None,
+            })
+            .expect("capacity observation");
+        assert_eq!(capacity.hypervisor.as_deref(), Some("hyperv"));
+    }
+
+    #[test]
+    fn physical_windows_host_reports_no_hypervisor() {
+        let output = "###virt\n\
+\"Manufacturer\",\"Model\"\n\
+\"Dell Inc.\",\"PowerEdge R740\"\n";
+        let facts = parse_windows_probe(output);
+        assert_eq!(facts.hypervisor, None);
     }
 
     #[test]

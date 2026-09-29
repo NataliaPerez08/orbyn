@@ -1060,6 +1060,7 @@ mod tests {
                 cpu_cores: None,
                 cpu_threads: Some(4),
                 ram_total_mb: Some(8192),
+                hypervisor: None,
                 collected_at: Utc::now(),
             }],
             filesystems: vec![Filesystem {
@@ -1126,6 +1127,7 @@ mod tests {
             cpu_cores: Some(cores),
             cpu_threads: None,
             ram_total_mb: Some(ram_total_mb),
+            hypervisor: None,
             collected_at: Utc::now(),
         }
     }

@@ -180,15 +180,16 @@ impl crate::store::traits::Store for PostgresStore {
                     // conflated with "value unchanged".
                     sqlx::query(
                         "INSERT INTO asset_capacity \
-                           (asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-                         ON CONFLICT(asset_id) DO UPDATE SET \
-                           cpu_model = EXCLUDED.cpu_model, \
-                           cpu_sockets = EXCLUDED.cpu_sockets, \
-                           cpu_cores = EXCLUDED.cpu_cores, \
-                           cpu_threads = EXCLUDED.cpu_threads, \
-                           ram_total_mb = EXCLUDED.ram_total_mb, \
-                           collected_at = EXCLUDED.collected_at",
+                           (asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, hypervisor, collected_at) \
+                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                          ON CONFLICT(asset_id) DO UPDATE SET \
+                            cpu_model = EXCLUDED.cpu_model, \
+                            cpu_sockets = EXCLUDED.cpu_sockets, \
+                            cpu_cores = EXCLUDED.cpu_cores, \
+                            cpu_threads = EXCLUDED.cpu_threads, \
+                            ram_total_mb = EXCLUDED.ram_total_mb, \
+                            hypervisor = EXCLUDED.hypervisor, \
+                            collected_at = EXCLUDED.collected_at",
                     )
                     .bind(&capacity.asset_id)
                     .bind(&capacity.cpu_model)
@@ -196,6 +197,7 @@ impl crate::store::traits::Store for PostgresStore {
                     .bind(capacity.cpu_cores.map(|v| v as i64))
                     .bind(capacity.cpu_threads.map(|v| v as i64))
                     .bind(capacity.ram_total_mb.map(|v| v as i64))
+                    .bind(&capacity.hypervisor)
                     .bind(capacity.collected_at.to_rfc3339())
                     .execute(&mut *tx)
                     .await
@@ -404,7 +406,7 @@ impl crate::store::traits::Store for PostgresStore {
 
     async fn get_capacity(&self, asset_id: &str) -> Result<Option<crate::domain::Capacity>> {
         let row = sqlx::query_as::<_, CapacityRow>(
-            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
+            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, hypervisor, collected_at \
              FROM asset_capacity WHERE asset_id = $1",
         )
         .bind(asset_id)
@@ -482,7 +484,7 @@ impl crate::store::traits::Store for PostgresStore {
 
     async fn list_all_capacities(&self) -> Result<Vec<crate::domain::Capacity>> {
         let rows = sqlx::query_as::<_, CapacityRow>(
-            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
+            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, hypervisor, collected_at \
              FROM asset_capacity ORDER BY asset_id",
         )
         .fetch_all(&self.pool)

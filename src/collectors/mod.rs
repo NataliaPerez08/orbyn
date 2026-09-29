@@ -13,6 +13,7 @@ pub mod nmap;
 pub mod snmp;
 pub mod ssh;
 pub mod types;
+pub mod virt;
 pub mod windows;
 pub mod winrm;
 

@@ -159,11 +159,19 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .fetch_one(upgraded.pool())
         .await
         .expect("count applied migrations");
-    assert_eq!(migration_count, 8, "all current migrations must be applied");
+    assert_eq!(migration_count, 9, "all current migrations must be applied");
     assert!(table_names(&upgraded)
         .await
         .iter()
         .any(|name| name == "asset_connections"));
+    // The Phase 2 virtualization column must exist on the upgraded schema.
+    let hypervisor: Option<String> =
+        sqlx::query_scalar("SELECT hypervisor FROM asset_capacity LIMIT 1")
+            .fetch_optional(upgraded.pool())
+            .await
+            .expect("hypervisor column readable")
+            .flatten();
+    assert_eq!(hypervisor, None, "empty table, column present");
 }
 
 #[tokio::test]
@@ -217,6 +225,7 @@ async fn asset_can_receive_every_observation_family() {
             cpu_cores: Some(4),
             cpu_threads: Some(8),
             ram_total_mb: Some(8192),
+            hypervisor: Some("kvm".into()),
             collected_at: now,
         }))
         .await

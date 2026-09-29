@@ -251,6 +251,13 @@ pub struct Capacity {
     pub cpu_cores: Option<u32>,
     pub cpu_threads: Option<u32>,
     pub ram_total_mb: Option<u64>,
+    /// Canonical hypervisor id when the host is a virtual machine
+    /// (`kvm`, `vmware`, `virtualbox`, `hyperv`, `xen`, container runtimes
+    /// such as `lxc`/`docker`/`podman`, `wsl`, `bhyve`, `bochs`, `uml`,
+    /// `unknown`), or `None` when no virtualization evidence was found
+    /// (bare metal). Collectors normalize platform evidence into this
+    /// vocabulary (see `src/collectors/virt.rs`).
+    pub hypervisor: Option<String>,
     pub collected_at: DateTime<Utc>,
 }
 

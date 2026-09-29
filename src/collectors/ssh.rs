@@ -11,7 +11,8 @@
 //! - `BatchMode=yes` disables interactive password prompts — authentication is
 //!   ssh-agent or identity-file based (see [`CredentialProfile`]);
 //! - the probe is strictly read-only: `cat`, `uname`, `hostname`, `lscpu`,
-//!   `/proc/meminfo`, `df`, `systemctl list-units`;
+//!   `/proc/meminfo`, `df`, `systemctl list-units`, plus DMI/sysfs reads for
+//!   virtualization detection;
 //! - no secret material is held, logged or persisted.
 
 use std::net::IpAddr;
@@ -34,6 +35,11 @@ use super::types::{Collector, CpuFacts, ScanTarget};
 
 /// One read-only probe round trip. Sections are delimited by `###name` lines.
 ///
+/// The `###virt` block gathers virtualization evidence (`systemd-detect-virt`
+/// when installed, the DMI vendor/product sysfs files, and the `/proc/cpuinfo`
+/// hypervisor flag); every command tolerates being absent, so the section is
+/// simply empty on hosts that expose none of them.
+///
 /// The `###metric` block samples CPU/RAM/swap/load three times ~2s apart, using
 /// `/proc/stat` deltas (average CPU since the previous read), `/proc/meminfo`
 /// and `/proc/loadavg`. No external tools besides `sed`/`awk`/`cut`/`tr`/`sleep`
@@ -47,6 +53,10 @@ pub const LINUX_PROBE: &str = "echo '###os'; cat /etc/os-release; \
      echo '###svc'; systemctl --no-legend --no-pager --plain \
        list-units --type=service --state=running 2>/dev/null; \
      echo '###conn'; ss -tnp state established 2>/dev/null || netstat -tn 2>/dev/null; \
+     echo '###virt'; systemd-detect-virt 2>/dev/null; \
+       cat /sys/class/dmi/id/sys_vendor 2>/dev/null; \
+       cat /sys/class/dmi/id/product_name 2>/dev/null; \
+       grep -q hypervisor /proc/cpuinfo 2>/dev/null && echo hypervisor-flag; true; \
      echo '###metric'; \
      if [ -r /proc/stat ] && [ -r /proc/meminfo ]; then \
        for __i in 1 2 3; do \
@@ -207,6 +217,9 @@ pub struct LinuxHostFacts {
     pub hostname: Option<String>,
     pub cpu: Option<CpuFacts>,
     pub ram_total_mb: Option<u64>,
+    /// Canonical hypervisor id when virtualization evidence was found
+    /// (see [`super::virt`]).
+    pub hypervisor: Option<String>,
     pub filesystems: Vec<Filesystem>,
     pub services: Vec<RunningService>,
     pub connections: Vec<Connection>,
@@ -240,6 +253,7 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
     let hostname = first_line(&section("hostname"));
     let cpu = parse_cpu(&section("cpu"));
     let ram_total_mb = parse_meminfo(&section("mem"));
+    let hypervisor = super::virt::detect_linux(&section("virt"));
     let filesystems = parse_df(&section("disk"));
     let services = parse_systemctl(&section("svc"));
     let connections = parse_connections(&section("conn"));
@@ -251,6 +265,7 @@ pub fn parse_linux_probe(output: &str) -> LinuxHostFacts {
         hostname,
         cpu,
         ram_total_mb,
+        hypervisor,
         filesystems,
         services,
         connections,
@@ -350,6 +365,7 @@ pub fn linux_observations(ip: IpAddr, facts: &LinuxHostFacts) -> Vec<Observation
             cpu_cores: cpu.cores,
             cpu_threads: cpu.threads,
             ram_total_mb: facts.ram_total_mb,
+            hypervisor: facts.hypervisor.clone(),
             collected_at: now,
         }));
     }
@@ -1003,5 +1019,44 @@ core id\t\t: 1\n";
         let filesystems = parse_df(&df.lines().map(str::to_string).collect::<Vec<_>>());
         assert_eq!(filesystems.len(), 1);
         assert_eq!(filesystems[0].mount, "/mnt/my disk");
+    }
+
+    #[test]
+    fn virt_section_becomes_capacity_hypervisor() {
+        let output = "###virt\n\
+vmware\n\
+VMware, Inc.\n\
+VMware Virtual Platform\n\
+###mem\n\
+MemTotal:       16384532 kB\n";
+        let facts = parse_linux_probe(output);
+        assert_eq!(facts.hypervisor.as_deref(), Some("vmware"));
+
+        let observations = linux_observations("10.0.0.5".parse().unwrap(), &facts);
+        let capacity = observations
+            .iter()
+            .find_map(|o| match o {
+                Observation::Capacity(c) => Some(c),
+                _ => None,
+            })
+            .expect("capacity observation");
+        assert_eq!(capacity.hypervisor.as_deref(), Some("vmware"));
+    }
+
+    #[test]
+    fn missing_virt_section_means_bare_metal() {
+        // Hosts without systemd-detect-virt, DMI or the cpuinfo flag simply
+        // report no virtualization evidence.
+        let facts = parse_linux_probe(PROBE_OUTPUT);
+        assert_eq!(facts.hypervisor, None);
+        let observations = linux_observations("10.0.0.9".parse().unwrap(), &facts);
+        let capacity = observations
+            .iter()
+            .find_map(|o| match o {
+                Observation::Capacity(c) => Some(c),
+                _ => None,
+            })
+            .expect("capacity observation");
+        assert_eq!(capacity.hypervisor, None);
     }
 }

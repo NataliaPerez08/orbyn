@@ -194,17 +194,18 @@ pub fn capacity(cap: Option<&Capacity>, format: Format) -> String {
         Format::Json => json(&cap),
         Format::Csv => {
             let mut out = String::from(
-                "asset_id,cpu_model,cpu_sockets,cpu_cores,cpu_threads,ram_total_mb,collected_at\n",
+                "asset_id,cpu_model,cpu_sockets,cpu_cores,cpu_threads,ram_total_mb,hypervisor,collected_at\n",
             );
             if let Some(c) = cap {
                 out.push_str(&format!(
-                    "{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{}\n",
                     csv(&c.asset_id),
                     csv(&c.cpu_model.clone().unwrap_or_default()),
                     c.cpu_sockets.map(|v| v.to_string()).unwrap_or_default(),
                     c.cpu_cores.map(|v| v.to_string()).unwrap_or_default(),
                     c.cpu_threads.map(|v| v.to_string()).unwrap_or_default(),
                     c.ram_total_mb.map(|v| v.to_string()).unwrap_or_default(),
+                    csv(&c.hypervisor.clone().unwrap_or_default()),
                     c.collected_at.to_rfc3339(),
                 ));
             }
@@ -218,7 +219,7 @@ pub fn capacity(cap: Option<&Capacity>, format: Format) -> String {
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "-".into());
                 format!(
-                    "CPU model : {}\nSockets   : {}\nCores     : {}\nvCPU      : {}\nRAM       : {}\nCollected : {}\n",
+                    "CPU model  : {}\nSockets    : {}\nCores      : {}\nvCPU       : {}\nRAM        : {}\nHypervisor : {}\nCollected  : {}\n",
                     c.cpu_model.clone().unwrap_or_else(|| "-".into()),
                     c.cpu_sockets.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                     c.cpu_cores.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
@@ -226,6 +227,9 @@ pub fn capacity(cap: Option<&Capacity>, format: Format) -> String {
                     c.ram_total_mb
                         .map(|mb| format!("{mb} MB"))
                         .unwrap_or_else(|| "-".into()),
+                    c.hypervisor
+                        .clone()
+                        .unwrap_or_else(|| "- (bare metal or undetected)".into()),
                     c.collected_at.format("%Y-%m-%d %H:%M:%S"),
                 )
             }
@@ -1277,6 +1281,35 @@ mod tests {
         let csv = capacity(None, Format::Csv);
         assert!(csv.starts_with("asset_id,cpu_model,"));
         assert_eq!(csv.lines().count(), 1);
+    }
+
+    #[test]
+    fn capacity_renders_hypervisor() {
+        let cap = crate::domain::Capacity {
+            asset_id: "10-0-0-5".into(),
+            cpu_model: Some("Xeon Gold 6138".into()),
+            cpu_sockets: Some(1),
+            cpu_cores: Some(4),
+            cpu_threads: Some(8),
+            ram_total_mb: Some(16001),
+            hypervisor: Some("vmware".into()),
+            collected_at: chrono::Utc::now(),
+        };
+        let table = capacity(Some(&cap), Format::Table);
+        assert!(table.contains("Hypervisor : vmware"), "{table}");
+
+        let bare = crate::domain::Capacity {
+            hypervisor: None,
+            ..cap.clone()
+        };
+        let table = capacity(Some(&bare), Format::Table);
+        assert!(
+            table.contains("Hypervisor : - (bare metal or undetected)"),
+            "{table}"
+        );
+
+        let csv = capacity(Some(&cap), Format::Csv);
+        assert!(csv.contains(",vmware,"), "{csv}");
     }
 
     #[test]

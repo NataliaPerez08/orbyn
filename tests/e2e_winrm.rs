@@ -30,6 +30,9 @@ const WINRM_PROBE_OUTPUT: &str = "###os\n\
 \"LocalAddress\",\"LocalPort\",\"RemoteAddress\",\"RemotePort\"\n\
 \"10.0.0.20\",\"49222\",\"10.0.0.5\",\"443\"\n\
 \"10.0.0.20\",\"49223\",\"10.0.0.9\",\"5432\"\n\
+###virt\n\
+\"Manufacturer\",\"Model\"\n\
+\"Microsoft Corporation\",\"Virtual Machine\"\n\
 ###metric\n\
 45.5|16777216|8388608|512\n\
 12.0|16777216|12582912|512\n";
@@ -125,6 +128,10 @@ fn winrm_discovery_collects_windows_host_over_wsman() {
         "{capacity}"
     );
     assert!(capacity.contains("16384"), "{capacity}");
+    assert!(
+        capacity.contains("Hypervisor : hyperv"),
+        "virtualization metadata: {capacity}"
+    );
 
     let host_services = run_ok(orbyn(&dir).args(["host-services", "10.0.0.20", "--format", "csv"]));
     assert!(host_services.contains("W3SVC"), "{host_services}");

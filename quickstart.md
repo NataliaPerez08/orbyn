@@ -82,7 +82,8 @@ orbyn discover --target 192.168.1.20 --collector windows \
 orbyn discover --target 192.168.1.20 --collector winrm \
     --user administrator --winrm-password -
 
-orbyn capacity 192.168.1.10        # CPU/RAM
+orbyn capacity 192.168.1.10        # CPU/RAM + detected hypervisor (vmware,
+                                  # kvm, hyperv, ... or bare metal)
 orbyn disks 192.168.1.10           # filesystems
 orbyn host-services 192.168.1.10   # running systemd units / Windows services
 ```

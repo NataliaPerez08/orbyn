@@ -216,6 +216,10 @@ ESTAB  0      0      10.0.0.5:54322        10.0.0.2:5432            users:(("pos
 ESTAB  0      0      10.0.0.5:49200        10.0.0.9:6379            users:(("redis-cli",pid=980,fd=4))
 ESTAB  0      0      10.0.0.5:49201        203.0.113.9:443          users:(("curl",pid=981,fd=5))
 ESTAB  0      0      127.0.0.1:49202       127.0.0.1:8080
+###virt
+vmware
+VMware, Inc.
+VMware Virtual Platform
 ###metric
 62.50|16384532|2655988|8388604|4194304|2.10,2.00,1.90
 80.00|16384532|2097152|8388604|3145728|2.50,2.20,2.00
@@ -246,6 +250,9 @@ cat <<'OUT'
 "LocalAddress","LocalPort","RemoteAddress","RemotePort"
 "10.0.0.20","49222","10.0.0.5","443"
 "10.0.0.20","49223","10.0.0.9","5432"
+###virt
+"Manufacturer","Model"
+"Microsoft Corporation","Virtual Machine"
 ###metric
 45.5|16777216|8388608|512
 12.0|16777216|12582912|512

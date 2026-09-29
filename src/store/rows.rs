@@ -111,6 +111,7 @@ pub(crate) struct CapacityRow {
     pub cpu_cores: Option<i64>,
     pub cpu_threads: Option<i64>,
     pub ram_total_mb: Option<i64>,
+    pub hypervisor: Option<String>,
     pub collected_at: String,
 }
 
@@ -123,6 +124,7 @@ impl CapacityRow {
             cpu_cores: self.cpu_cores.map(|v| v as u32),
             cpu_threads: self.cpu_threads.map(|v| v as u32),
             ram_total_mb: self.ram_total_mb.map(|v| v as u64),
+            hypervisor: self.hypervisor,
             collected_at: parse_ts(&self.collected_at),
         }
     }

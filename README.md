@@ -166,6 +166,11 @@ The repository currently provides:
     or logged.
   * `orbyn capacity`, `orbyn disks`, `orbyn host-services` commands; the
     asset detail view shows every recorded facet.
+  * Virtualization metadata: host probes detect the hypervisor
+    (`systemd-detect-virt`/DMI on Linux, `Win32_ComputerSystem` on Windows)
+    and normalize it into a canonical vocabulary (`kvm`, `vmware`,
+    `virtualbox`, `hyperv`, `xen`, container runtimes, ...) stored on
+    capacity rows and rendered by `orbyn capacity`.
 * Right-sizing foundation (v0.5):
   * SSH probes snapshot CPU/RAM/swap/load three times (~2s apart) into
     `metric_sample` observations persisted per asset.

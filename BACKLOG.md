@@ -131,7 +131,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P2** Include complete supported metadata in Terraform export.
 - [ ] **P2** Add optional export to NetBox — descoped by design (read-only
   against NetBox, see PLAN_ISSUES.md).
-- [ ] **P2** Add virtualization metadata.
+- [x] **P2** Add virtualization metadata (host probes detect the hypervisor
+  into a canonical vocabulary on capacity rows; `orbyn capacity` renders it).
 - [x] **P1** Add import/export round-trip coverage for every supported field.
 
 ### Phase 3 — Evidence-based right-sizing

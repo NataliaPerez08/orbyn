@@ -101,6 +101,7 @@ async fn round_trips_every_observation_kind() {
                 cpu_cores: Some(4),
                 cpu_threads: Some(8),
                 ram_total_mb: Some(16384),
+                hypervisor: Some("kvm".into()),
                 collected_at: Utc::now(),
             }),
             Observation::Filesystem(Filesystem {
@@ -167,6 +168,7 @@ async fn round_trips_every_observation_kind() {
     let capacity = store.get_capacity(&api_id).await.unwrap().unwrap();
     assert_eq!(capacity.ram_total_mb, Some(16384));
     assert_eq!(capacity.cpu_cores, Some(4));
+    assert_eq!(capacity.hypervisor.as_deref(), Some("kvm"));
 
     let filesystems = store.list_filesystems(&api_id).await.unwrap();
     assert_eq!(filesystems.len(), 1);
@@ -232,6 +234,7 @@ async fn bulk_reads_match_per_asset_reads() {
                 cpu_cores: None,
                 cpu_threads: None,
                 ram_total_mb: Some(8192),
+                hypervisor: None,
                 collected_at: Utc::now(),
             }),
             Observation::Filesystem(Filesystem {
@@ -297,6 +300,11 @@ async fn bulk_reads_match_per_asset_reads() {
     assert!(all_capacities
         .iter()
         .any(|c| c.asset_id == api_id && c.ram_total_mb == Some(8192)));
+    // #8 overwrite semantics: the re-scan dropped every measured field it no
+    // longer detected, including the hypervisor.
+    assert!(all_capacities
+        .iter()
+        .any(|c| c.asset_id == api_id && c.hypervisor.is_none()));
 }
 
 #[tokio::test]

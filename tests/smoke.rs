@@ -535,6 +535,7 @@ fn host_fact_observations() -> Vec<Observation> {
         cpu_cores: Some(4),
         cpu_threads: Some(8),
         ram_total_mb: Some(ram_total_mb),
+        hypervisor: Some("kvm".into()),
         collected_at: now,
     };
     vec![
