@@ -61,8 +61,9 @@ pub const LINUX_PROBE: &str = "echo '###os'; cat /etc/os-release; \
 
 /// Executes a fixed command on a remote host through the `ssh` binary.
 ///
-/// The same transport serves the Linux and Windows host collectors; a native
-/// WinRM transport can implement the same contract later.
+/// The same transport serves the Linux and Windows host collectors; the
+/// Windows collector can also run over the native WinRM transport instead
+/// (see [`crate::collectors::winrm`]).
 #[derive(Debug, Clone)]
 pub struct SshTransport {
     binary: String,
@@ -107,9 +108,11 @@ impl SshTransport {
             .arg(command)
             // Secret-bearing variables never reach the child environment
             // (audit OY-02): a hijacked binary must not be able to read the
-            // community, the NetBox token or the database URL password.
+            // community, the NetBox token, the WinRM password or the
+            // database URL password.
             .env_remove("ORBYN_SNMP_COMMUNITY")
             .env_remove("ORBYN_NETBOX_TOKEN")
+            .env_remove("ORBYN_WINRM_PASSWORD")
             .env_remove("ORBYN_DB")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

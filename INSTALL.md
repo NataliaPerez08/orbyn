@@ -12,12 +12,15 @@ by the collectors you plan to use:
 | --- | --- |
 | Nmap discovery | `nmap` |
 | SNMP discovery | `snmpwalk` from net-snmp |
-| Linux or Windows host discovery | OpenSSH client (`ssh`) |
+| Linux or Windows host discovery (SSH) | OpenSSH client (`ssh`) |
+| Windows host discovery (native WinRM) | `curl` |
 | NetBox import | `curl` |
 | DNS relationship evidence (CNAME chains, PTR) | `dig` (optional; without it only forward IP matching via the system resolver) |
 
-Host discovery uses key-based SSH authentication through `ssh-agent` or an
-identity file. Orbyn does not store passwords or private key contents.
+SSH host discovery uses key-based authentication through `ssh-agent` or an
+identity file. Native WinRM discovery uses Basic authentication over HTTPS
+(password from `ORBYN_WINRM_PASSWORD` or stdin, held in memory only). Orbyn
+does not store passwords or private key contents.
 
 ## Linux
 
@@ -87,8 +90,9 @@ run; only approve artifacts downloaded from the project release page.
    orbyn.exe --help
    ```
 
-Windows host discovery requires the OpenSSH Server feature on the target host
-and PowerShell 3 or newer. Native WinRM is not yet supported.
+Windows host discovery requires either the OpenSSH Server feature on the
+target host (PowerShell 3 or newer) or a WinRM HTTPS listener with Basic
+authentication enabled (the native WinRM transport, port 5986 by default).
 
 ## Database and configuration
 

@@ -14,6 +14,7 @@ pub mod snmp;
 pub mod ssh;
 pub mod types;
 pub mod windows;
+pub mod winrm;
 
 pub use credentials::CredentialProfile;
 pub use types::{

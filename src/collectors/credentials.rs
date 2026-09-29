@@ -10,10 +10,14 @@
 //!   copied or logged by Orbyn;
 //! - `port`: remote port.
 //!
-//! Password authentication is intentionally unsupported: passing passwords
-//! through subprocess arguments or storing them would violate the security
-//! rules in SECURITY.md. Operators who need password-based auth should front
-//! it with an agent (e.g. `ssh-agent`) or use key files.
+//! Password authentication is intentionally unsupported for SSH: passing
+//! passwords through subprocess arguments or storing them would violate the
+//! security rules in SECURITY.md. Operators who need password-based auth
+//! should front it with an agent (e.g. `ssh-agent`) or use key files. The
+//! one exception is the native WinRM transport (Basic auth over HTTPS),
+//! which accepts a password at the CLI level (`ORBYN_WINRM_PASSWORD` or
+//! stdin) and holds it in process memory for the run only — see
+//! `super::winrm` for the handling rules.
 
 use std::path::PathBuf;
 

@@ -78,13 +78,19 @@ orbyn discover --target 192.168.1.10 --collector ssh --user deploy
 orbyn discover --target 192.168.1.20 --collector windows \
     --user administrator --identity-file ~/.ssh/id_ed25519
 
+# Windows host (native WinRM over HTTPS, Basic auth)
+orbyn discover --target 192.168.1.20 --collector winrm \
+    --user administrator --winrm-password -
+
 orbyn capacity 192.168.1.10        # CPU/RAM
 orbyn disks 192.168.1.10           # filesystems
 orbyn host-services 192.168.1.10   # running systemd units / Windows services
 ```
 
-Authentication is key-based only (ssh-agent or `--identity-file`); Orbyn never
-stores or logs credentials. Native WinRM transport is planned (ROADMAP.md).
+SSH authentication is key-based only (ssh-agent or `--identity-file`). The
+WinRM password comes from `ORBYN_WINRM_PASSWORD` or stdin (`-`), is held in
+memory for the run only, and travels to `curl` through stdin — Orbyn never
+stores credentials, logs them, or puts them in process arguments.
 
 ## 6. Enrich inventory
 

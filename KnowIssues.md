@@ -19,10 +19,13 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
    discovery and NetBox error paths are wired through it. (Resolved in
    `src/redact.rs` + `src/main.rs`.)
 
-3. **Password authentication unsupported by design** — `gap`
-   SSH/Windows collectors only support agent / identity-file auth
+3. **Password authentication unsupported for SSH by design** — `gap`
+   SSH-based collectors only support agent / identity-file auth
    (`CredentialProfile`). Password-based environments must front auth with
-   `ssh-agent`. Intentional, but worth knowing.
+   `ssh-agent`. The native WinRM transport is the one exception: its
+   Basic-auth password is accepted (env/stdin, memory-only, streamed to
+   curl through stdin) because WinRM has no agent equivalent. Intentional,
+   but worth knowing.
 
 4. **`--no-verify` disables TLS verification** — `quality` ~~FIXED~~
    Using it now prints a prominent warning that TLS verification is disabled
@@ -122,9 +125,14 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 
 ## Feature gaps & deferred work
 
-17. **Native WinRM transport** — `gap` (deferred)
-    Windows host collection ships via PowerShell over OpenSSH; a native
-    WS-Man/WinRM adapter remains unimplemented (ROADMAP/BACKLOG).
+17. **Native WinRM transport** — `gap` ~~FIXED~~
+    Windows host collection now also runs over the native WS-Man/WinRM
+    transport (`--collector winrm`): shell create → command → receive →
+    delete over SOAP/HTTPS through `curl`, Basic auth with the password
+    sourced from `ORBYN_WINRM_PASSWORD` or stdin, held in memory only and
+    streamed to curl through a stdin config (never argv, logs or disk).
+    NTLM/Kerberos and the plaintext HTTP listener (5985) remain possible
+    later extensions. (Resolved in `src/collectors/winrm.rs`.)
 
 18. **vCenter collector/importer** — `gap` (deferred)
     Requires a SOAP/session client; intentionally deferred to a follow-up.

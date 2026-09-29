@@ -1,16 +1,23 @@
 //! Windows host collector (v0.3 milestone).
 //!
 //! Collects Windows host facts (OS, CPU, RAM, disks, running services) by
-//! running PowerShell over the OpenSSH Server feature of Windows hosts —
-//! the same [`SshTransport`] and [`CredentialProfile`] used for Linux.
+//! running read-only PowerShell queries on the target host over one of two
+//! interchangeable transports:
 //!
-//! A native WS-Man/WinRM transport can replace the transport later without
-//! touching the parsing or observation layer; see ROADMAP.md.
+//! - [`WindowsTransport::Ssh`]: PowerShell over the OpenSSH Server feature,
+//!   the same [`SshTransport`] and [`CredentialProfile`] used for Linux;
+//! - [`WindowsTransport::WinRm`]: the native WS-Man/WinRM transport
+//!   ([`crate::collectors::winrm::WinRmTransport`]) over HTTPS.
+//!
+//! Both transports run the same fixed probe script, so parsing and
+//! observation building are transport-independent.
 //!
 //! Security rules mirror the Linux collector:
 //! - the probe is a fixed constant string; only the host comes from user input;
 //! - every PowerShell query is read-only (`Get-CimInstance`, `Get-Service`);
-//! - authentication is ssh-agent or identity-file based; no secrets are held.
+//! - SSH authentication is ssh-agent or identity-file based; WinRM
+//!   authentication is Basic over HTTPS with the password held in memory
+//!   only (see the winrm module). No secrets are stored or logged.
 
 use std::net::IpAddr;
 
@@ -26,13 +33,16 @@ use crate::parsing::{normalize_ip, split_csv_line, split_sections};
 use super::credentials::CredentialProfile;
 use super::ssh::{SnapshotFacts, SshTransport, SNAPSHOT_INTERVAL_SECS};
 use super::types::{Collector, CpuFacts, ScanTarget};
+use super::winrm::WinRmTransport;
 
-/// One read-only PowerShell probe round trip. Sections are delimited by
-/// `###name` string literals; CIM queries emit CSV via `ConvertTo-Csv`.
+/// One read-only PowerShell probe. Sections are delimited by `###name`
+/// string literals; CIM queries emit CSV via `ConvertTo-Csv`.
 ///
-/// The probe deliberately avoids `$` and backticks so it survives being passed
-/// through cmd.exe or a PowerShell default shell unchanged.
-pub const WINDOWS_PROBE: &str = "powershell -NoProfile -Command \"& { \
+/// This is the transport-independent script. The SSH transport wraps it in
+/// `powershell -NoProfile -Command "..."` ([`ssh_windows_command`]); the
+/// WinRM transport sends it as an encoded command, which also removes the
+/// remote-shell quoting constraints.
+pub const WINDOWS_PROBE_SCRIPT: &str = "& { \
      '###os'; Get-CimInstance Win32_OperatingSystem \
        | Select-Object Caption,Version,BuildNumber,CSName \
        | ConvertTo-Csv -NoTypeInformation; \
@@ -60,21 +70,60 @@ pub const WINDOWS_PROBE: &str = "powershell -NoProfile -Command \"& { \
          $cpu, $os.TotalVisibleMemorySize, $os.FreePhysicalMemory, $pg)); \
        if ($i -lt 2) { Start-Sleep -Seconds 2 } \
      } \
-      }\"";
+      }";
 
-/// Windows host collector over SSH (OpenSSH Server on the Windows host).
-pub struct WindowsCollector {
-    transport: SshTransport,
+/// Wrap a PowerShell script in the command line the SSH transport runs.
+pub fn ssh_windows_command(script: &str) -> String {
+    format!("powershell -NoProfile -Command \"{script}\"")
 }
 
-impl WindowsCollector {
-    pub fn new(profile: CredentialProfile) -> Self {
-        Self {
-            transport: SshTransport::new(profile),
+/// Command transport for the Windows collector: runs a fixed read-only
+/// PowerShell script on a host and returns its stdout.
+pub enum WindowsTransport {
+    /// PowerShell over the OpenSSH Server feature of the Windows host.
+    Ssh(SshTransport),
+    /// Native WS-Man/WinRM over HTTPS.
+    WinRm(WinRmTransport),
+}
+
+impl WindowsTransport {
+    /// Run `script` on `host`, returning its stdout.
+    pub async fn run(&self, host: IpAddr, script: &str) -> Result<String> {
+        match self {
+            Self::Ssh(ssh) => ssh.run(host, &ssh_windows_command(script)).await,
+            Self::WinRm(winrm) => winrm.run(host, script).await,
         }
     }
 
-    /// Parse probe output into facts without invoking ssh (fixture-testable).
+    /// The collector name recorded in discovery job history.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Ssh(_) => "windows",
+            Self::WinRm(_) => "winrm",
+        }
+    }
+}
+
+/// Windows host collector over a [`WindowsTransport`].
+pub struct WindowsCollector {
+    transport: WindowsTransport,
+}
+
+impl WindowsCollector {
+    /// Collector over the SSH transport (PowerShell over OpenSSH).
+    pub fn new(profile: CredentialProfile) -> Self {
+        Self {
+            transport: WindowsTransport::Ssh(SshTransport::new(profile)),
+        }
+    }
+
+    /// Collector over an explicit transport (SSH or native WinRM).
+    pub fn with_transport(transport: WindowsTransport) -> Self {
+        Self { transport }
+    }
+
+    /// Parse probe output into facts without invoking the transport
+    /// (fixture-testable).
     pub fn parse_probe(&self, output: &str) -> WindowsHostFacts {
         parse_windows_probe(output)
     }
@@ -89,7 +138,7 @@ impl Default for WindowsCollector {
 #[async_trait]
 impl Collector for WindowsCollector {
     fn name(&self) -> &'static str {
-        "windows"
+        self.transport.name()
     }
 
     async fn scan(&self, target: &ScanTarget) -> Result<Vec<Observation>> {
@@ -101,7 +150,7 @@ impl Collector for WindowsCollector {
         };
         let output = self
             .transport
-            .run(ip, WINDOWS_PROBE)
+            .run(ip, WINDOWS_PROBE_SCRIPT)
             .await
             .with_context(|| format!("Windows probe of {ip}"))?;
         let facts = parse_windows_probe(&output);
@@ -386,6 +435,20 @@ fn field(row: &[String], idx: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_command_wraps_the_probe_script() {
+        let command = ssh_windows_command(WINDOWS_PROBE_SCRIPT);
+        assert!(command.starts_with("powershell -NoProfile -Command \"& {"));
+        assert!(command.ends_with("}\""));
+        assert!(command.contains("Get-CimInstance Win32_OperatingSystem"));
+    }
+
+    #[test]
+    fn transport_names_are_distinct() {
+        let ssh = WindowsTransport::Ssh(SshTransport::new(CredentialProfile::default()));
+        assert_eq!(ssh.name(), "windows");
+    }
 
     const PROBE_OUTPUT: &str = "###os\n\
 \"Caption\",\"Version\",\"BuildNumber\",\"CSName\"\n\

@@ -13,7 +13,8 @@ use orbyn::collectors::credentials::CredentialProfile;
 use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
 use orbyn::collectors::ssh::LinuxCollector;
-use orbyn::collectors::windows::WindowsCollector;
+use orbyn::collectors::windows::{WindowsCollector, WindowsTransport};
+use orbyn::collectors::winrm::WinRmTransport;
 use orbyn::collectors::{validate_target_with_policy, Collector, ScanTarget, ScanTargetError};
 use orbyn::config::{Config, DbTarget};
 use orbyn::domain::{
@@ -58,6 +59,8 @@ enum DiscoveryCollector {
     Snmp,
     Ssh,
     Windows,
+    /// Native WS-Man/WinRM transport for Windows hosts.
+    Winrm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -99,10 +102,11 @@ impl From<UnsetField> for AnnotationField {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Discover assets in CIDR ranges or IPs (Nmap) or collect hosts
-    /// (SNMP walk, SSH Linux probe, or Windows PowerShell probe over SSH).
+    /// (SNMP walk, SSH Linux probe, Windows PowerShell probe over SSH,
+    /// or Windows PowerShell over native WinRM).
     Discover {
         /// Target IP or CIDR range, e.g. 10.0.0.0/24 (single IP for
-        /// snmp/ssh/windows). Repeatable.
+        /// snmp/ssh/windows/winrm). Repeatable.
         #[arg(long, action = ArgAction::Append, required = true)]
         target: Vec<String>,
         /// Collector adapter to run.
@@ -128,7 +132,8 @@ enum Command {
         /// SNMP agent UDP port.
         #[arg(long, default_value_t = 161)]
         snmp_port: u16,
-        /// SSH login user for ssh/windows collectors (default: current user).
+        /// Login user for ssh/windows/winrm collectors (default: current
+        /// user; required for winrm).
         #[arg(long)]
         user: Option<String>,
         /// SSH port for ssh/windows collectors.
@@ -137,6 +142,17 @@ enum Command {
         /// SSH identity (private key) file for ssh/windows collectors.
         #[arg(long)]
         identity_file: Option<PathBuf>,
+        /// WinRM password (winrm collector): from ORBYN_WINRM_PASSWORD, or
+        /// `-` to read one line from stdin so it never lands in argv.
+        #[arg(long, env = "ORBYN_WINRM_PASSWORD", hide_env_values = true)]
+        winrm_password: Option<String>,
+        /// WinRM HTTPS port (winrm collector).
+        #[arg(long, default_value_t = 5986)]
+        winrm_port: u16,
+        /// Skip TLS certificate verification for the WinRM endpoint
+        /// (self-signed lab certificates).
+        #[arg(long)]
+        winrm_insecure: bool,
         /// Output format for the resulting inventory.
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
@@ -417,6 +433,9 @@ async fn main() -> anyhow::Result<()> {
             user,
             port,
             identity_file,
+            winrm_password,
+            winrm_port,
+            winrm_insecure,
         } => {
             let store = open_store(&config).await?;
             if concurrency == 0 {
@@ -433,9 +452,19 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             let community = resolve_secret(community, "--community", "ORBYN_SNMP_COMMUNITY")?;
+            let winrm_password =
+                resolve_secret(winrm_password, "--winrm-password", "ORBYN_WINRM_PASSWORD")?;
             validate_ssh_user(user.as_deref())?;
+            if collector == DiscoveryCollector::Winrm
+                && user.as_deref().unwrap_or_default().is_empty()
+            {
+                bail!(
+                    "--collector winrm requires --user (the Windows account, e.g. Administrator)"
+                );
+            }
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
-            let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
+            let profile =
+                CredentialProfile::new(user.clone().unwrap_or_default(), port, identity_file);
 
             let collector: Arc<dyn Collector> = match collector {
                 DiscoveryCollector::Nmap => Arc::new(NmapCollector::new()),
@@ -446,11 +475,32 @@ async fn main() -> anyhow::Result<()> {
                 )),
                 DiscoveryCollector::Ssh => Arc::new(LinuxCollector::new(profile)),
                 DiscoveryCollector::Windows => Arc::new(WindowsCollector::new(profile)),
+                DiscoveryCollector::Winrm => {
+                    if winrm_insecure {
+                        tracing::warn!(
+                            "--winrm-insecure disables TLS certificate verification for the WinRM endpoint"
+                        );
+                        eprintln!(
+                            "WARNING: --winrm-insecure disables TLS certificate verification.\n\
+                             Only use it against trusted endpoints with self-signed certificates."
+                        );
+                    }
+                    let winrm_profile =
+                        CredentialProfile::new(user.unwrap_or_default(), winrm_port, None);
+                    let transport =
+                        WinRmTransport::new(winrm_profile, winrm_password.clone(), winrm_insecure)?;
+                    Arc::new(WindowsCollector::with_transport(WindowsTransport::WinRm(
+                        transport,
+                    )))
+                }
             };
 
             let mut redactor = orbyn::redact::Redactor::from_env();
             if let Some(community) = &community {
                 redactor.add_value(community);
+            }
+            if let Some(password) = &winrm_password {
+                redactor.add_value(password);
             }
 
             discover(
@@ -778,8 +828,9 @@ async fn open_store(config: &Config) -> Result<Arc<dyn Store>> {
 /// Resolve a secret flag value: the literal `-` reads one trimmed line from
 /// stdin so the secret never appears in argv or the environment; any other
 /// value passes through unchanged. Values containing newlines or NUL bytes
-/// are rejected: they would split the temporary SNMP config file or curl's
-/// `-H @-` header stream (config/header injection).
+/// are rejected: they would split the temporary SNMP config file, curl's
+/// `-H @-` header stream or curl's `-K -` config stream (config/header
+/// injection).
 ///
 /// A literal value warns on stderr: it sits in the process arguments (and
 /// shell history) for the whole process lifetime (audit OY-07). Values
@@ -1673,6 +1724,7 @@ mod tests {
     fn help_does_not_echo_env_secret_values() {
         std::env::set_var("ORBYN_SNMP_COMMUNITY", "help-leak-canary");
         std::env::set_var("ORBYN_NETBOX_TOKEN", "help-leak-canary");
+        std::env::set_var("ORBYN_WINRM_PASSWORD", "help-leak-canary");
         let mut cmd = Cli::command();
         let discover_help = cmd
             .find_subcommand_mut("discover")
@@ -1689,6 +1741,7 @@ mod tests {
             .to_string();
         std::env::remove_var("ORBYN_SNMP_COMMUNITY");
         std::env::remove_var("ORBYN_NETBOX_TOKEN");
+        std::env::remove_var("ORBYN_WINRM_PASSWORD");
 
         // The variable name stays documented, its current value never leaks.
         assert!(
@@ -1698,6 +1751,10 @@ mod tests {
         assert!(
             !discover_help.contains("help-leak-canary"),
             "community env value leaked into help: {discover_help}"
+        );
+        assert!(
+            discover_help.contains("ORBYN_WINRM_PASSWORD"),
+            "env var name stays documented: {discover_help}"
         );
         assert!(
             netbox_import_help.contains("ORBYN_NETBOX_TOKEN"),

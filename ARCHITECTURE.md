@@ -42,6 +42,7 @@ src/
 │   ├── snmp.rs           # SNMP adapter (v0.2 milestone)
 │   ├── ssh.rs            # SSH transport + Linux host collector (v0.3)
 │   ├── windows.rs        # Windows host collector over PowerShell (v0.3)
+│   ├── winrm.rs          # native WS-Man/WinRM transport over HTTPS (v0.3)
 │   └── dns.rs            # DNS relationship evidence (v0.4)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
@@ -68,7 +69,8 @@ Examples:
 - Nmap XML output.
 - SNMP queries.
 - SSH commands on Linux.
-- PowerShell CIM queries on Windows (over OpenSSH; native WinRM deferred).
+- PowerShell CIM queries on Windows (over OpenSSH, or native WS-Man/WinRM
+  over HTTPS).
 - NetBox (read-only importer).
 - vCenter, Zabbix and Prometheus (deferred/planned).
 - Flow telemetry or eBPF (planned).
@@ -83,11 +85,15 @@ tables. They implement the `Collector` trait, which requires:
 
 Host-level collectors (v0.3) authenticate through a **credential profile**
 (`src/collectors/credentials.rs`): a login user, a port and an optional
-identity-file path. Orbyn deliberately stores no credentials — authentication
-is delegated to ssh-agent or the referenced key, so secret material never
-passes through the CLI, logs or database. The Linux and Windows collectors
-share one `SshTransport`; a native WinRM transport can implement the same
-command contract later without touching parsing or the store.
+identity-file path. Orbyn deliberately stores no credentials — SSH
+authentication is delegated to ssh-agent or the referenced key, so secret
+material never passes through the CLI, logs or database. The Linux and
+Windows collectors share one `SshTransport`; the Windows collector can also
+run over the native WinRM transport (`src/collectors/winrm.rs`), which
+implements the same command contract (create shell → command → receive →
+delete over WS-Man/SOAP through `curl`) without touching parsing or the
+store. The WinRM password lives in memory for the run only and reaches
+`curl` through a stdin config file, never argv.
 
 ### 2. Normalization layer
 

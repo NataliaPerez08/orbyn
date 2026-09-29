@@ -20,18 +20,24 @@ or authorization service and must not be used as one.
   through a shell.
 - Credentials are never exposed through CLI or API output and are never
   logged.
-- Secret flags (`--token`, `--community`) can be kept off the command line:
-  both fall back to environment variables (`ORBYN_NETBOX_TOKEN`,
-  `ORBYN_SNMP_COMMUNITY`) and accept the literal `-` to read one line from
-  stdin. Values supplied explicitly on the command line trigger a runtime
-  warning (they are visible in `ps` and shell history) and are registered
-  with the redactor so they cannot leak into errors, logs or job records.
-- Orbyn avoids storing credentials whenever possible. The v0.3 host-level
+- Secret flags (`--token`, `--community`, `--winrm-password`) can be kept off
+  the command line: all fall back to environment variables
+  (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`) and
+  accept the literal `-` to read one line from stdin. Values supplied
+  explicitly on the command line trigger a runtime warning (they are visible
+  in `ps` and shell history) and are registered with the redactor so they
+  cannot leak into errors, logs or job records.
+- Orbyn avoids storing credentials whenever possible. The SSH-based host
   collectors store **no credentials at all**: authentication is delegated to
   ssh-agent or a user-referred identity file through a credential profile
-  (login user, port, key path). If password-based collection is ever added,
-  those credentials must be encrypted at rest in an explicit credential
-  profile and never passed through CLI arguments or logs.
+  (login user, port, key path). The native WinRM transport requires a
+  password for its Basic-auth HTTPS session; that password is sourced from
+  `ORBYN_WINRM_PASSWORD` or stdin, held in process memory for the duration
+  of the run only, streamed to `curl` through a stdin config file (`-K -`,
+  so it never appears in process arguments), registered with the redactor,
+  stripped from child environments and never written to disk, logs or the
+  database. WinRM sessions always use HTTPS (port 5986 by default), so the
+  Basic credentials never travel in cleartext.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
 - API tokens (NetBox) are streamed to `curl` through stdin (`-H @-`), never
@@ -58,8 +64,9 @@ or authorization service and must not be used as one.
   collector output fails the job with an explicit error instead of parsing
   a partial payload.
 - Child processes never inherit Orbyn's secret-bearing environment
-  variables (`ORBYN_SNMP_COMMUNITY`, `ORBYN_NETBOX_TOKEN`, `ORBYN_DB`):
-  a hijacked collector binary cannot read them from its own environment.
+  variables (`ORBYN_SNMP_COMMUNITY`, `ORBYN_NETBOX_TOKEN`,
+  `ORBYN_WINRM_PASSWORD`, `ORBYN_DB`): a hijacked collector binary cannot
+  read them from its own environment.
 
 ## Reporting a vulnerability
 

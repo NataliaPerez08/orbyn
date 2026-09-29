@@ -48,7 +48,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Environment, owner, criticality and tags (`orbyn annotate`).
 - [x] **P1** Import/export hooks (`orbyn import`).
 - [x] **P1** SSH Linux collector.
-- [ ] **P1** WinRM Windows collector (native WS-Man transport; v0.3 covers Windows hosts via PowerShell-over-SSH).
+- [x] **P1** WinRM Windows collector (native WS-Man transport over HTTPS via curl; Basic auth with the password streamed to curl through stdin).
 - [ ] **P2** Virtualization metadata.
 - [x] **P2** Disk/filesystem inventory.
 

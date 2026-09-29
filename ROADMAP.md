@@ -39,12 +39,16 @@ port discovery.
 ## v0.3 — Host-level discovery
 
 **Status:** implemented for Linux (SSH) and Windows (PowerShell over the
-OpenSSH Server feature). A native WS-Man/WinRM transport remains a follow-up
-adapter over the same credential profile / command-transport abstraction.
+OpenSSH Server feature, or the native WS-Man/WinRM transport over HTTPS).
+NTLM/Kerberos authentication and the plaintext HTTP listener (5985) remain
+possible later extensions of the same transport.
 
 - SSH collector for Linux.
-- WinRM collector for Windows — ships as read-only PowerShell CIM queries
-  over OpenSSH; native WinRM adapter pending.
+- WinRM collector for Windows — read-only PowerShell CIM queries over
+  either transport: OpenSSH, or native WS-Man/WinRM (Basic auth over
+  HTTPS through `curl`; the password is sourced from
+  `ORBYN_WINRM_PASSWORD` or stdin, held in memory only, streamed to curl
+  through stdin and never persisted, logged or exposed in argv).
 - OS details.
 - Installed CPU/RAM capacity.
 - Disk/filesystem inventory.

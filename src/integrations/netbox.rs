@@ -549,9 +549,11 @@ impl NetBoxClient {
         cmd.arg(url)
             // Secret-bearing variables never reach the child environment
             // (audit OY-02): a hijacked curl must not be able to read the
-            // community, the NetBox token or the database URL password.
+            // community, the NetBox token, the WinRM password or the
+            // database URL password.
             .env_remove("ORBYN_SNMP_COMMUNITY")
             .env_remove("ORBYN_NETBOX_TOKEN")
+            .env_remove("ORBYN_WINRM_PASSWORD")
             .env_remove("ORBYN_DB")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

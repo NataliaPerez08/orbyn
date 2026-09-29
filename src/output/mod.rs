@@ -667,7 +667,7 @@ pub fn dependencies(edges: &[Dependency], assets: &[Asset], format: Format) -> S
         Format::Table => {
             if edges.is_empty() {
                 return "No dependencies recorded yet.\nRun host-level collection \
-(--collector ssh / --collector windows) or `orbyn deps add`.\n"
+(--collector ssh / --collector windows / --collector winrm) or `orbyn deps add`.\n"
                     .to_string();
             }
             let mut table = table(&[

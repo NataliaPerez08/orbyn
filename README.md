@@ -158,9 +158,12 @@ The repository currently provides:
   * SSH collector for Linux (OS, kernel, hostname, CPU/RAM capacity,
     filesystem inventory, running systemd services) via the `ssh` binary.
   * Windows collector (OS, CPU, RAM, disks, running services) running
-    read-only PowerShell CIM queries over the Windows OpenSSH Server.
-  * Credential profile abstraction: ssh-agent / identity-file authentication,
-    no credentials stored or logged.
+    read-only PowerShell CIM queries over either transport: the Windows
+    OpenSSH Server, or the native WS-Man/WinRM transport over HTTPS
+    (`--collector winrm`, Basic auth through `curl`).
+  * Credential profile abstraction: ssh-agent / identity-file authentication
+    for SSH, memory-only Basic credentials for WinRM; no credentials stored
+    or logged.
   * `orbyn capacity`, `orbyn disks`, `orbyn host-services` commands; the
     asset detail view shows every recorded facet.
 * Right-sizing foundation (v0.5):
@@ -211,12 +214,16 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
+* `curl` for the NetBox importer and the native WinRM transport
 
 Host-level collection uses key-based authentication (ssh-agent or
 `--identity-file`); passwords are never passed through the CLI or stored.
-Windows hosts need the OpenSSH Server optional feature and PowerShell 3+
-(`Get-CimInstance`). A native WinRM transport is planned on the same
-credential profile abstraction (see ROADMAP.md).
+Windows hosts can be collected through the OpenSSH Server optional feature
+(PowerShell 3+, `Get-CimInstance`) or through the native WinRM transport:
+a WinRM HTTPS listener (port 5986 by default) with Basic authentication
+enabled. The WinRM password is sourced from `ORBYN_WINRM_PASSWORD` or stdin
+(`--winrm-password -`), held in memory for the run only and streamed to
+`curl` through stdin — never in process arguments, logs or on disk.
 
 ## Install & run locally
 
@@ -276,7 +283,10 @@ certificate or password-file authentication over inline passwords.
 
 ```text
 orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
-    [--rate-limit <n>] [--collector ...] [--allow-large-cidr]
+    [--rate-limit <n>] [--collector nmap|snmp|ssh|windows|winrm] \
+    [--allow-large-cidr] [--user <u>] [--port <p>] [--identity-file <key>] \
+    [--community <c>|-] [--winrm-password <p>|-] [--winrm-port 5986] \
+    [--winrm-insecure]
                                                   Scan targets (parallel worker pool);
                                                   CIDR wider than /16 (IPv4) or /48
                                                   (IPv6) needs --allow-large-cidr
@@ -325,6 +335,10 @@ orbyn discover --target 10.0.0.8 --collector snmp --community - <<< "$ORBYN_SNMP
 orbyn discover --target 10.0.0.10 --collector ssh --user deploy --port 22
 orbyn discover --target 10.0.0.20 --collector windows --user administrator \
     --identity-file ~/.ssh/id_ed25519
+
+# ... or Windows hosts over native WinRM (Basic auth over HTTPS)
+orbyn discover --target 10.0.0.20 --collector winrm --user administrator \
+    --winrm-password - <<< "$ORBYN_WINRM_PASSWORD"
 
 # inspect what was found
 orbyn assets
@@ -380,12 +394,14 @@ clean for piping.
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | SNMP v1/v2c community string (or `--community`, `--community -` for stdin) |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
-| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client) |
+| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client, WinRM transport) |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
+| `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the
-environment: `--token -` and `--community -` read one line from stdin
-(e.g. `orbyn netbox import --url <url> --token - < token.txt`).
+environment: `--token -`, `--community -` and `--winrm-password -` read one
+line from stdin (e.g. `orbyn netbox import --url <url> --token - <
+token.txt`).
 
 A `.env` file in the current working directory is loaded at startup
 (existing environment variables win; parent directories are never
@@ -507,7 +523,7 @@ The underlying asset and dependency model should remain portable.
 | SNMP       | Network and device metadata           | v0.2   |
 | SSH        | Linux inventory and capacity          | v0.3   |
 | PowerShell | Windows inventory and capacity (over OpenSSH) | v0.3 |
-| WinRM      | Native Windows transport              | Later (same credential profiles) |
+| WinRM      | Native Windows transport (WS-Man over HTTPS) | v0.3 |
 | VMware     | VM and hypervisor inventory           | Later  |
 | NetBox     | Source-of-truth import (devices/VMs)  | v1.1   |
 | Prometheus | Historical utilization                | v1.2+  |
@@ -643,7 +659,8 @@ v0.1    Network discovery          (done)
           ↓
 v0.2    Inventory enrichment       (done)
           ↓
-v0.3    Host discovery via SSH / Windows (done — native WinRM pending)
+v0.3    Host discovery via SSH / Windows (done — SSH, PowerShell over
+        OpenSSH, and native WinRM over HTTPS)
           ↓
 v0.4    Dependency mapping       (done)
           ↓
