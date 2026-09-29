@@ -7,7 +7,9 @@
 //! Security rules:
 //! - targets are passed as process arguments, never shell-interpolated;
 //! - the walk is read-only against MIB subtrees that expose metadata only;
-//! - community strings are never logged or echoed to stdout.
+//! - community strings are never logged or echoed to stdout;
+//! - config directories left behind by abruptly terminated runs are removed
+//!   (best effort) on the first walk of a process.
 
 use std::fmt;
 use std::fs::OpenOptions;
@@ -151,6 +153,10 @@ impl Collector for SnmpCollector {
     }
 
     async fn scan(&self, target: &ScanTarget) -> Result<Vec<Observation>> {
+        STALE_CLEANUP.call_once(|| {
+            cleanup_stale_snmp_dirs_in(&std::env::temp_dir(), STALE_SNMP_DIR_MAX_AGE);
+        });
+
         let ip = match target {
             ScanTarget::Ip(ip) => *ip,
             ScanTarget::Cidr(cidr) => {
@@ -265,6 +271,80 @@ fn write_community_config(community: &str) -> Result<PathBuf> {
     file.write_all(format!("defCommunity {community}\n").as_bytes())
         .context("writing temporary SNMP community file")?;
     Ok(dir)
+}
+
+/// SNMP config directories untouched for at least this long are considered
+/// stale. The value sits far above the 30 s walk timeout so a concurrently
+/// running Orbyn process never has its live config removed.
+const STALE_SNMP_DIR_MAX_AGE: Duration = Duration::from_secs(3600);
+
+/// Ensures the stale-config cleanup runs at most once per process.
+static STALE_CLEANUP: std::sync::Once = std::sync::Once::new();
+
+/// Best-effort removal of SNMP config directories left behind by abrupt
+/// termination (e.g. SIGKILL, which skips the post-walk cleanup). Only
+/// directories named exactly `orbyn-snmp-<uuid>`, owned by the current user
+/// on Unix, and untouched for at least `max_age` are removed; every error is
+/// logged at debug level and otherwise ignored.
+fn cleanup_stale_snmp_dirs_in(base: &Path, max_age: Duration) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+
+    #[cfg(unix)]
+    let current_uid = current_uid();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_snmp_config_dir(name) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if !current_uid.is_some_and(|uid| meta.uid() == uid) {
+                continue;
+            }
+        }
+
+        // A missing or future-dated mtime counts as fresh: never risk
+        // removing the config of a concurrently running process.
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|mtime| mtime.elapsed().ok())
+            .is_some_and(|age| age >= max_age);
+        if !stale {
+            continue;
+        }
+
+        let path = entry.path();
+        if let Err(error) = std::fs::remove_dir_all(&path) {
+            tracing::debug!(?error, path = %path.display(), "cannot remove stale SNMP config directory");
+        }
+    }
+}
+
+/// Recognize the exact `orbyn-snmp-<uuid>` naming scheme produced by
+/// [`write_community_config`]; anything else in the temp dir is left alone.
+fn is_snmp_config_dir(name: &str) -> bool {
+    name.strip_prefix("orbyn-snmp-")
+        .is_some_and(|suffix| Uuid::parse_str(suffix).is_ok())
+}
+
+/// Best-effort uid of the current process on Unix, learned by stat-ing a
+/// freshly created probe file (Orbyn carries no uid crate).
+#[cfg(unix)]
+fn current_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let probe = std::env::temp_dir().join(format!(".orbyn-uid-probe-{}", Uuid::new_v4()));
+    std::fs::write(&probe, b"").ok()?;
+    let uid = std::fs::metadata(&probe).ok().map(|meta| meta.uid());
+    let _ = std::fs::remove_file(&probe);
+    uid
 }
 
 /// Derive a concise, human-readable OS name from a raw SNMP `sysDescr`
@@ -582,6 +662,55 @@ mod tests {
     fn community_file_rejects_config_injection_characters() {
         assert!(write_community_config("bad\nsecret").is_err());
         assert!(write_community_config("bad\0secret").is_err());
+    }
+
+    fn cleanup_test_base(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("orbyn-snmp-cleanup-test-{name}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create cleanup test base dir");
+        dir
+    }
+
+    #[test]
+    fn cleanup_removes_stale_dirs_and_keeps_unrelated_names() {
+        let base = cleanup_test_base("stale");
+        let stale = base.join(format!("orbyn-snmp-{}", Uuid::new_v4()));
+        std::fs::create_dir(&stale).unwrap();
+        std::fs::write(stale.join("snmp.conf"), "defCommunity secret\n").unwrap();
+        let unrelated = base.join("orbyn-snmp-not-a-uuid");
+        std::fs::create_dir(&unrelated).unwrap();
+
+        cleanup_stale_snmp_dirs_in(&base, Duration::ZERO);
+
+        assert!(!stale.exists(), "stale config dir must be removed");
+        assert!(unrelated.exists(), "unrelated names must be kept");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cleanup_keeps_fresh_dirs() {
+        let base = cleanup_test_base("fresh");
+        let fresh = base.join(format!("orbyn-snmp-{}", Uuid::new_v4()));
+        std::fs::create_dir(&fresh).unwrap();
+
+        cleanup_stale_snmp_dirs_in(&base, STALE_SNMP_DIR_MAX_AGE);
+
+        assert!(fresh.exists(), "fresh config dir must survive cleanup");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn recognizes_only_exact_snmp_config_names() {
+        assert!(is_snmp_config_dir(&format!(
+            "orbyn-snmp-{}",
+            Uuid::new_v4()
+        )));
+        assert!(!is_snmp_config_dir("orbyn-snmp-"));
+        assert!(!is_snmp_config_dir("orbyn-snmp-not-a-uuid"));
+        assert!(!is_snmp_config_dir("orbyn-snmp-../../etc"));
+        assert!(!is_snmp_config_dir(
+            "other-orbyn-snmp-00000000-0000-0000-0000-000000000000"
+        ));
     }
 
     #[test]

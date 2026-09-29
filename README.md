@@ -282,7 +282,7 @@ orbyn audit [--limit 50] [--format ...]           Mutating CLI operations and th
 orbyn import --format json|csv [--file <file>]    Import inventory (file or stdin)
 orbyn export [--format json|csv|ansible|ansible-yaml|terraform] [--group-by <key>] \
     [--tf-import <resource-type>] [--output <file>]
-orbyn netbox import --url <url> [--token <t>]       Import devices/VMs from NetBox (SoT)
+orbyn netbox import --url <url> [--token <t>|--token -]  Import devices/VMs from NetBox (SoT)
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 orbyn graph [--format ...]
 orbyn assess [--format ...]
@@ -296,6 +296,8 @@ orbyn discover --target 10.0.0.0/24
 
 # walk a single switch over SNMP (needs an authorized community string)
 orbyn discover --target 10.0.0.8 --collector snmp --community public
+# ... or keep the community off the command line entirely
+orbyn discover --target 10.0.0.8 --collector snmp --community - <<< "$ORBYN_SNMP_COMMUNITY"
 
 # collect host-level facts from Linux / Windows hosts (key-based auth)
 orbyn discover --target 10.0.0.10 --collector ssh --user deploy --port 22
@@ -353,10 +355,14 @@ clean for piping.
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 | `ORBYN_NMAP_TIMEOUT_SECS` | `1800` | Whole-process timeout for an nmap run |
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
-| `ORBYN_SNMP_COMMUNITY` | `public`  | Default SNMP v1/v2c community string |
+| `ORBYN_SNMP_COMMUNITY` | `public`  | SNMP v1/v2c community string (or `--community`, `--community -` for stdin) |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
 | `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client) |
-| `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`) |
+| `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
+
+Secrets can also be piped in so they never appear in argv or the
+environment: `--token -` and `--community -` read one line from stdin
+(e.g. `orbyn netbox import --url <url> --token - < token.txt`).
 
 ## Repository layout
 

@@ -298,6 +298,64 @@ fn netbox_token_never_leaks_into_output() {
 
 #[cfg(unix)]
 #[test]
+fn netbox_token_from_stdin_reaches_curl() {
+    let dir = TempDir::new("netbox-stdin");
+    // A fake curl that logs its stdin payload (the Authorization header)
+    // and serves a minimal one-device inventory.
+    let script = r#"#!/usr/bin/env bash
+if [[ -n "$ORBYN_CURL_STDIN_LOG" ]]; then
+  cat >> "$ORBYN_CURL_STDIN_LOG"
+fi
+url="${@: -1}"
+case "$url" in
+  */api/dcim/devices/*)
+    printf '%s\n' '{"count":1,"next":null,"results":[{"id":1,"name":"rtr-stdin-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}]}'
+    ;;
+  *)
+    printf '%s\n' '{"count":0,"next":null,"results":[]}'
+    ;;
+esac
+"#;
+    let curl = fake_bin(&dir, "curl", script);
+    let stdin_log = dir.path().join("curl-stdin.log");
+
+    let output = run_with_stdin(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .args(["--token", "-"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_CURL_STDIN_LOG", &stdin_log),
+        "supersecrettoken123\n",
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Imported 1 assets from NetBox"),
+        "import must succeed: {combined}"
+    );
+    assert!(
+        !combined.contains("supersecrettoken123"),
+        "stdin token must never be printed: {combined}"
+    );
+    let payload = std::fs::read_to_string(&stdin_log).expect("curl stdin log");
+    assert!(
+        payload.contains("Authorization: Token supersecrettoken123"),
+        "stdin token must reach curl's stdin: {payload}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn netbox_bad_url_fails_cleanly() {
     let dir = TempDir::new("netbox-bad");
     let curl = dir.path().join("curl");

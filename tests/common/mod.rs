@@ -99,6 +99,25 @@ pub fn run(cmd: &mut Command) -> Output {
     cmd.output().expect("run command")
 }
 
+/// Run a command with `stdin_data` piped to its stdin and return the raw
+/// `Output` (stdout/stderr piped like `Command::output`). The stdin pipe
+/// closes after the write so the child sees EOF.
+pub fn run_with_stdin(cmd: &mut Command, stdin_data: &str) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn command");
+    {
+        let pipe = child.stdin.as_mut().expect("stdin pipe");
+        pipe.write_all(stdin_data.as_bytes()).expect("write stdin");
+    }
+    drop(child.stdin.take());
+    child.wait_with_output().expect("wait with output")
+}
+
 /// Write an executable fake tool (a bash script) and return its path.
 #[cfg(unix)]
 pub fn fake_bin(dir: &TempDir, name: &str, script: &str) -> PathBuf {
@@ -136,6 +155,9 @@ XML
 pub const FAKE_SNMPWALK_SCRIPT: &str = r#"#!/usr/bin/env bash
 if [[ -n "$ORBYN_SNMP_ARGS_LOG" ]]; then
   printf '%s\n' "$@" >> "$ORBYN_SNMP_ARGS_LOG"
+fi
+if [[ -n "$ORBYN_SNMP_CONF_LOG" && -n "$SNMPCONFPATH" ]]; then
+  cat "$SNMPCONFPATH/snmp.conf" >> "$ORBYN_SNMP_CONF_LOG"
 fi
 oid="${@: -1}"
 if [[ "$oid" == "1.3.6.1.2.1.1" ]]; then

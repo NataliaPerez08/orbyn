@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -112,8 +112,9 @@ enum Command {
         /// Maximum target launches per second (default: no pacing).
         #[arg(long)]
         rate_limit: Option<u32>,
-        /// SNMP v1/v2c community string (default from ORBYN_SNMP_COMMUNITY).
-        #[arg(long)]
+        /// SNMP v1/v2c community string: from ORBYN_SNMP_COMMUNITY, or `-`
+        /// to read one line from stdin so it never lands in argv.
+        #[arg(long, env = "ORBYN_SNMP_COMMUNITY")]
         community: Option<String>,
         /// SNMP protocol version: 1 or 2c.
         #[arg(long, default_value = "2c")]
@@ -378,7 +379,8 @@ enum NetboxAction {
         /// NetBox base URL, e.g. https://netbox.example.com.
         #[arg(long)]
         url: String,
-        /// NetBox API token (falls back to ORBYN_NETBOX_TOKEN).
+        /// NetBox API token: from ORBYN_NETBOX_TOKEN, or `-` to read one
+        /// line from stdin so it never lands in argv.
         #[arg(long, env = "ORBYN_NETBOX_TOKEN")]
         token: Option<String>,
         /// Skip TLS certificate verification (for self-signed NetBox).
@@ -420,6 +422,7 @@ async fn main() -> anyhow::Result<()> {
             for raw in &target {
                 scan_targets.push(validate_target(raw).map_err(|e| anyhow!(e.to_string()))?);
             }
+            let community = resolve_secret(community, "--community")?;
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
             let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
 
@@ -434,7 +437,20 @@ async fn main() -> anyhow::Result<()> {
                 DiscoveryCollector::Windows => Arc::new(WindowsCollector::new(profile)),
             };
 
-            discover(&store, &scan_targets, collector, concurrency, rate_limit).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            if let Some(community) = &community {
+                redactor.add_value(community);
+            }
+
+            discover(
+                &store,
+                &scan_targets,
+                collector,
+                concurrency,
+                rate_limit,
+                &redactor,
+            )
+            .await?;
             let assets = store.list_assets().await?;
             print!("{}", orbyn::output::assets(&assets, format));
         }
@@ -612,6 +628,7 @@ async fn main() -> anyhow::Result<()> {
                     no_verify,
                 },
         } => {
+            let token = resolve_secret(token, "--token")?;
             if no_verify {
                 tracing::warn!("--no-verify disables TLS certificate verification for NetBox");
                 eprintln!(
@@ -702,19 +719,43 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolve a secret flag value: the literal `-` reads one trimmed line from
+/// stdin so the secret never appears in argv or the environment; any other
+/// value passes through unchanged.
+fn resolve_secret(value: Option<String>, flag: &str) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value != "-" {
+        return Ok(Some(value));
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .with_context(|| format!("reading {flag} from stdin"))?;
+    let secret = line.trim();
+    if secret.is_empty() {
+        bail!("{flag} read an empty secret from stdin");
+    }
+    Ok(Some(secret.to_string()))
+}
+
 /// Run one discovery job over the given targets, fanning them out over a
 /// bounded worker pool: at most `concurrency` collector scans run at once,
 /// optionally paced to at most `rate_limit` launches per second.
 ///
 /// Observations from successful targets are always persisted; if any target
 /// fails the job is marked Failed with the per-target errors, keeping the
-/// partial data.
+/// partial data. Errors are scrubbed with `redactor` before they are
+/// persisted or printed.
 async fn discover(
     store: &SqliteStore,
     scan_targets: &[ScanTarget],
     collector: Arc<dyn Collector>,
     concurrency: usize,
     rate_limit: Option<u32>,
+    redactor: &orbyn::redact::Redactor,
 ) -> Result<()> {
     let targets: Vec<String> = scan_targets.iter().map(target_label).collect();
 
@@ -776,10 +817,7 @@ async fn discover(
     for result in results {
         match result {
             Ok(obs) => observations.extend(obs),
-            Err(e) => {
-                let redactor = orbyn::redact::Redactor::from_env();
-                failures.push(redactor.redact(&format!("{e:#}")));
-            }
+            Err(e) => failures.push(redactor.redact(&format!("{e:#}"))),
         }
     }
 

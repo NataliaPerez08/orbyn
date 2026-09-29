@@ -6,7 +6,8 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
 dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #20, #21,
-#23, #24, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36 y #37**.
+#23, #24, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, #38 y
+#39**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -82,13 +83,22 @@ Completada:
 Diferidos (ver "Aceptados / fuera de plan"): **#17 WinRM**, **#18 vCenter**,
 **#25 PostgreSQL**.
 
-## Fase 6 — Endurecimiento de seguridad restante
+## Fase 6 — Endurecimiento de seguridad restante ✅
 
-- **#38 Secretos en el argv de Orbyn** — aceptar `--token`/`--community` por
-  env/stdin, o registrar los valores explicados por CLI en el `Redactor`.
-- **#39 `snmp.conf` temporal tras SIGKILL** — limpieza de directorios
-  `orbyn-snmp-*` obsoletos al arrancar o gestión de ciclo de vida más estricta
-  del archivo temporal.
+Completada:
+
+- **#38** — `--community` acepta `ORBYN_SNMP_COMMUNITY` vía clap (paridad
+  con `--token`), ambos flags aceptan el literal `-` para leer el secreto
+  por stdin (una línea, sin argv ni env), y el path de `discover` registra
+  el valor de CLI/stdin en el `Redactor` antes de persistir o imprimir
+  errores de job. Cobertura E2E: el secreto por stdin llega al `snmp.conf`
+  y al header `Authorization` de curl sin aparecer en output ni en el argv
+  de los hijos, y un walk fallido demuestra la redacción del valor de CLI.
+- **#39** — el primer walk SNMP del proceso limpia directorios
+  `orbyn-snmp-<uuid>` obsoletos (match exacto de nombre, uid propio en
+  Unix, mtime > 1 h), best-effort y acotado por `std::sync::Once`; el
+  borrado post-walk existente se conserva. Cobertura unitaria: stale
+  eliminado, fresco conservado, nombres ajenos intactos.
 
 ## Aceptados / fuera de plan
 

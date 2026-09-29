@@ -153,6 +153,80 @@ fn snmp_discovery_classifies_network_device() {
 
 #[cfg(unix)]
 #[test]
+fn snmp_community_from_stdin_reaches_the_walk() {
+    let dir = TempDir::new("snmp-stdin");
+    let bin = fake_bin(&dir, "snmpwalk", FAKE_SNMPWALK_SCRIPT);
+    let args_log = dir.path().join("snmp-args.log");
+    let conf_log = dir.path().join("snmp-conf.log");
+
+    let output = run_with_stdin(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.8", "--collector", "snmp"])
+            .args(["--community", "-"])
+            .env("ORBYN_SNMP_BIN", &bin)
+            .env("ORBYN_SNMP_ARGS_LOG", &args_log)
+            .env("ORBYN_SNMP_CONF_LOG", &conf_log),
+        "super-secret-community\n",
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("super-secret-community"),
+        "stdin community must never be printed: {combined}"
+    );
+    let args = std::fs::read_to_string(&args_log).expect("SNMP args log");
+    assert!(
+        !args.contains("super-secret-community"),
+        "SNMP community must not be an argument: {args}"
+    );
+    let conf = std::fs::read_to_string(&conf_log).expect("SNMP conf log");
+    assert!(
+        conf.contains("defCommunity super-secret-community"),
+        "stdin community must reach the walk config: {conf}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_failure_redacts_cli_community() {
+    let dir = TempDir::new("snmp-redact");
+    // A failing fake snmpwalk whose stderr carries the secret: proves a
+    // CLI-provided community is registered with the redactor before the
+    // error is persisted or printed.
+    let script = r#"#!/usr/bin/env bash
+printf 'snmpwalk: authentication failure (community super-secret-community)\n' >&2
+exit 1
+"#;
+    let bin = fake_bin(&dir, "snmpwalk", script);
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.8", "--collector", "snmp"])
+            .args(["--community", "super-secret-community"])
+            .env("ORBYN_SNMP_BIN", &bin),
+    );
+    assert!(
+        !out.contains("super-secret-community"),
+        "CLI community must be redacted: {out}"
+    );
+    assert!(
+        out.contains("[REDACTED]"),
+        "expected redaction placeholder: {out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn ssh_discovery_collects_host_facts_and_edges() {
     let dir = TempDir::new("ssh");
     let bin = fake_bin(&dir, "ssh", FAKE_SSH_LINUX_SCRIPT);

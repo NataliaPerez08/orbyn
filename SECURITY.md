@@ -19,9 +19,14 @@ or authorization service and must not be used as one.
   through a shell.
 - Credentials are never exposed through CLI or API output and are never
   logged.
+- Secret flags (`--token`, `--community`) can be kept off the command line:
+  both fall back to environment variables (`ORBYN_NETBOX_TOKEN`,
+  `ORBYN_SNMP_COMMUNITY`) and accept the literal `-` to read one line from
+  stdin. Values supplied explicitly on the command line are registered with
+  the redactor so they cannot leak into errors, logs or job records.
 - Orbyn avoids storing credentials whenever possible. The v0.3 host-level
   collectors store **no credentials at all**: authentication is delegated to
-  ssh-agent or a user-referenced identity file through a credential profile
+  ssh-agent or a user-referred identity file through a credential profile
   (login user, port, key path). If password-based collection is ever added,
   those credentials must be encrypted at rest in an explicit credential
   profile and never passed through CLI arguments or logs.
@@ -30,6 +35,10 @@ or authorization service and must not be used as one.
 - API tokens (NetBox) are streamed to `curl` through stdin (`-H @-`), never
   written to a temporary file or exposed through process arguments, logs, or
   CLI output.
+- The SNMP community travels to `snmpwalk` through a short-lived `0600`
+  `snmp.conf` inside a `0700` directory; directories left behind by abruptly
+  terminated runs are removed (best effort, current-user owned, age-gated)
+  on the first SNMP walk of a process.
 - Dependency audits run through RustSec. The only current advisory exception is
   `RUSTSEC-2023-0071` for `rsa`, an optional SQLx backend dependency retained in
   the lockfile but not enabled by Orbyn's SQLite-only feature set; no fixed

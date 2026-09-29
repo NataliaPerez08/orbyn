@@ -272,17 +272,22 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     is killed at the timeout.
 
 38. **Secrets can be exposed in Orbyn's own argv** — `gap`, **medium**
-    `--token` and `--community` place credentials in the Orbyn command line,
-    making them visible to local process inspection and shell history even
-    though they are not passed as arguments to `curl` or `snmpwalk`. This also
-    conflicts with the broad credential statement in `SECURITY.md`. Prefer
-    environment variables, stdin or protected files, and register explicit CLI
-    values with the redactor when CLI support is retained.
+    ~~FIXED~~
+    `--community` now falls back to `ORBYN_SNMP_COMMUNITY` through clap
+    (matching `--token`), both flags accept the literal `-` to read one line
+    from stdin so credentials can be kept off the command line entirely, and
+    the discovery path registers CLI/stdin-supplied values with the
+    `Redactor` before persisting or printing job failures. E2E coverage:
+    stdin-sourced secrets reach the collectors (`snmp.conf`, curl
+    `Authorization` header) and never appear in output or child argv; a
+    failing walk proves CLI values are redacted.
 
-39. **SNMP temporary configuration can survive abrupt termination** — `quality`,
-    **low**
-    `src/collectors/snmp.rs` removes the restricted temporary `snmp.conf` only
-    after normal completion. A `SIGKILL` can leave the community on disk in
-    `/tmp`, albeit inside a `0700` directory with a `0600` file. Add startup
-    cleanup for stale Orbyn SNMP directories or use a stronger lifecycle-managed
-    temporary-file strategy.
+39. **SNMP temporary configuration can survive abrupt termination** —
+    `quality`, **low**
+    ~~FIXED~~
+    The first SNMP walk of a process removes stale `orbyn-snmp-<uuid>`
+    directories (best effort): exact-name match, current-user ownership on
+    Unix, and an age gate of one hour — far above the 30 s walk timeout — so
+    a concurrently running Orbyn never loses its live config. Unit coverage:
+    stale directories are removed, fresh ones survive, and unrelated names
+    are untouched.

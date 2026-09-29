@@ -60,6 +60,8 @@ orbyn discover --target 192.168.1.0/24
 
 # single host over SNMP (needs an authorized community string)
 orbyn discover --target 192.168.1.10 --collector snmp --community public
+# ... or pipe the community so it never lands in argv or shell history
+orbyn discover --target 192.168.1.10 --collector snmp --community - <<< "$ORBYN_SNMP_COMMUNITY"
 ```
 
 Orbyn rejects unrestricted scopes by default. You are responsible for having
@@ -108,6 +110,8 @@ orbyn export --format terraform --tf-import aws_instance \
 
 # NetBox source-of-truth import (devices, VMs, interfaces and assigned IPs)
 orbyn netbox import --url https://netbox.example.com --token "$ORBYN_NETBOX_TOKEN"
+# ... or pipe the token with `--token -` so it never lands in argv
+orbyn netbox import --url https://netbox.example.com --token - < ~/.netbox-token
 ```
 
 ```bash
