@@ -211,6 +211,102 @@ async fn metric_samples_round_trip_and_summarize() {
 }
 
 #[tokio::test]
+async fn bulk_reads_match_per_asset_reads() {
+    let path = format!("{}.bulk", sample_db_path());
+    let _ = std::fs::remove_file(&path);
+    let store = SqliteStore::open(std::path::Path::new(&path))
+        .await
+        .expect("open test db");
+    store
+        .store_observations(sample_observations())
+        .await
+        .expect("seed two assets with services and an interface");
+
+    let assets = store.list_assets().await.expect("list assets");
+    assert_eq!(assets.len(), 2);
+
+    let mut per_asset_services = Vec::new();
+    let mut per_asset_interfaces = Vec::new();
+    let mut per_asset_filesystems = Vec::new();
+    let mut per_asset_connections = Vec::new();
+    for asset in &assets {
+        per_asset_services.extend(store.list_services(&asset.id).await.unwrap());
+        per_asset_interfaces.extend(store.list_interfaces(&asset.id).await.unwrap());
+        per_asset_filesystems.extend(store.list_filesystems(&asset.id).await.unwrap());
+        per_asset_connections.extend(store.list_connections(&asset.id).await.unwrap());
+    }
+
+    // Filesystems, capacity and connections come from the host-fact and
+    // connection fixtures.
+    store
+        .store_observations(host_fact_observations())
+        .await
+        .expect("seed host facts");
+    let host = store
+        .get_asset_by_ip("10.0.0.5")
+        .await
+        .expect("lookup host")
+        .expect("host asset");
+    per_asset_filesystems.extend(store.list_filesystems(&host.id).await.unwrap());
+    per_asset_connections.extend(store.list_connections(&host.id).await.unwrap());
+    let host_capacity = store.get_capacity(&host.id).await.expect("capacity");
+    assert!(host_capacity.is_some(), "capacity seeded");
+
+    let sort_services = |mut v: Vec<orbyn::domain::Service>| {
+        v.sort_by(|a, b| (&a.asset_id, a.port).cmp(&(&b.asset_id, b.port)));
+        v
+    };
+    let sort_interfaces = |mut v: Vec<Interface>| {
+        v.sort_by(|a, b| (&a.asset_id, &a.id).cmp(&(&b.asset_id, &b.id)));
+        v
+    };
+    let sort_filesystems = |mut v: Vec<Filesystem>| {
+        v.sort_by(|a, b| (&a.asset_id, &a.mount).cmp(&(&b.asset_id, &b.mount)));
+        v
+    };
+    let sort_connections = |mut v: Vec<Connection>| {
+        v.sort_by(|a, b| {
+            (&a.asset_id, &a.remote_ip, a.remote_port).cmp(&(
+                &b.asset_id,
+                &b.remote_ip,
+                b.remote_port,
+            ))
+        });
+        v
+    };
+
+    assert_eq!(
+        sort_services(store.list_all_services().await.expect("bulk services")),
+        sort_services(per_asset_services)
+    );
+    assert_eq!(
+        sort_interfaces(store.list_all_interfaces().await.expect("bulk interfaces")),
+        sort_interfaces(per_asset_interfaces)
+    );
+    assert_eq!(
+        sort_filesystems(
+            store
+                .list_all_filesystems()
+                .await
+                .expect("bulk filesystems")
+        ),
+        sort_filesystems(per_asset_filesystems)
+    );
+    assert_eq!(
+        sort_connections(
+            store
+                .list_all_connections()
+                .await
+                .expect("bulk connections")
+        ),
+        sort_connections(per_asset_connections)
+    );
+    let bulk_capacities = store.list_all_capacities().await.expect("bulk capacities");
+    assert_eq!(bulk_capacities.len(), 1);
+    assert_eq!(bulk_capacities[0].asset_id, host.id);
+}
+
+#[tokio::test]
 async fn re_observation_reconciles_interfaces() {
     let _ = std::fs::remove_file(format!("{}.iface", sample_db_path()));
     let store = SqliteStore::open(std::path::Path::new(&format!("{}.iface", sample_db_path())))

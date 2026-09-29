@@ -3,7 +3,11 @@
 //! E2E tests run the real `orbyn` binary (`CARGO_BIN_EXE_orbyn`) against a
 //! throwaway SQLite database, with fake `nmap`/`snmpwalk`/`ssh` executables
 //! generated on the fly so no network or real tools are required.
-
+//!
+//! The fakes are shell scripts, so the whole module is Unix-only and
+//! compiles empty on other platforms; `cargo test` (unit + store smoke
+//! tests) still runs on Windows CI.
+#![cfg(unix)]
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};

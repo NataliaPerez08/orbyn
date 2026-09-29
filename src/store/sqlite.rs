@@ -738,6 +738,67 @@ impl crate::store::traits::Store for SqliteStore {
             .collect())
     }
 
+    async fn list_all_services(&self) -> Result<Vec<Service>> {
+        let rows = sqlx::query_as::<_, ServiceRow>(
+            "SELECT asset_id, proto, port, name, state, banner \
+             FROM services ORDER BY asset_id, port",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all services")?;
+        Ok(rows.into_iter().map(ServiceRow::into_service).collect())
+    }
+
+    async fn list_all_interfaces(&self) -> Result<Vec<Interface>> {
+        let rows = sqlx::query_as::<_, InterfaceRow>(
+            "SELECT id, asset_id, name, mac, ip, vendor, mtu, if_index, is_up \
+             FROM asset_interfaces ORDER BY asset_id, if_index, name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all interfaces")?;
+        Ok(rows.into_iter().map(InterfaceRow::into_interface).collect())
+    }
+
+    async fn list_all_filesystems(&self) -> Result<Vec<Filesystem>> {
+        let rows = sqlx::query_as::<_, FilesystemRow>(
+            "SELECT asset_id, device, mount, fs_type, size_kb, used_kb, available_kb, used_pct \
+             FROM asset_filesystems ORDER BY asset_id, mount",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all filesystems")?;
+        Ok(rows
+            .into_iter()
+            .map(FilesystemRow::into_filesystem)
+            .collect())
+    }
+
+    async fn list_all_capacities(&self) -> Result<Vec<Capacity>> {
+        let rows = sqlx::query_as::<_, CapacityRow>(
+            "SELECT asset_id, cpu_model, cpu_sockets, cpu_cores, cpu_threads, ram_total_mb, collected_at \
+             FROM asset_capacity ORDER BY asset_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all capacities")?;
+        Ok(rows.into_iter().map(CapacityRow::into_capacity).collect())
+    }
+
+    async fn list_all_connections(&self) -> Result<Vec<Connection>> {
+        let rows = sqlx::query_as::<_, ConnectionRow>(
+            "SELECT asset_id, proto, local_ip, local_port, remote_ip, remote_port, process \
+             FROM asset_connections ORDER BY asset_id, remote_ip, remote_port",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all connections")?;
+        Ok(rows
+            .into_iter()
+            .map(ConnectionRow::into_connection)
+            .collect())
+    }
+
     async fn list_metric_samples(
         &self,
         asset_id: &str,

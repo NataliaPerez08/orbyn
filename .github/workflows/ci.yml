@@ -49,6 +49,26 @@ jobs:
       - name: release build
         run: cargo build --locked --release
 
+  windows:
+    name: build + test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      # E2E suites are Unix-only (shell-script fakes) and compile empty
+      # here; this still covers compilation plus the unit and store smoke
+      # tests on Windows.
+      - name: build
+        run: cargo build --locked --all-targets
+
+      - name: test
+        run: cargo test --locked --all-targets
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

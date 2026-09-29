@@ -28,8 +28,11 @@ pub struct CpuFacts {
 /// - never modify target systems (read-only by default);
 /// - pass targets as process arguments, never shell strings;
 /// - return normalized [`Observation`]s instead of writing to the database.
+///
+/// `Send + Sync` is required so a discovery run can fan targets out over a
+/// bounded worker pool.
 #[async_trait]
-pub trait Collector {
+pub trait Collector: Send + Sync {
     fn name(&self) -> &'static str;
     async fn scan(&self, target: &ScanTarget) -> Result<Vec<Observation>>;
 }

@@ -70,6 +70,20 @@ pub trait Store: Send + Sync {
     async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;
 
+    // Bulk variants: whole-table reads in one query each, used by `assess`
+    // and `export` so large inventories do not degrade into N+1 query loops.
+
+    /// Every recorded service, ordered by asset then port.
+    async fn list_all_services(&self) -> Result<Vec<Service>>;
+    /// Every recorded interface, ordered by asset then interface index/name.
+    async fn list_all_interfaces(&self) -> Result<Vec<Interface>>;
+    /// Every recorded filesystem, ordered by asset then mount point.
+    async fn list_all_filesystems(&self) -> Result<Vec<Filesystem>>;
+    /// Every recorded capacity row (one per asset).
+    async fn list_all_capacities(&self) -> Result<Vec<Capacity>>;
+    /// Every recorded connection, ordered by asset then remote endpoint.
+    async fn list_all_connections(&self) -> Result<Vec<Connection>>;
+
     /// Re-derive dependency edges from every recorded connection against the
     /// current asset inventory, so an edge does not depend on the collection
     /// order (a connection observed before its target asset landed still maps).

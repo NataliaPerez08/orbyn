@@ -6,7 +6,7 @@ Se agrupan por fases y cada item incluye el enfoque propuesto.
 **Sincronizado con el estado actual de `KnowIssues.md`.** Ya resueltos y por
 tanto fuera de este plan: **#1, #2, #4, #5, #6 (community SNMP), #6 (orden de
 dependencias), #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #19, #20, #21,
-#23, #24, #26, #28, #30, #31, #33, #34, #35, #36 y #37**.
+#23, #24, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36 y #37**.
 **#3** (auth por password) es una decisión de diseño: no se planifica.
 
 ## Fase 1 — Seguridad y bugs críticos ✅
@@ -65,15 +65,22 @@ Completada:
   de assessment, grouping y render; el literal del SQL de reconcile queda
   fijado por test al valor canónico.
 
-## Fase 5 — Escala y plataforma
+## Fase 5 — Escala y plataforma ✅
 
-- **#27 N+1 en assess/export** — queries bulk en el store para
-  `list_services`/`list_filesystems`/`get_capacity`/`list_connections`.
-- **#29 Discovery sin concurrencia** — workers + rate limit + scheduling
-  (un target por ejecución hoy).
-- **#17 WinRM**, **#18 vCenter**, **#25 PostgreSQL** — adaptadores/backends
-  diferidos.
-- **#32 E2E solo Unix** — cobertura automatizada en Windows.
+Completada:
+
+- **#27** — el store gana lecturas bulk (`list_all_services/interfaces/
+  filesystems/capacities/connections`): una query por tabla en `assess` y
+  `export` en vez de una por asset.
+- **#29** — `--target` repetible con pool de workers acotado por
+  `--concurrency` (default 4) y pacing de lanzamientos con `--rate-limit`;
+  un job registra todos los targets y conserva los datos de los targets
+  exitosos aunque otros fallen.
+- **#32** — job `windows-latest` en CI (build + test): los fakes E2E
+  compilan vacíos en Windows y las suites unitarias y de store corren ahí.
+
+Diferidos (ver "Aceptados / fuera de plan"): **#17 WinRM**, **#18 vCenter**,
+**#25 PostgreSQL**.
 
 ## Fase 6 — Endurecimiento de seguridad restante
 
@@ -89,3 +96,10 @@ Completada:
   frente a v0.5; no se reintroduce.
 - **#3 Auth por password** — decisión de diseño: se apoya en ssh-agent /
   identity files, Orbyn no almacena credenciales.
+- **#17 WinRM nativo** — diferido: la recolección Windows viaja por
+  PowerShell sobre OpenSSH; un adaptador WS-Man exige un cliente SOAP/sesión
+  que no vale la pena mantener ahora.
+- **#18 vCenter** — diferido: requiere cliente SOAP/sesiones; queda para una
+  fase de integraciones de virtualización.
+- **#25 PostgreSQL** — diferido: el trait `Store` existe para permitirlo, pero
+  SQLite cubre el caso de uso actual (CLI local, un solo archivo).

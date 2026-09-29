@@ -310,3 +310,256 @@ fn annotations_survive_rediscovery() {
     assert!(detail.contains("core"));
     assert!(detail.contains("high"));
 }
+
+/// A fake `ssh` that logs its start time and sleeps before emitting the
+/// Linux probe, making launch pacing observable.
+#[cfg(unix)]
+const SLOW_LOGGING_SSH_SCRIPT: &str = r#"#!/usr/bin/env bash
+if [[ -n "$ORBYN_SSH_START_LOG" ]]; then
+  printf '%s\n' "$(date +%s.%N)" >> "$ORBYN_SSH_START_LOG"
+fi
+sleep 1
+cat <<'OUT'
+###os
+NAME="Ubuntu"
+PRETTY_NAME="Ubuntu 22.04.4 LTS"
+###kernel
+5.15.0-94-generic
+###hostname
+web-01
+###cpu
+Architecture:        x86_64
+CPU(s):              8
+Thread(s) per core:  2
+Core(s) per socket:  4
+Socket(s):           1
+Model name:          Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz
+###mem
+MemTotal:       16384532 kB
+###disk
+Filesystem     Type   1024-blocks      Used Available Capacity Mounted on
+/dev/sda1      ext4       52425716  12345678  37380844      25% /
+/dev/sdb1      xfs       209612800  98765432 104947368      49% /data
+###svc
+nginx.service                 loaded active running A high performance web server and reverse proxy
+###conn
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+ESTAB  0      0      10.0.0.5:54322        10.0.0.2:5432            users:(("postgres",pid=977,fd=6))
+###metric
+62.50|16384532|2655988|8388604|4194304|2.10,2.00,1.90
+OUT
+"#;
+
+#[cfg(unix)]
+fn ssh_start_gap_seconds(dir: &TempDir) -> f64 {
+    let log = std::fs::read_to_string(dir.path().join("ssh-starts.log")).expect("ssh start log");
+    let stamps: Vec<f64> = log.lines().filter_map(|l| l.trim().parse().ok()).collect();
+    assert_eq!(stamps.len(), 2, "two ssh launches, got: {log}");
+    stamps[1] - stamps[0]
+}
+
+#[cfg(unix)]
+#[test]
+fn multi_target_discovery_runs_one_job_over_all_targets() {
+    let dir = TempDir::new("multi-target");
+    let bin = fake_bin(&dir, "ssh", FAKE_SSH_LINUX_SCRIPT);
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.5",
+                "--target",
+                "10.0.0.6",
+                "--collector",
+                "ssh",
+            ])
+            .env("ORBYN_SSH_BIN", &bin),
+    );
+    assert!(out.contains("2 assets"), "{out}");
+
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(assets.contains("10.0.0.5"));
+    assert!(assets.contains("10.0.0.6"));
+
+    // one job covering both targets, with aggregated counts
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(jobs.contains("ssh,succeeded"), "{jobs}");
+    assert!(
+        jobs.contains("10.0.0.5;10.0.0.6"),
+        "both targets recorded: {jobs}"
+    );
+    assert!(
+        jobs.contains(",2,0,4,4,6,"),
+        "assets=2 services=0 fs=4 running=4 conns=6: {jobs}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_runs_targets_concurrently() {
+    let dir = TempDir::new("concurrent");
+    let bin = fake_bin(&dir, "ssh", SLOW_LOGGING_SSH_SCRIPT);
+    let log = dir.path().join("ssh-starts.log");
+
+    run_ok(
+        orbyn(&dir)
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.5",
+                "--target",
+                "10.0.0.6",
+                "--collector",
+                "ssh",
+                "--concurrency",
+                "2",
+            ])
+            .env("ORBYN_SSH_BIN", &bin)
+            .env("ORBYN_SSH_START_LOG", &log),
+    );
+
+    let gap = ssh_start_gap_seconds(&dir);
+    assert!(
+        gap < 0.9,
+        "probes sleep 1s; a gap of {gap:.2}s means they did not overlap"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_serializes_with_concurrency_one() {
+    let dir = TempDir::new("serial");
+    let bin = fake_bin(&dir, "ssh", SLOW_LOGGING_SSH_SCRIPT);
+    let log = dir.path().join("ssh-starts.log");
+
+    run_ok(
+        orbyn(&dir)
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.5",
+                "--target",
+                "10.0.0.6",
+                "--collector",
+                "ssh",
+                "--concurrency",
+                "1",
+            ])
+            .env("ORBYN_SSH_BIN", &bin)
+            .env("ORBYN_SSH_START_LOG", &log),
+    );
+
+    let gap = ssh_start_gap_seconds(&dir);
+    assert!(
+        gap >= 0.9,
+        "probes sleep 1s; with one worker the second must start after the \
+         first finishes, got {gap:.2}s"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rate_limit_paces_target_launches() {
+    let dir = TempDir::new("rate-limit");
+    let bin = fake_bin(&dir, "ssh", SLOW_LOGGING_SSH_SCRIPT);
+    let log = dir.path().join("ssh-starts.log");
+
+    run_ok(
+        orbyn(&dir)
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.5",
+                "--target",
+                "10.0.0.6",
+                "--collector",
+                "ssh",
+                "--concurrency",
+                "8",
+                "--rate-limit",
+                "1",
+            ])
+            .env("ORBYN_SSH_BIN", &bin)
+            .env("ORBYN_SSH_START_LOG", &log),
+    );
+
+    let gap = ssh_start_gap_seconds(&dir);
+    assert!(
+        gap >= 0.9,
+        "rate limit of 1/s must delay the second launch by ~1s, got {gap:.2}s"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn partial_failure_keeps_successful_targets() {
+    let dir = TempDir::new("partial-failure");
+    // Fails only when the destination is the unreachable host.
+    let script = format!(
+        r#"#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    *10.0.0.99*) echo "ssh: connect to host 10.0.0.99 port 22: Connection timed out" >&2; exit 255;;
+  esac
+done
+{}
+"#,
+        FAKE_SSH_LINUX_SCRIPT.trim_start_matches("#!/usr/bin/env bash\n")
+    );
+    let bin = fake_bin(&dir, "ssh", &script);
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.5",
+                "--target",
+                "10.0.0.99",
+                "--collector",
+                "ssh",
+            ])
+            .env("ORBYN_SSH_BIN", &bin),
+    );
+    assert!(out.contains("1 of 2 targets failed"), "got: {out}");
+    assert!(out.contains("timed out"), "got: {out}");
+
+    // the reachable target's data is kept despite the failed job
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(assets.contains("10.0.0.5"), "{assets}");
+    assert!(!assets.contains("10.0.0.99"), "{assets}");
+
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(jobs.contains("ssh,failed"), "{jobs}");
+    assert!(jobs.contains("timed out"), "{jobs}");
+    assert!(jobs.contains(",1,0,2,2,3,"), "partial counts: {jobs}");
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_rejects_zero_concurrency_and_rate_limit() {
+    let dir = TempDir::new("bad-limits");
+    let bin = fake_bin(&dir, "nmap", FAKE_NMAP_SCRIPT);
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.10", "--concurrency", "0"])
+            .env("ORBYN_NMAP_BIN", &bin),
+    );
+    assert!(
+        out.contains("--concurrency must be at least 1"),
+        "got: {out}"
+    );
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.10", "--rate-limit", "0"])
+            .env("ORBYN_NMAP_BIN", &bin),
+    );
+    assert!(
+        out.contains("--rate-limit must be at least 1"),
+        "got: {out}"
+    );
+}

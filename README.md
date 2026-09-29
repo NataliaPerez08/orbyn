@@ -256,10 +256,8 @@ Point any command at a different database with `--db <path>` (or `ORBYN_DB`).
 ## CLI reference
 
 ```text
-orbyn discover --target <cidr>                    Scan a subnet with Nmap and persist inventory
-orbyn discover --target <ip> --collector snmp     Walk a host over SNMP (sysDescr + interfaces)
-orbyn discover --target <ip> --collector ssh      Probe a Linux host over SSH (OS, CPU, RAM, disks, units)
-orbyn discover --target <ip> --collector windows  Probe a Windows host (PowerShell over OpenSSH)
+orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
+    [--rate-limit <n>] [--collector ...]  Scan targets (parallel worker pool)
 orbyn assets [--format table|json|csv]
 orbyn asset <id-or-ip> [--format ...]             Full record: annotations, interfaces, capacity, disks, units
 orbyn services <id-or-ip> [--format ...]          Network services (ports)

@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
@@ -26,6 +28,7 @@ use orbyn::output::{Format, Inventory};
 use orbyn::store::sqlite::SqliteStore;
 use orbyn::store::traits::{AnnotationField, AssetAnnotations};
 use orbyn::store::Store;
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -93,15 +96,22 @@ impl From<UnsetField> for AnnotationField {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Discover assets in a CIDR range (Nmap) or collect a single host
+    /// Discover assets in CIDR ranges or IPs (Nmap) or collect hosts
     /// (SNMP walk, SSH Linux probe, or Windows PowerShell probe over SSH).
     Discover {
-        /// Target IP or CIDR range, e.g. 10.0.0.0/24 (single IP for snmp/ssh/windows).
-        #[arg(long)]
-        target: String,
+        /// Target IP or CIDR range, e.g. 10.0.0.0/24 (single IP for
+        /// snmp/ssh/windows). Repeatable.
+        #[arg(long, action = ArgAction::Append, required = true)]
+        target: Vec<String>,
         /// Collector adapter to run.
         #[arg(long, value_enum, default_value_t = DiscoveryCollector::Nmap)]
         collector: DiscoveryCollector,
+        /// Maximum targets scanned in parallel.
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
+        /// Maximum target launches per second (default: no pacing).
+        #[arg(long)]
+        rate_limit: Option<u32>,
         /// SNMP v1/v2c community string (default from ORBYN_SNMP_COMMUNITY).
         #[arg(long)]
         community: Option<String>,
@@ -390,6 +400,8 @@ async fn main() -> anyhow::Result<()> {
             target,
             format,
             collector,
+            concurrency,
+            rate_limit,
             community,
             snmp_version,
             snmp_port,
@@ -398,22 +410,31 @@ async fn main() -> anyhow::Result<()> {
             identity_file,
         } => {
             let store = SqliteStore::open(&config.db_path).await?;
-            let scan_target = validate_target(&target).map_err(|e| anyhow!(e.to_string()))?;
+            if concurrency == 0 {
+                bail!("--concurrency must be at least 1");
+            }
+            if rate_limit == Some(0) {
+                bail!("--rate-limit must be at least 1");
+            }
+            let mut scan_targets = Vec::with_capacity(target.len());
+            for raw in &target {
+                scan_targets.push(validate_target(raw).map_err(|e| anyhow!(e.to_string()))?);
+            }
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
             let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
 
-            let collector: Box<dyn Collector> = match collector {
-                DiscoveryCollector::Nmap => Box::new(NmapCollector::new()),
-                DiscoveryCollector::Snmp => Box::new(SnmpCollector::new(
+            let collector: Arc<dyn Collector> = match collector {
+                DiscoveryCollector::Nmap => Arc::new(NmapCollector::new()),
+                DiscoveryCollector::Snmp => Arc::new(SnmpCollector::new(
                     community.as_deref().unwrap_or_default(),
                     version,
                     snmp_port,
                 )),
-                DiscoveryCollector::Ssh => Box::new(LinuxCollector::new(profile)),
-                DiscoveryCollector::Windows => Box::new(WindowsCollector::new(profile)),
+                DiscoveryCollector::Ssh => Arc::new(LinuxCollector::new(profile)),
+                DiscoveryCollector::Windows => Arc::new(WindowsCollector::new(profile)),
             };
 
-            discover(&store, &scan_target, collector.as_ref()).await?;
+            discover(&store, &scan_targets, collector, concurrency, rate_limit).await?;
             let assets = store.list_assets().await?;
             print!("{}", orbyn::output::assets(&assets, format));
         }
@@ -545,12 +566,8 @@ async fn main() -> anyhow::Result<()> {
                     out
                 }
                 ExportFormat::Json | ExportFormat::Csv => {
-                    let mut services = Vec::new();
-                    let mut interfaces = Vec::new();
-                    for asset in &assets {
-                        services.extend(store.list_services(&asset.id).await?);
-                        interfaces.extend(store.list_interfaces(&asset.id).await?);
-                    }
+                    let services = store.list_all_services().await?;
+                    let interfaces = store.list_all_interfaces().await?;
                     let format = match format {
                         ExportFormat::Json => Format::Json,
                         ExportFormat::Csv => Format::Csv,
@@ -685,22 +702,26 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run one discovery job with the selected collector, persisting observations
-/// and job history.
+/// Run one discovery job over the given targets, fanning them out over a
+/// bounded worker pool: at most `concurrency` collector scans run at once,
+/// optionally paced to at most `rate_limit` launches per second.
+///
+/// Observations from successful targets are always persisted; if any target
+/// fails the job is marked Failed with the per-target errors, keeping the
+/// partial data.
 async fn discover(
     store: &SqliteStore,
-    scan_target: &ScanTarget,
-    collector: &dyn Collector,
+    scan_targets: &[ScanTarget],
+    collector: Arc<dyn Collector>,
+    concurrency: usize,
+    rate_limit: Option<u32>,
 ) -> Result<()> {
-    let target = match scan_target {
-        ScanTarget::Ip(ip) => ip.to_string(),
-        ScanTarget::Cidr(cidr) => cidr.clone(),
-    };
+    let targets: Vec<String> = scan_targets.iter().map(target_label).collect();
 
     let job = DiscoveryJob {
         id: uuid::Uuid::new_v4().to_string(),
         collector: collector.name().into(),
-        targets: vec![target.clone()],
+        targets: targets.clone(),
         status: JobStatus::Running,
         started_at: Utc::now(),
         finished_at: None,
@@ -713,78 +734,140 @@ async fn discover(
     };
     store.create_job(job.clone()).await?;
 
-    tracing::info!(job = %job.id, collector = job.collector, target = %target, "starting discovery");
+    tracing::info!(
+        job = %job.id,
+        collector = job.collector,
+        targets = ?targets,
+        concurrency,
+        rate_limit,
+        "starting discovery"
+    );
 
-    match collector.scan(scan_target).await {
-        Ok(observations) => {
-            let assets = observations
-                .iter()
-                .filter(|o| matches!(o, Observation::Asset(_)))
-                .count();
-            let services = observations
-                .iter()
-                .filter(|o| matches!(o, Observation::Service(_)))
-                .count();
-            let filesystems = observations
-                .iter()
-                .filter(|o| matches!(o, Observation::Filesystem(_)))
-                .count();
-            let running = observations
-                .iter()
-                .filter(|o| matches!(o, Observation::RunningService(_)))
-                .count();
-            let connections = observations
-                .iter()
-                .filter(|o| matches!(o, Observation::Connection(_)))
-                .count();
-            store.store_observations(observations).await?;
-            store
-                .finish_job(
-                    &job.id,
-                    JobStatus::Succeeded,
-                    None,
-                    Some(JobOutcome {
-                        assets_found: assets as u32,
-                        services_found: services as u32,
-                        filesystems_found: filesystems as u32,
-                        running_services_found: running as u32,
-                        connections_found: connections as u32,
-                    }),
-                )
-                .await?;
-            tracing::info!(job = %job.id, assets, services, "discovery complete");
-            eprintln!(
-                "Discovery job {} complete: {} assets, {} services, {} filesystems, {} running services, {} connections.",
-                job.id, assets, services, filesystems, running, connections
-            );
-            Ok(())
+    let mut running: VecDeque<JoinHandle<anyhow::Result<Vec<Observation>>>> = VecDeque::new();
+    let mut results: Vec<anyhow::Result<Vec<Observation>>> = Vec::new();
+    let first_launch = Instant::now();
+
+    for (index, scan_target) in scan_targets.iter().enumerate() {
+        if let Some(rate) = rate_limit {
+            // Pace launches: target `index` may not start before
+            // `index / rate` seconds have elapsed since the first launch.
+            let earliest = Duration::from_secs_f64(index as f64 / f64::from(rate));
+            let wait = earliest.saturating_sub(first_launch.elapsed());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
         }
-        Err(e) => {
-            let redactor = orbyn::redact::Redactor::from_env();
-            let redacted = redactor.redact(&format!("{e:#}"));
-            store
-                .finish_job(&job.id, JobStatus::Failed, Some(redacted.clone()), None)
-                .await?;
-            Err(anyhow!("discovery job {} failed: {redacted}", job.id))
+        while running.len() >= concurrency {
+            let handle = running.pop_front().expect("pool is at capacity");
+            collect_scan_result(handle, &mut results).await;
         }
+        let collector = Arc::clone(&collector);
+        let scan_target = scan_target.clone();
+        running.push_back(tokio::spawn(
+            async move { collector.scan(&scan_target).await },
+        ));
+    }
+    while let Some(handle) = running.pop_front() {
+        collect_scan_result(handle, &mut results).await;
+    }
+
+    let mut observations = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for result in results {
+        match result {
+            Ok(obs) => observations.extend(obs),
+            Err(e) => {
+                let redactor = orbyn::redact::Redactor::from_env();
+                failures.push(redactor.redact(&format!("{e:#}")));
+            }
+        }
+    }
+
+    let assets = observations
+        .iter()
+        .filter(|o| matches!(o, Observation::Asset(_)))
+        .count();
+    let services = observations
+        .iter()
+        .filter(|o| matches!(o, Observation::Service(_)))
+        .count();
+    let filesystems = observations
+        .iter()
+        .filter(|o| matches!(o, Observation::Filesystem(_)))
+        .count();
+    let running_services = observations
+        .iter()
+        .filter(|o| matches!(o, Observation::RunningService(_)))
+        .count();
+    let connections = observations
+        .iter()
+        .filter(|o| matches!(o, Observation::Connection(_)))
+        .count();
+
+    store.store_observations(observations).await?;
+
+    let outcome = JobOutcome {
+        assets_found: assets as u32,
+        services_found: services as u32,
+        filesystems_found: filesystems as u32,
+        running_services_found: running_services as u32,
+        connections_found: connections as u32,
+    };
+
+    if failures.is_empty() {
+        store
+            .finish_job(&job.id, JobStatus::Succeeded, None, Some(outcome))
+            .await?;
+        tracing::info!(job = %job.id, assets, services, "discovery complete");
+        eprintln!(
+            "Discovery job {} complete: {} assets, {} services, {} filesystems, {} running services, {} connections.",
+            job.id, assets, services, filesystems, running_services, connections
+        );
+        Ok(())
+    } else {
+        let error = format!(
+            "{} of {} targets failed: {}",
+            failures.len(),
+            scan_targets.len(),
+            failures.join("; ")
+        );
+        store
+            .finish_job(
+                &job.id,
+                JobStatus::Failed,
+                Some(error.clone()),
+                Some(outcome),
+            )
+            .await?;
+        Err(anyhow!("discovery job {} failed: {error}", job.id))
+    }
+}
+
+/// Await one worker task, flattening a join failure into an error result.
+async fn collect_scan_result(
+    handle: JoinHandle<anyhow::Result<Vec<Observation>>>,
+    results: &mut Vec<anyhow::Result<Vec<Observation>>>,
+) {
+    match handle.await {
+        Ok(result) => results.push(result),
+        Err(e) => results.push(Err(anyhow!("collector task failed: {e}"))),
+    }
+}
+
+fn target_label(target: &ScanTarget) -> String {
+    match target {
+        ScanTarget::Ip(ip) => ip.to_string(),
+        ScanTarget::Cidr(cidr) => cidr.clone(),
     }
 }
 
 /// Gather the full inventory snapshot the assessment engine evaluates.
 async fn assessment_input(store: &SqliteStore) -> Result<AssessmentInput> {
     let assets = store.list_assets().await?;
-    let mut services = Vec::new();
-    let mut filesystems = Vec::new();
-    let mut capacities = Vec::new();
-    let mut connections = Vec::new();
-    for asset in &assets {
-        services.extend(store.list_services(&asset.id).await?);
-        filesystems.extend(store.list_filesystems(&asset.id).await?);
-        if let Some(capacity) = store.get_capacity(&asset.id).await? {
-            capacities.push(capacity);
-        }
-        connections.extend(store.list_connections(&asset.id).await?);
-    }
+    let services = store.list_all_services().await?;
+    let filesystems = store.list_all_filesystems().await?;
+    let capacities = store.list_all_capacities().await?;
+    let connections = store.list_all_connections().await?;
     let dependencies = store.list_dependencies().await?;
     Ok(AssessmentInput {
         assets,

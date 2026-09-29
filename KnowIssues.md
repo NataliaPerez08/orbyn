@@ -185,17 +185,23 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 
 ## Performance & scale
 
-27. **N+1 queries in assess/export** — `quality`
-    `assessment_input` and `export` loop assets and issue per-asset list calls
-    (`list_services`, `list_filesystems`, `get_capacity`, `list_connections`).
-    Fine locally, slow on large inventories.
+27. **N+1 queries in assess/export** — `quality` ~~FIXED~~
+    The store gained bulk reads (`list_all_services`,
+    `list_all_interfaces`, `list_all_filesystems`, `list_all_capacities`,
+    `list_all_connections`): one query per table instead of one per asset.
+    `assess` and `export` use them; per-asset reads remain for the
+    single-asset commands. (Resolved in `src/store/sqlite.rs`.)
 
 28. **NetBox `?limit=0` loads everything at once** — `quality` ~~FIXED~~
     Imports now follow paginated `next` links with page, record and response
     size limits. (Resolved in `src/integrations/netbox.rs`.)
 
-29. **Discovery is single-shot, no concurrency** — `gap`
-    One target per run; no parallel collectors, scheduling, or rate limiting.
+29. **Discovery is single-shot, no concurrency** — `gap` ~~FIXED~~
+    `--target` is repeatable and targets run on a bounded worker pool:
+    `--concurrency N` (default 4) caps parallel scans and `--rate-limit N`
+    paces launches per second. One job records every target; observations
+    from successful targets persist even when others fail (the job is then
+    Failed with the per-target errors). (Resolved in `src/main.rs`.)
 
 ---
 
@@ -214,9 +220,12 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     table and CSV output. (Resolved in `src/domain/mod.rs` +
     `src/store/sqlite.rs`.)
 
-32. **E2E tests are Unix-only** — `quality`
-    The fake collector binaries are bash scripts and the E2E tests are
-    `#[cfg(unix)]`; Windows development has no automated coverage.
+32. **E2E tests are Unix-only** — `quality` ~~FIXED~~
+    CI now runs a `windows-latest` job (`build` + `test`): the shell-script
+    E2E fakes compile empty on Windows, while the unit and store smoke
+    suites provide automated Windows coverage. Full E2E parity would need
+    PowerShell fakes and stays out of scope. (Resolved in
+    `.github/workflows/ci.yml` + `tests/common/mod.rs`.)
 
 33. **Naming inconsistency for host services** — `quality` ~~FIXED~~
     The `running_services` table column was labeled "Unit" while the domain
