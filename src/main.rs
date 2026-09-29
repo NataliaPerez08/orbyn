@@ -116,7 +116,7 @@ enum Command {
         rate_limit: Option<u32>,
         /// SNMP v1/v2c community string: from ORBYN_SNMP_COMMUNITY, or `-`
         /// to read one line from stdin so it never lands in argv.
-        #[arg(long, env = "ORBYN_SNMP_COMMUNITY")]
+        #[arg(long, env = "ORBYN_SNMP_COMMUNITY", hide_env_values = true)]
         community: Option<String>,
         /// SNMP protocol version: 1 or 2c.
         #[arg(long, default_value = "2c")]
@@ -383,7 +383,7 @@ enum NetboxAction {
         url: String,
         /// NetBox API token: from ORBYN_NETBOX_TOKEN, or `-` to read one
         /// line from stdin so it never lands in argv.
-        #[arg(long, env = "ORBYN_NETBOX_TOKEN")]
+        #[arg(long, env = "ORBYN_NETBOX_TOKEN", hide_env_values = true)]
         token: Option<String>,
         /// Skip TLS certificate verification (for self-signed NetBox).
         #[arg(long)]
@@ -425,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
                 scan_targets.push(validate_target(raw).map_err(|e| anyhow!(e.to_string()))?);
             }
             let community = resolve_secret(community, "--community")?;
+            validate_ssh_user(user.as_deref())?;
             let version: SnmpVersion = snmp_version.parse().map_err(anyhow::Error::msg)?;
             let profile = CredentialProfile::new(user.unwrap_or_default(), port, identity_file);
 
@@ -744,24 +745,44 @@ async fn open_store(config: &Config) -> Result<Arc<dyn Store>> {
 
 /// Resolve a secret flag value: the literal `-` reads one trimmed line from
 /// stdin so the secret never appears in argv or the environment; any other
-/// value passes through unchanged.
+/// value passes through unchanged. Values containing newlines or NUL bytes
+/// are rejected: they would split the temporary SNMP config file or curl's
+/// `-H @-` header stream (config/header injection).
 fn resolve_secret(value: Option<String>, flag: &str) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
     };
-    if value != "-" {
-        return Ok(Some(value));
+    let secret = if value == "-" {
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .with_context(|| format!("reading {flag} from stdin"))?;
+        let secret = line.trim();
+        if secret.is_empty() {
+            bail!("{flag} read an empty secret from stdin");
+        }
+        secret.to_string()
+    } else {
+        value
+    };
+    if secret.contains(['\n', '\r', '\0']) {
+        bail!("{flag} cannot contain newlines or NUL bytes");
     }
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .with_context(|| format!("reading {flag} from stdin"))?;
-    let secret = line.trim();
-    if secret.is_empty() {
-        bail!("{flag} read an empty secret from stdin");
+    Ok(Some(secret))
+}
+
+/// Reject SSH usernames that the ssh binary would parse as options: the
+/// username is embedded in the destination argument (`user@host`), and a
+/// value starting with `-` is consumed as an ssh option instead
+/// (argument injection, audit OY-11).
+fn validate_ssh_user(user: Option<&str>) -> Result<()> {
+    if let Some(user) = user {
+        if user.starts_with('-') {
+            bail!("--user cannot start with '-' (ssh would parse it as an option)");
+        }
     }
-    Ok(Some(secret.to_string()))
+    Ok(())
 }
 
 /// Run one discovery job over the given targets, fanning them out over a
@@ -1440,6 +1461,66 @@ fn init_logging(verbose: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_secret_rejects_control_characters() {
+        assert!(resolve_secret(Some("bad\nsecret".into()), "--community").is_err());
+        assert!(resolve_secret(Some("bad\rsecret".into()), "--token").is_err());
+        assert!(resolve_secret(Some("bad\0secret".into()), "--token").is_err());
+        assert_eq!(
+            resolve_secret(Some("good-secret".into()), "--token").unwrap(),
+            Some("good-secret".to_string())
+        );
+        assert_eq!(resolve_secret(None, "--token").unwrap(), None);
+    }
+
+    #[test]
+    fn ssh_user_rejects_leading_dash() {
+        assert!(validate_ssh_user(Some("-oProxyCommand=evil")).is_err());
+        assert!(validate_ssh_user(Some("-Jevil.example")).is_err());
+        assert!(validate_ssh_user(Some("deploy")).is_ok());
+        assert!(validate_ssh_user(None).is_ok());
+    }
+
+    #[test]
+    fn help_does_not_echo_env_secret_values() {
+        std::env::set_var("ORBYN_SNMP_COMMUNITY", "help-leak-canary");
+        std::env::set_var("ORBYN_NETBOX_TOKEN", "help-leak-canary");
+        let mut cmd = Cli::command();
+        let discover_help = cmd
+            .find_subcommand_mut("discover")
+            .expect("discover subcommand")
+            .render_help()
+            .to_string();
+        let mut cmd = Cli::command();
+        let netbox_import_help = cmd
+            .find_subcommand_mut("netbox")
+            .expect("netbox subcommand")
+            .find_subcommand_mut("import")
+            .expect("netbox import subcommand")
+            .render_help()
+            .to_string();
+        std::env::remove_var("ORBYN_SNMP_COMMUNITY");
+        std::env::remove_var("ORBYN_NETBOX_TOKEN");
+
+        // The variable name stays documented, its current value never leaks.
+        assert!(
+            discover_help.contains("ORBYN_SNMP_COMMUNITY"),
+            "env var name stays documented: {discover_help}"
+        );
+        assert!(
+            !discover_help.contains("help-leak-canary"),
+            "community env value leaked into help: {discover_help}"
+        );
+        assert!(
+            netbox_import_help.contains("ORBYN_NETBOX_TOKEN"),
+            "env var name stays documented: {netbox_import_help}"
+        );
+        assert!(
+            !netbox_import_help.contains("help-leak-canary"),
+            "token env value leaked into help: {netbox_import_help}"
+        );
+    }
 
     #[test]
     fn completions_render_for_every_shell() {

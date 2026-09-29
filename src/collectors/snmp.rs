@@ -385,8 +385,11 @@ fn derive_os_from_sysdescr(descr: Option<&str>) -> Option<String> {
 
     // Fallback: first comma-separated segment, trimmed and length-bounded.
     let segment = descr.split(',').next().unwrap_or(descr).trim();
-    if segment.len() > 80 {
-        Some(format!("{}…", &segment[..79]))
+    if segment.chars().count() > 80 {
+        // Truncate by characters, never by bytes: byte slicing at a
+        // multibyte boundary would panic on hostile sysDescr values
+        // (audit OY-15).
+        Some(format!("{}…", segment.chars().take(79).collect::<String>()))
     } else if segment.is_empty() {
         None
     } else {
@@ -759,5 +762,16 @@ mod tests {
         assert_eq!(derive_os_from_sysdescr(None), None);
         assert_eq!(derive_os_from_sysdescr(Some("")), None);
         assert_eq!(derive_os_from_sysdescr(Some("   ")), None);
+    }
+
+    #[test]
+    fn derive_os_truncates_multibyte_without_panicking() {
+        // 100 two-byte chars: the old byte slicing (`&segment[..79]`) cut a
+        // multibyte boundary and panicked; character-based truncation must
+        // produce exactly 79 chars plus the ellipsis.
+        let descr = "é".repeat(100);
+        let os = derive_os_from_sysdescr(Some(&descr)).expect("truncated os name");
+        assert_eq!(os.chars().count(), 80, "79 chars + ellipsis");
+        assert!(os.ends_with('…'));
     }
 }

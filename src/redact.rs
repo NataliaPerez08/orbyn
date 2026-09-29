@@ -20,11 +20,14 @@ impl Redactor {
         Self::default()
     }
 
-    /// Register a secret. Values shorter than 6 chars are ignored to avoid
-    /// blanking harmless substrings that just happen to match a short token.
+    /// Register a secret. Values shorter than 4 chars are ignored to avoid
+    /// blanking harmless substrings that just happen to match a very short
+    /// token; 4+ chars still cover short default communities such as
+    /// `cisco` (audit OY-13: the previous 6-char threshold silently left
+    /// them unredacted).
     pub fn add_value(&mut self, value: impl AsRef<str>) {
         let value = value.as_ref();
-        if value.len() >= 6 {
+        if value.len() >= 4 {
             self.values.push(value.to_string());
         }
     }
@@ -85,8 +88,15 @@ mod tests {
     #[test]
     fn ignores_short_values() {
         let mut r = Redactor::new();
-        r.add_value("abcde");
+        r.add_value("abc");
         assert_eq!(r.redact("abcdefghij"), "abcdefghij");
+    }
+
+    #[test]
+    fn covers_short_default_communities() {
+        let mut r = Redactor::new();
+        r.add_value("cisco");
+        assert_eq!(r.redact("community=cisco"), "community=[REDACTED]");
     }
 
     #[test]
