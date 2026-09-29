@@ -31,13 +31,16 @@ and testing are welcome.
   Logs go to stderr; sustained data goes to stdout.
 - Domain types live in `src/domain/`. Collectors normalize their output into
   `crate::domain::Observation`. No collector writes directly to the database.
-- Storage is behind `crate::store::traits::Store`; SQLite is the reference
-  implementation under `src/store/sqlite.rs`.
+- Storage is behind `crate::store::traits::Store`; SQLite (`src/store/sqlite.rs`)
+  and PostgreSQL (`src/store/postgres.rs`) are the two backends, sharing row
+  decoding through `src/store/rows.rs`. A schema change must ship both
+  dialects (`migrations/` and `migrations/postgres/`).
 - A new collector requires:
   - a `Collector` implementation returning normalized observations;
   - validation of targets (never shell-interpolate);
   - a fixture-backed test;
-  - a database schema change only if the observation type is genuinely new.
+  - a database schema change only if the observation type is genuinely new
+    (both `migrations/` and `migrations/postgres/`).
 - `cargo fmt` must be clean and `cargo clippy --all-targets -- -D warnings`
   must pass.
 

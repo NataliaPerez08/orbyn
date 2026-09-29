@@ -98,9 +98,25 @@ By default Orbyn creates and migrates its database at:
 ./data/orbyn.db
 ```
 
-Use `--db <path>` or `ORBYN_DB` to select another database. The process creates
-the parent directory when necessary. Configuration variables are documented in
-the [README configuration section].
+The file is created with owner-only permissions (`0600`; the parent directory
+is `0700` when Orbyn creates it). Use `--db <path>` or `ORBYN_DB` to select
+another database. Configuration variables are documented in the
+[README configuration section].
+
+### PostgreSQL
+
+Any `--db`/`ORBYN_DB` value starting with `postgres://` or `postgresql://`
+selects the PostgreSQL backend; the schema is applied automatically on open:
+
+```bash
+orbyn --db "postgres://orbyn@db.example.com:5432/orbyn?sslmode=require" assets
+```
+
+Keep the password out of the process arguments: omit it from the URL and set
+`ORBYN_PG_PASSWORD` (or the standard `PGPASSWORD`) instead. A URL that embeds
+a password prints a warning, since argv is readable by any local user. TLS is
+negotiated when the server offers it; use `?sslmode=require` for remote
+databases.
 
 Keep the database and exported inventory files private. They can contain
 sensitive infrastructure information.

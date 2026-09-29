@@ -79,7 +79,7 @@ Existing monitoring platforms such as Prometheus and Zabbix should eventually be
 
 ## Architecture
 
-Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime, `clap` for the CLI, `sqlx` for SQLite persistence, `quick-xml` for Nmap output parsing, and `comfy-table` for terminal tables.
+Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime, `clap` for the CLI, `sqlx` for SQLite/PostgreSQL persistence, `quick-xml` for Nmap output parsing, and `comfy-table` for terminal tables.
 
 ```text
 +----------+   +----------+   +-----------+   +----------+
@@ -101,7 +101,7 @@ Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime,
        +------------+------------+
        |            |            |
        v            v            v
-     Nmap          SNMP         SSH/WinRM
+     Nmap          SNMP         SSH / PowerShell
        |            |            |
        +------------+------------+
                     |
@@ -112,7 +112,7 @@ Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime,
                     |
                     v
             +-------+--------+
-            | SQLite / Store |
+            | Store (SQLite / PostgreSQL) |
             +-------+--------+
                     |
              +------+------+
@@ -138,7 +138,7 @@ The repository currently provides:
 * Rust crate scaffold (single binary, CLI-first).
 * CLI commands: `discover`, `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `metrics`, `jobs`, `audit`, `annotate`, `import`, `export`, `graph`, `deps`, `assess`.
 * Table output for humans, `--format json|csv` for machines.
-* SQLite persistence via `sqlx` with versioned migrations.
+* SQLite persistence by default, PostgreSQL backend for any `postgres://` URL, both via `sqlx` with versioned migrations.
 * Asset, service, interface and discovery job domain model, with capacity,
   dependency and metric-sample persistence for right-sizing.
 * Collector framework with target validation (unrestricted scopes rejected).
@@ -373,6 +373,7 @@ clean for piping.
 | Variable     | Default           | Purpose              |
 | ------------ | ----------------- | -------------------- |
 | `ORBYN_DB`   | `./data/orbyn.db` | SQLite database path, or a `postgres://` URL |
+| `ORBYN_PG_PASSWORD` | _(unset)_  | Password for a PostgreSQL URL that omits one (fallback: `PGPASSWORD`) |
 | `ORBYN_LOG`  | `orbyn=warn`      | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap`        | Nmap binary path     |
 | `ORBYN_NMAP_TIMEOUT_SECS` | `1800` | Whole-process timeout for an nmap run |
@@ -386,6 +387,11 @@ Secrets can also be piped in so they never appear in argv or the
 environment: `--token -` and `--community -` read one line from stdin
 (e.g. `orbyn netbox import --url <url> --token - < token.txt`).
 
+A `.env` file in the current working directory is loaded at startup
+(existing environment variables win; parent directories are never
+searched). Values it sets for `ORBYN_*_BIN` are execution paths — a
+non-standard value prints a warning, since Orbyn will execute that binary.
+
 ## Repository layout
 
 ```text
@@ -394,19 +400,27 @@ orbyn/
 ├── src/
 │   ├── main.rs                  # CLI executable (clap)
 │   ├── lib.rs
-│   ├── config.rs                # env/flag-based configuration
+│   ├── config.rs                # env/flag-based configuration (DbTarget)
+│   ├── process.rs               # bounded subprocess execution (timeouts, capture caps)
+│   ├── redact.rs                # value-based secret redaction
+│   ├── import.rs                # JSON/CSV inventory import
 │   ├── assessment/              # migration assessment
 │   ├── collectors/              # discovery collectors
 │   │   ├── classify.rs          # device classification
 │   │   ├── nmap.rs              # Nmap adapter
-│   │   └── snmp.rs              # SNMP adapter
+│   │   ├── snmp.rs              # SNMP adapter
+│   │   ├── ssh.rs               # SSH transport + Linux collector
+│   │   ├── windows.rs           # Windows collector (PowerShell over SSH)
+│   │   └── dns.rs               # DNS relationship evidence
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
+│   ├── integrations/            # NetBox importer + Ansible/Terraform exporters
 │   ├── metrics/                 # capacity/utilization processing
 │   ├── output/                  # table/json/csv rendering
-│   └── store/                   # store traits + SQLite
+│   └── store/                   # Store trait + SQLite and PostgreSQL backends
 │
 ├── migrations/                  # versioned SQL migrations (sqlx)
+├── migrations/postgres/         # PostgreSQL dialect of the same schema
 ├── tests/                       # integration tests
 │
 ├── Makefile
@@ -434,8 +448,7 @@ Initial collection methods include:
 
 * Nmap
 * SNMP
-* SSH
-* WinRM
+* SSH (Linux) and PowerShell over SSH (Windows)
 * infrastructure APIs
 * existing monitoring systems
 
@@ -474,10 +487,11 @@ A user should be able to run Orbyn with:
 ```text
 one binary
 +
-one SQLite database
+one SQLite database (or one PostgreSQL URL)
 ```
 
-Large-scale deployment can come later.
+Larger deployments can point `--db` at PostgreSQL today; distributed
+collection can come later.
 
 ### Scale without rewriting the domain
 

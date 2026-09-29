@@ -16,8 +16,9 @@ Orbyn is a Rust project:
 - **Presentation:** `src/output/` renders results as tables by default, or as
   `json`/`csv` for machine consumption. Logs go to stderr so stdout stays clean
   for piping.
-- **Persistence:** `sqlx` against SQLite. The schema is versioned via `sqlx`
-  migrations in `migrations/`.
+- **Persistence:** `sqlx` against SQLite (default, zero external services)
+  or PostgreSQL (any `postgres://` URL). Both schemas are versioned via
+  `sqlx` migrations in `migrations/` (SQLite) and `migrations/postgres/`.
 - **Logging:** `tracing`/`tracing-subscriber`, structured and env-configurable.
 - **XML parsing (Nmap):** `quick-xml`, fast and dependency-light.
 
@@ -27,11 +28,14 @@ Crate layout mirrors the logical layers:
 src/
 ├── main.rs               # clap CLI: discover / assets / services / export / graph / assess
 ├── lib.rs                # library surface
-├── config.rs             # env/flag-based configuration
-├── domain/               # normalized domain model
+├── config.rs             # env/flag-based configuration (DbTarget, PG password helpers)
+├── process.rs            # bounded subprocess execution (timeouts, capture caps)
+├── redact.rs             # value-based secret redaction
 ├── parsing.rs            # shared text parsing (CSV lines, ### sections)
+├── import.rs             # JSON/CSV inventory import
+├── domain/               # normalized domain model
 ├── collectors/           # Collector trait + scanner adapters
-│   ├── types.rs          # Collector, ScanTarget, CpuFacts, validation
+│   ├── types.rs          # Collector, ScanTarget, CpuFacts, scope validation
 │   ├── credentials.rs    # CredentialProfile (no stored secrets)
 │   ├── classify.rs       # device classification heuristics
 │   ├── nmap.rs           # Nmap adapter (v0.1 milestone)
@@ -41,7 +45,10 @@ src/
 │   └── dns.rs            # DNS relationship evidence (v0.4)
 ├── store/                # persistence
 │   ├── traits.rs         # Store trait (repository boundary)
-│   └── sqlite.rs         # SQLite via sqlx
+│   ├── sqlite.rs         # SQLite via sqlx
+│   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
+│   └── rows.rs           # row decoding shared by both backends
+├── integrations/         # NetBox importer + Ansible/Terraform exporters (v1.1)
 ├── graph/                # dependency graph
 ├── metrics/              # capacity/utilization processing
 ├── assessment/           # migration assessment engine
@@ -61,11 +68,10 @@ Examples:
 - Nmap XML output.
 - SNMP queries.
 - SSH commands on Linux.
-- WinRM/CIM queries on Windows.
-- vCenter APIs.
-- NetBox.
-- Zabbix and Prometheus.
-- Flow telemetry or eBPF.
+- PowerShell CIM queries on Windows (over OpenSSH; native WinRM deferred).
+- NetBox (read-only importer).
+- vCenter, Zabbix and Prometheus (deferred/planned).
+- Flow telemetry or eBPF (planned).
 
 Collectors must return typed observations and never write directly to database
 tables. They implement the `Collector` trait, which requires:
@@ -118,20 +124,27 @@ graph, metrics, assessment and CLI output.
 
 ### 3. Persistence
 
-Initial storage is SQLite via `sqlx`:
+Orbyn ships two backends behind one repository boundary:
 
-- zero external services for local installs;
-- easy packaging and evaluation;
-- transactional relational model;
-- sufficient for the initial single-node product.
+- **SQLite** (default): zero external services for local installs, easy
+  packaging and evaluation, transactional relational model. The database
+  file is created with owner-only permissions (`0600`, parent directory
+  `0700` when Orbyn creates it).
+- **PostgreSQL**: any `--db`/`ORBYN_DB` value starting with `postgres://` or
+  `postgresql://` selects it — same schema applied automatically on open,
+  same `Store` contract, row decoding shared through `src/store/rows.rs`.
+  A URL without a password falls back to `ORBYN_PG_PASSWORD` (or the
+  standard `PGPASSWORD`) so the credential stays out of argv; TLS is
+  negotiated when offered and enforceable with `?sslmode=require`.
 
-Migrations are plain SQL in `migrations/` and run automatically at startup.
+`DbTarget` in `src/config.rs` classifies the target (filesystem path vs
+URL); everything downstream — collectors, assessment, graph, output — talks
+to the `Store` trait in `src/store/traits.rs` and is unaware of the engine.
+
+Migrations are plain SQL in `migrations/` (SQLite) and `migrations/postgres/`
+(BIGINT/DOUBLE PRECISION/BOOLEAN dialect), run automatically at startup.
 `sqlx::migrate!` embeds them at compile time, so the binary has no runtime
 dependency on a migration tool.
-
-SQLite is not a permanent constraint. The `Store` trait in
-`src/store/traits.rs` isolates persistence so PostgreSQL can be offered for
-multi-user or larger deployments without touching collectors or assessment.
 
 ### 4. Assessment engine
 
@@ -293,11 +306,13 @@ sample-count guard; a single snapshot is never treated as utilization evidence.
 Potential evolution without changing the collector contract:
 
 ```text
-SQLite        -> PostgreSQL
 local process -> optional distributed collectors / worker queue
 local data    -> Prometheus/VictoriaMetrics integration
 CLI only      -> optional web UI/HTTP API add-on (later, non-core)
 ```
+
+SQLite and PostgreSQL already coexist behind the `Store` trait; further
+backends (or a read replica path) would follow the same boundary.
 
 If remote collectors or a server are ever introduced, they should communicate
 outbound where possible, minimizing inbound firewall requirements.
@@ -310,11 +325,17 @@ making them the highest-risk component.
 Rules:
 
 - read-only operations by default;
-- scoped targets (targets validated by `validate_target`, unrestricted
-  `0.0.0.0/0`-style scopes rejected);
+- scoped targets (targets validated by `validate_target`: unrestricted
+  `0.0.0.0/0`-style scopes rejected, and CIDR prefixes below /16 IPv4 or
+  /48 IPv6 require the explicit `--allow-large-cidr` opt-in);
 - explicit credential profiles;
-- secrets never exposed through CLI or API output;
+- secrets never exposed through CLI or API output; secret-bearing
+  environment variables are stripped from child processes and registered
+  values are redacted before any write boundary (`src/redact.rs`);
 - subprocess arguments, never shell interpolation (Nmap/SSH commands built as
   `std::process`/`tokio::process` argument vectors);
+- every subprocess runs under one lifecycle timeout with capped output
+  capture (16 MiB stdout / 1 MiB stderr, remainder drained), so a hostile
+  device cannot exhaust the operator's memory (`src/process.rs`);
 - discovery job audit records (stored job history surfaced by the CLI);
 - least-privilege and scoped operation for any future multi-user or web layer.

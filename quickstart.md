@@ -64,8 +64,9 @@ orbyn discover --target 192.168.1.10 --collector snmp --community public
 orbyn discover --target 192.168.1.10 --collector snmp --community - <<< "$ORBYN_SNMP_COMMUNITY"
 ```
 
-Orbyn rejects unrestricted scopes by default. You are responsible for having
-authorization to scan targets.
+Orbyn rejects unrestricted scopes by default; CIDR prefixes wider than /16
+(IPv4) or /48 (IPv6) need the explicit `--allow-large-cidr` flag. You are
+responsible for having authorization to scan targets.
 
 ## 5. Collect host-level facts (SSH / Windows)
 

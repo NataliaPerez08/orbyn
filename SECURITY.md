@@ -78,3 +78,9 @@ argument handling (argument vectors, never shell strings) and log redaction are
 the priority review areas, and every change to `src/collectors/`,
 `src/integrations/`, `src/config.rs` or `src/redact.rs` should pass the review
 checklist there.
+
+A full source audit (27 findings, OY-01..OY-27, with executed proofs of
+concept where applicable) is recorded in
+[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md): 16 findings are fixed and the
+remaining ones are documented as accepted residuals in the threat model
+(R-8..R-12).
