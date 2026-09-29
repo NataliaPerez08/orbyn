@@ -51,7 +51,6 @@ src/
 │   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
 │   └── rows.rs           # row decoding shared by both backends
 ├── integrations/         # NetBox + Prometheus importers, Ansible/Terraform exporters
-├── graph/                # dependency graph
 ├── metrics/              # capacity/utilization processing (windows, right-sizing readiness)
 ├── assessment/           # migration assessment engine
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
@@ -209,8 +208,7 @@ Every edge retains its evidence source and confidence; manual confirmation
 raises confidence to 1.0. Guesses look like guesses: unconfirmed edges render
 dotted in Mermaid output. Raw connection observations are persisted in
 `asset_connections` so the evidence behind each edge stays inspectable
-(`orbyn connections <id-or-ip>`). `src/graph/` provides an in-memory graph
-over persisted `Dependency` edges with forward/reverse lookups.
+(`orbyn connections <id-or-ip>`).
 
 ### 6. CLI
 

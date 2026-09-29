@@ -8,7 +8,6 @@ pub mod assessment;
 pub mod collectors;
 pub mod config;
 pub mod domain;
-pub mod graph;
 pub mod import;
 pub mod integrations;
 pub mod metrics;

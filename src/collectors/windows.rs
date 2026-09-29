@@ -124,12 +124,6 @@ impl WindowsCollector {
     pub fn with_transport(transport: WindowsTransport) -> Self {
         Self { transport }
     }
-
-    /// Parse probe output into facts without invoking the transport
-    /// (fixture-testable).
-    pub fn parse_probe(&self, output: &str) -> WindowsHostFacts {
-        parse_windows_probe(output)
-    }
 }
 
 impl Default for WindowsCollector {

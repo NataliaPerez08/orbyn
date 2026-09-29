@@ -173,11 +173,6 @@ impl LinuxCollector {
             transport: SshTransport::new(profile),
         }
     }
-
-    /// Parse probe output into facts without invoking ssh (fixture-testable).
-    pub fn parse_probe(&self, output: &str) -> LinuxHostFacts {
-        parse_linux_probe(output)
-    }
 }
 
 impl Default for LinuxCollector {

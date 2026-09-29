@@ -94,11 +94,6 @@ pub fn run_fail(cmd: &mut Command) -> String {
     combined
 }
 
-/// Run a command and return the raw `Output` for fine-grained assertions.
-pub fn run(cmd: &mut Command) -> Output {
-    cmd.output().expect("run command")
-}
-
 /// Run a command with `stdin_data` piped to its stdin and return the raw
 /// `Output` (stdout/stderr piped like `Command::output`). The stdin pipe
 /// closes after the write so the child sees EOF.
