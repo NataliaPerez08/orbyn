@@ -97,8 +97,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Observation-window quality indicator (span + confidence; right-sizing
   readiness requires >= 168h with high confidence).
 - [x] **P2** Prometheus importer (`orbyn prometheus import`, idempotent re-imports).
-- [ ] **P2** Zabbix importer.
-- [x] **P2** Right-sizing rules with evidence (catalog 0.7.0: `rs.*`).
+- [x] **P2** Zabbix importer.
+- [x] **P2** Right-sizing rules with evidence (catalog 0.8.0: `rs.*`).
 - [ ] **P3** Cloud SKU adapters.
 
 ## Security
@@ -138,13 +138,16 @@ added; today the product surface is `orbyn` subcommands.
 ### Phase 3 — Evidence-based right-sizing
 
 - [x] **P1** Add CPU, RAM, swap and storage right-sizing rules. (CPU/RAM shipped
-  in v1.2 catalog 0.7.0; swap/storage remain.)
+  in v1.2 catalog 0.7.0; `rs.swap-pressure` and `rs.storage-overprovisioned`
+  shipped in catalog 0.8.0.)
 - [x] **P1** Define minimum observation windows and insufficient-data behavior.
   (168h + high confidence; `rs.window-insufficient` is the explicit warning.)
 - [x] **P2** Add Prometheus importer.
-- [ ] **P2** Add Zabbix importer.
+- [x] **P2** Add Zabbix importer.
 - [x] **P1** Include evidence, confidence and rule version in recommendations.
-- [ ] **P2** Add utilization-window comparison.
+- [x] **P2** Add utilization-window comparison. (A window spanning two full
+  right-sizing weeks is split into prior and recent halves; `rs.utilization-trend`
+  fires on >= 20% p95 growth between them.)
 
 ### Phase 4 — Scale and operations
 

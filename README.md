@@ -177,19 +177,25 @@ The repository currently provides:
   * `orbyn metrics <id-or-ip>` summarizes a utilization window with
     avg/p95/p99/peak CPU and RAM plus a `SampleConfidence` label based on
     sample count and validity.
-* CPU/RAM utilization and right-sizing (v1.2):
-  * `orbyn prometheus import` pulls a week of historical CPU/RAM
+* CPU/RAM/swap utilization and right-sizing (v1.2 and Phase 3):
+  * `orbyn prometheus import` pulls a week of historical CPU/RAM/swap
     utilization from a Prometheus server (`/api/v1/query_range` through
     `curl`; node_exporter queries by default, overridable) and maps series
     onto assets by the `instance` label (IP or hostname). Re-imports are
     idempotent.
+  * `orbyn zabbix import` does the same from a Zabbix JSON-RPC API
+    (`host.get` / `item.get` / `history.get` through `curl`), mapping hosts
+    onto assets by interface IP, then by name. Read-only: Orbyn never writes
+    to Zabbix.
   * Utilization windows carry their temporal span; `orbyn metrics` reports
     span, confidence and right-sizing readiness (>= 168h of history with
-    high confidence — snapshots alone never qualify).
-  * Rule catalog 0.7.0: `rs.window-insufficient` guidance, CPU/RAM
-    over-provisioned suggestions (p99 + 50% headroom) and CPU/RAM
-    saturation warnings (p95 >= 90%), each carrying its observation window
-    as evidence.
+    high confidence — snapshots alone never qualify). A window spanning two
+    full weeks also reports the prior-vs-recent p95 trend.
+  * Rule catalog 0.8.0: `rs.window-insufficient` guidance, CPU/RAM
+    over-provisioned suggestions (p99 + 50% headroom), CPU/RAM
+    saturation warnings (p95 >= 90%), sustained swap pressure, a
+    week-over-week growth warning, and oversized-storage suggestions, each
+    carrying its observation window as evidence.
 * Dependency mapping (v0.4):
   * Active connection observations from the SSH/Windows host probes
     (`ss -tnp` / `Get-NetTCPConnection`), reconciled into dependency edges
@@ -218,6 +224,7 @@ The repository currently provides:
   * NetBox source-of-truth importer (`orbyn netbox import`).
   * Prometheus historical utilization importer
     (`orbyn prometheus import`).
+  * Zabbix historical utilization importer (`orbyn zabbix import`).
   * Ansible inventory exporter (`orbyn export --format ansible`).
   * Terraform-friendly export (`orbyn export --format terraform`).
   * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
@@ -235,7 +242,7 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
-* `curl` for the NetBox and Prometheus importers and the native WinRM
+* `curl` for the NetBox, Prometheus and Zabbix importers and the native WinRM
   transport
 
 Host-level collection uses key-based authentication (ssh-agent or
@@ -339,8 +346,10 @@ orbyn export [--format json|csv|ansible|ansible-yaml|terraform] [--group-by <key
     [--tf-import <resource-type>] [--output <file>]
 orbyn netbox import --url <url> [--token <t>|--token -]  Import devices/VMs from NetBox (SoT)
 orbyn prometheus import --url <url> [--token <t>|--token -] [--lookback-hours 168] \
-    [--step 5m] [--cpu-query <q>] [--ram-query <q>] [--no-verify]
-                                                   Import historical CPU/RAM utilization
+    [--step 5m] [--cpu-query <q>] [--ram-query <q>] [--swap-query <q>] [--no-verify]
+                                                   Import historical CPU/RAM/swap utilization
+orbyn zabbix import --url <url> [--token <t>|--token -] [--lookback-hours 168] [--no-verify]
+                                                   Import historical CPU/RAM/swap utilization
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 ```
 
@@ -367,6 +376,10 @@ orbyn discover --target 10.0.0.20 --collector winrm --user administrator \
 # import a week of CPU/RAM history from Prometheus (node_exporter queries
 # by default; run from cron for continuous evidence)
 orbyn prometheus import --url http://prometheus:9090
+# ... or the same week from a Zabbix JSON-RPC API (hosts map by interface IP,
+# then by name)
+orbyn zabbix import --url https://zabbix.example.com/zabbix/api_jsonrpc.php \
+    --token - < ~/.zabbix-token
 orbyn metrics 10.0.0.10          # span, percentiles, right-sizing readiness
 
 # inspect what was found
@@ -426,6 +439,7 @@ clean for piping.
 | `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client, WinRM transport) |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
 | `ORBYN_PROMETHEUS_TOKEN` | _(unset)_ | Prometheus bearer token (or `--token`, `--token -` for stdin) |
+| `ORBYN_ZABBIX_TOKEN` | _(unset)_ | Zabbix API token (or `--token`, `--token -` for stdin) |
 | `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the

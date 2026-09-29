@@ -11,6 +11,10 @@
 //! temporal span: right-sizing requires both high-confidence samples and
 //! an observation window of at least
 //! [`MIN_WINDOW_HOURS_FOR_RIGHT_SIZING`] hours (one meeting week).
+//!
+//! A window long enough to hold two right-sizing windows is additionally
+//! split into a prior and a recent half ([`WindowComparison`]) so a trend can
+//! be read without treating one busy week as a permanent baseline.
 
 use chrono::{DateTime, Utc};
 
@@ -34,7 +38,33 @@ pub struct WindowStats {
     pub ram_p95_mb: Option<f64>,
     pub ram_p99_mb: Option<f64>,
     pub ram_peak_mb: Option<f64>,
+    /// Swap utilization, the paging signal behind `rs.swap-pressure`.
+    pub swap_avg_mb: Option<f64>,
+    pub swap_p95_mb: Option<f64>,
+    pub swap_p99_mb: Option<f64>,
+    pub swap_peak_mb: Option<f64>,
     pub confidence: SampleConfidence,
+    /// Week-over-week split, present only when the window spans two full
+    /// right-sizing windows and both halves carry enough samples.
+    pub comparison: Option<WindowComparison>,
+}
+
+/// A window split into a prior and a recent half, both one right-sizing week
+/// long, so a change in utilization can be shown with the numbers behind it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WindowComparison {
+    /// Length of each compared half, in hours.
+    pub sub_window_hours: f64,
+    pub prior_sample_count: usize,
+    pub recent_sample_count: usize,
+    pub prior_span_hours: Option<f64>,
+    pub recent_span_hours: Option<f64>,
+    pub cpu_p95_prior_percent: Option<f64>,
+    pub cpu_p95_recent_percent: Option<f64>,
+    pub ram_p95_prior_mb: Option<f64>,
+    pub ram_p95_recent_mb: Option<f64>,
+    pub swap_p95_prior_mb: Option<f64>,
+    pub swap_p95_recent_mb: Option<f64>,
 }
 
 /// Strength of the evidence behind a summarized window.
@@ -70,6 +100,15 @@ pub const MIN_SAMPLES_FOR_STATS: usize = 2;
 /// alone is not enough — three snapshots seconds apart are still one
 /// moment in time.
 pub const MIN_WINDOW_HOURS_FOR_RIGHT_SIZING: f64 = 168.0;
+
+/// Minimum span (in hours) before a window is split for a week-over-week
+/// comparison: two right-sizing windows, so each half carries a full week of
+/// its own instead of a busy afternoon against a quiet month.
+pub const MIN_SPAN_HOURS_FOR_COMPARISON: f64 = 2.0 * MIN_WINDOW_HOURS_FOR_RIGHT_SIZING;
+
+/// Minimum samples in each compared half, so a sub-window p95 is never read
+/// off a handful of points.
+pub const MIN_SAMPLES_PER_SUB_WINDOW: usize = 5;
 
 impl WindowStats {
     /// Whether this window is strong enough to support a right-sizing
@@ -113,21 +152,24 @@ pub fn summarize(samples: &[MetricSample]) -> Option<WindowStats> {
         .iter()
         .filter_map(|s| s.ram_used_mb.map(|mb| mb as f64))
         .collect();
+    let swap: Vec<f64> = valid
+        .iter()
+        .filter_map(|s| s.swap_used_mb.map(|mb| mb as f64))
+        .collect();
 
     let (cpu_avg, cpu_p95, cpu_p99, cpu_peak) = percentile_bundle(&cpu);
     let (ram_avg, ram_p95, ram_p99, ram_peak) = percentile_bundle(&ram);
+    let (swap_avg, swap_p95, swap_p99, swap_peak) = percentile_bundle(&swap);
 
     let validity = cpu
         .len()
         .max(ram.len())
+        .max(swap.len())
         .min(if valid.is_empty() { 0 } else { valid.len() });
 
     let window_start = valid.iter().map(|s| s.sampled_at).min();
     let window_end = valid.iter().map(|s| s.sampled_at).max();
-    let span_hours = match (window_start, window_end) {
-        (Some(start), Some(end)) => Some((end - start).num_seconds() as f64 / 3600.0),
-        _ => None,
-    };
+    let span_hours = span_between(window_start, window_end);
 
     Some(WindowStats {
         sample_count: samples.len(),
@@ -142,8 +184,68 @@ pub fn summarize(samples: &[MetricSample]) -> Option<WindowStats> {
         ram_p95_mb: ram_p95,
         ram_p99_mb: ram_p99,
         ram_peak_mb: ram_peak,
+        swap_avg_mb: swap_avg,
+        swap_p95_mb: swap_p95,
+        swap_p99_mb: swap_p99,
+        swap_peak_mb: swap_peak,
         confidence: confidence_for(valid.len(), validity),
+        comparison: window_end.and_then(|end| compare_sub_windows(&valid, end, span_hours)),
     })
+}
+
+/// Split a window into a prior and a recent half and compare their p95s.
+///
+/// Returns `None` unless the window spans
+/// [`MIN_SPAN_HOURS_FOR_COMPARISON`] hours and both halves carry at least
+/// [`MIN_SAMPLES_PER_SUB_WINDOW`] valid samples: a half-week is not a trend,
+/// it is a shorter window wearing a trend's name.
+fn compare_sub_windows(
+    valid: &[&MetricSample],
+    end: DateTime<Utc>,
+    span_hours: Option<f64>,
+) -> Option<WindowComparison> {
+    if span_hours.unwrap_or(0.0) < MIN_SPAN_HOURS_FOR_COMPARISON {
+        return None;
+    }
+    let half = chrono::Duration::hours(MIN_WINDOW_HOURS_FOR_RIGHT_SIZING.round() as i64);
+    let split = end - half;
+    let (prior, recent): (Vec<&MetricSample>, Vec<&MetricSample>) =
+        valid.iter().partition(|s| s.sampled_at < split);
+    if prior.len() < MIN_SAMPLES_PER_SUB_WINDOW || recent.len() < MIN_SAMPLES_PER_SUB_WINDOW {
+        return None;
+    }
+
+    let field = |samples: &[&MetricSample], pick: fn(&MetricSample) -> Option<f64>| -> Vec<f64> {
+        samples.iter().filter_map(|s| pick(s)).collect()
+    };
+
+    Some(WindowComparison {
+        sub_window_hours: MIN_WINDOW_HOURS_FOR_RIGHT_SIZING,
+        prior_sample_count: prior.len(),
+        recent_sample_count: recent.len(),
+        prior_span_hours: span_between(
+            prior.iter().map(|s| s.sampled_at).min(),
+            prior.iter().map(|s| s.sampled_at).max(),
+        ),
+        recent_span_hours: span_between(
+            recent.iter().map(|s| s.sampled_at).min(),
+            recent.iter().map(|s| s.sampled_at).max(),
+        ),
+        cpu_p95_prior_percent: p95_of(&field(&prior, |s| s.cpu_usage_percent.map(f64::from))),
+        cpu_p95_recent_percent: p95_of(&field(&recent, |s| s.cpu_usage_percent.map(f64::from))),
+        ram_p95_prior_mb: p95_of(&field(&prior, |s| s.ram_used_mb.map(|mb| mb as f64))),
+        ram_p95_recent_mb: p95_of(&field(&recent, |s| s.ram_used_mb.map(|mb| mb as f64))),
+        swap_p95_prior_mb: p95_of(&field(&prior, |s| s.swap_used_mb.map(|mb| mb as f64))),
+        swap_p95_recent_mb: p95_of(&field(&recent, |s| s.swap_used_mb.map(|mb| mb as f64))),
+    })
+}
+
+/// `(end - start)` in hours, `None` when either end is missing.
+fn span_between(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Option<f64> {
+    match (start, end) {
+        (Some(start), Some(end)) => Some((end - start).num_seconds() as f64 / 3600.0),
+        _ => None,
+    }
 }
 
 /// Confidence from the number of valid samples and their share of the window.
@@ -162,18 +264,36 @@ fn percentile_bundle(values: &[f64]) -> (Option<f64>, Option<f64>, Option<f64>, 
     if values.is_empty() {
         return (None, None, None, None);
     }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let sorted = sorted_values(values);
     let avg = sorted.iter().sum::<f64>() / sorted.len() as f64;
-    let idx_p95 = ((sorted.len() as f64 - 1.0) * 0.95).round() as usize;
-    let idx_p99 = ((sorted.len() as f64 - 1.0) * 0.99).round() as usize;
     let peak = sorted[sorted.len() - 1];
     (
         Some(avg),
-        Some(sorted[idx_p95]),
-        Some(sorted[idx_p99]),
+        Some(percentile_at(&sorted, 0.95)),
+        Some(percentile_at(&sorted, 0.99)),
         Some(peak),
     )
+}
+
+/// p95 of `values`, with the same nearest-rank definition the window bundle
+/// uses, so a comparison never quotes a different statistic than the window
+/// it belongs to.
+fn p95_of(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let sorted = sorted_values(values);
+    Some(percentile_at(&sorted, 0.95))
+}
+
+fn sorted_values(values: &[f64]) -> Vec<f64> {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted
+}
+
+fn percentile_at(sorted: &[f64], quantile: f64) -> f64 {
+    sorted[((sorted.len() as f64 - 1.0) * quantile).round() as usize]
 }
 
 #[cfg(test)]
@@ -279,5 +399,80 @@ mod tests {
             .collect();
         let stats = summarize(&sparse).expect("window exists");
         assert!(!stats.right_sizing_ready());
+    }
+
+    #[test]
+    fn swap_is_summarized_with_the_same_percentiles() {
+        let at = Utc::now();
+        let samples: Vec<MetricSample> = (0..20)
+            .map(|i| {
+                let mut s = sample_at(10.0, 1024, at + chrono::Duration::hours(i));
+                s.swap_used_mb = Some(i as u64 * 100);
+                s
+            })
+            .collect();
+        let stats = summarize(&samples).expect("window exists");
+        assert_eq!(stats.swap_peak_mb, Some(1900.0));
+        assert_eq!(stats.swap_p95_mb, Some(1800.0));
+        assert_eq!(stats.swap_avg_mb, Some(950.0));
+
+        // A window without swap samples leaves the swap stats empty rather
+        // than reporting zero usage.
+        let cpu_ram_only: Vec<MetricSample> = (0..5)
+            .map(|i| sample_at(10.0, 1024, at + chrono::Duration::hours(i)))
+            .collect();
+        let stats = summarize(&cpu_ram_only).expect("window exists");
+        assert_eq!(stats.swap_p95_mb, None);
+    }
+
+    #[test]
+    fn comparison_needs_two_weeks_of_span() {
+        let end = Utc::now();
+        // 24 samples 8h apart: 184h of span, not enough for two halves.
+        let week: Vec<MetricSample> = (0..24)
+            .map(|i| sample_at(10.0, 1024, end - chrono::Duration::hours(i * 8)))
+            .collect();
+        let stats = summarize(&week).expect("window exists");
+        assert!(stats.right_sizing_ready());
+        assert!(stats.comparison.is_none(), "one week cannot be compared");
+
+        // 48 samples 8h apart: 376h, so both halves carry a week. The split
+        // falls 168h before the newest sample, which leaves 26 samples in the
+        // prior half and 22 in the recent one.
+        let fortnight: Vec<MetricSample> = (0..48)
+            .map(|i| {
+                let age = i * 8;
+                let cpu = if age > 168 { 10.0 } else { 40.0 };
+                sample_at(cpu, 1024, end - chrono::Duration::hours(age))
+            })
+            .collect();
+        let stats = summarize(&fortnight).expect("window exists");
+        let cmp = stats.comparison.expect("two weeks can be compared");
+        assert_eq!(cmp.sub_window_hours, MIN_WINDOW_HOURS_FOR_RIGHT_SIZING);
+        assert_eq!(cmp.prior_sample_count, 26);
+        assert_eq!(cmp.recent_sample_count, 22);
+        assert_eq!(cmp.cpu_p95_prior_percent, Some(10.0));
+        assert_eq!(cmp.cpu_p95_recent_percent, Some(40.0));
+        assert_eq!(cmp.ram_p95_prior_mb, Some(1024.0));
+        assert_eq!(cmp.ram_p95_recent_mb, Some(1024.0));
+        assert!(cmp.recent_span_hours.unwrap_or(0.0) >= 160.0);
+    }
+
+    #[test]
+    fn comparison_needs_enough_samples_in_both_halves() {
+        let end = Utc::now();
+        // Long span, but the prior half holds only two samples.
+        let lopsided: Vec<MetricSample> = (0..20)
+            .map(|i| {
+                let age = if i < 2 { 400 } else { i * 8 };
+                sample_at(10.0, 1024, end - chrono::Duration::hours(age))
+            })
+            .collect();
+        let stats = summarize(&lopsided).expect("window exists");
+        assert!(stats.span_hours.unwrap_or(0.0) >= MIN_SPAN_HOURS_FOR_COMPARISON);
+        assert!(
+            stats.comparison.is_none(),
+            "a half-week must not be dressed up as a trend"
+        );
     }
 }

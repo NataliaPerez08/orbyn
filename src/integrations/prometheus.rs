@@ -1,6 +1,6 @@
 //! Prometheus historical utilization importer (v1.2).
 //!
-//! Pulls CPU/RAM utilization time series from a Prometheus HTTP API
+//! Pulls CPU/RAM/swap utilization time series from a Prometheus HTTP API
 //! (`/api/v1/query_range`) and turns them into [`MetricSample`] rows, so an
 //! asset can carry a real observation window (a week of history) instead of
 //! only discovery snapshots. Read-only: Orbyn never writes to Prometheus.
@@ -43,6 +43,9 @@ pub const DEFAULT_CPU_QUERY: &str =
 /// Default RAM-used query (node_exporter): total minus available, in bytes.
 pub const DEFAULT_RAM_QUERY: &str = "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes";
 
+/// Default swap-used query (node_exporter): total minus free, in bytes.
+pub const DEFAULT_SWAP_QUERY: &str = "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes";
+
 /// A read-only Prometheus HTTP API client backed by the `curl` binary.
 pub struct PrometheusClient {
     base_url: String,
@@ -61,6 +64,8 @@ pub struct ImportOptions {
     pub cpu_query: String,
     /// Query returning RAM used bytes per `instance`.
     pub ram_query: String,
+    /// Query returning swap used bytes per `instance`.
+    pub swap_query: String,
 }
 
 /// One resolved Prometheus series: its labels and (time, value) points.
@@ -70,11 +75,12 @@ pub struct PromSeries {
     pub values: Vec<(DateTime<Utc>, f64)>,
 }
 
-/// The raw result of both range queries, before inventory mapping.
+/// The raw result of the range queries, before inventory mapping.
 #[derive(Debug, Default)]
 pub struct FetchedUtilization {
     pub cpu_series: Vec<PromSeries>,
     pub ram_series: Vec<PromSeries>,
+    pub swap_series: Vec<PromSeries>,
     /// Points dropped because their timestamp or value did not parse.
     pub skipped_points: usize,
 }
@@ -107,14 +113,29 @@ impl PrometheusClient {
         })
     }
 
-    /// Run the CPU and RAM range queries and return their series.
+    /// Run the CPU, RAM and swap range queries and return their series.
+    ///
+    /// A swap query the endpoint cannot answer is not fatal: swap is a
+    /// pressure signal, and an instance without a node_exporter swap series
+    /// still yields a usable CPU/RAM window.
     pub async fn fetch_utilization(&self, opts: &ImportOptions) -> Result<FetchedUtilization> {
         let (cpu_series, cpu_skipped) = self.query_range(&opts.cpu_query, opts).await?;
         let (ram_series, ram_skipped) = self.query_range(&opts.ram_query, opts).await?;
+        let (swap_series, swap_skipped) = match self.query_range(&opts.swap_query, opts).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "swap query failed; importing CPU and RAM history only"
+                );
+                (Vec::new(), 0)
+            }
+        };
         Ok(FetchedUtilization {
             cpu_series,
             ram_series,
-            skipped_points: cpu_skipped + ram_skipped,
+            swap_series,
+            skipped_points: cpu_skipped + ram_skipped + swap_skipped,
         })
     }
 
@@ -242,34 +263,31 @@ impl PrometheusClient {
 
 /// Map fetched series onto the inventory: each series' `instance` label
 /// (host part, `:port` stripped) must resolve to a known asset by IP or
-/// hostname. CPU and RAM points for the same asset and instant merge into
-/// one sample.
+/// hostname. CPU, RAM and swap points for the same asset and instant merge
+/// into one sample.
 pub fn assemble_samples(fetched: &FetchedUtilization, assets: &[Asset]) -> AssembledSamples {
-    let mut by_ip: HashMap<String, &Asset> = HashMap::new();
-    let mut by_hostname: HashMap<String, &Asset> = HashMap::new();
-    for asset in assets {
-        by_ip.insert(asset.ip.to_string(), asset);
-        if let Some(hostname) = &asset.hostname {
-            by_hostname.insert(hostname.to_ascii_lowercase(), asset);
-        }
-    }
-
+    let index = super::AssetIndex::new(assets);
     let mut per_asset: HashMap<&str, BTreeMap<DateTime<Utc>, MetricSample>> = HashMap::new();
     let mut unmatched_series = 0usize;
 
     feed_series(
         &fetched.cpu_series,
-        true,
-        &by_ip,
-        &by_hostname,
+        Field::Cpu,
+        &index,
         &mut per_asset,
         &mut unmatched_series,
     );
     feed_series(
         &fetched.ram_series,
-        false,
-        &by_ip,
-        &by_hostname,
+        Field::Ram,
+        &index,
+        &mut per_asset,
+        &mut unmatched_series,
+    );
+    feed_series(
+        &fetched.swap_series,
+        Field::Swap,
+        &index,
         &mut per_asset,
         &mut unmatched_series,
     );
@@ -290,12 +308,19 @@ pub fn assemble_samples(fetched: &FetchedUtilization, assets: &[Asset]) -> Assem
     }
 }
 
+/// Which column of a [`MetricSample`] a series fills.
+#[derive(Clone, Copy)]
+enum Field {
+    Cpu,
+    Ram,
+    Swap,
+}
+
 /// Fold one batch of series into the per-asset sample buckets.
 fn feed_series<'a>(
     series: &[PromSeries],
-    is_cpu: bool,
-    by_ip: &HashMap<String, &'a Asset>,
-    by_hostname: &HashMap<String, &'a Asset>,
+    field: Field,
+    index: &super::AssetIndex<'a>,
     per_asset: &mut HashMap<&'a str, BTreeMap<DateTime<Utc>, MetricSample>>,
     unmatched: &mut usize,
 ) {
@@ -304,13 +329,7 @@ fn feed_series<'a>(
             *unmatched += 1;
             continue;
         };
-        let host = instance_host(instance);
-        let asset = host
-            .parse::<std::net::IpAddr>()
-            .ok()
-            .and_then(|ip| by_ip.get(&ip.to_string()).copied())
-            .or_else(|| by_hostname.get(&host.to_ascii_lowercase()).copied());
-        let Some(asset) = asset else {
+        let Some(asset) = index.resolve(instance_host(instance)) else {
             *unmatched += 1;
             continue;
         };
@@ -327,10 +346,10 @@ fn feed_series<'a>(
                 load_5m: None,
                 load_15m: None,
             });
-            if is_cpu {
-                sample.cpu_usage_percent = Some(*value as f32);
-            } else {
-                sample.ram_used_mb = Some(bytes_to_mb(*value));
+            match field {
+                Field::Cpu => sample.cpu_usage_percent = Some(*value as f32),
+                Field::Ram => sample.ram_used_mb = Some(bytes_to_mb(*value)),
+                Field::Swap => sample.swap_used_mb = Some(bytes_to_mb(*value)),
             }
         }
     }
@@ -493,10 +512,14 @@ mod tests {
                 series("web-01:9100", vec![(1700000000.0, 2147483648.0)]), // by hostname
                 series("10.0.0.99:9100", vec![(1700000000.0, 1024.0)]),    // unknown IP
             ],
+            swap_series: vec![
+                // Merged into the same instant as the CPU and RAM points.
+                series("10.0.0.5:9100", vec![(1700000000.0, 536870912.0)]),
+            ],
             skipped_points: 0,
         };
         let assembled = assemble_samples(&fetched, &assets);
-        // 2 of 4 series matched nothing.
+        // 2 of 5 series matched nothing.
         assert_eq!(assembled.unmatched_series, 2);
         assert_eq!(assembled.samples.len(), 2);
         let first = &assembled.samples[0];
@@ -504,10 +527,34 @@ mod tests {
         assert_eq!(first.sampled_at.timestamp(), 1700000000);
         assert_eq!(first.cpu_usage_percent, Some(12.5));
         assert_eq!(first.ram_used_mb, Some(2048)); // 2 GiB in MB
+        assert_eq!(first.swap_used_mb, Some(512)); // 512 MiB in MB
         let second = &assembled.samples[1];
         assert_eq!(second.sampled_at.timestamp(), 1700000300);
         assert_eq!(second.cpu_usage_percent, Some(30.0));
         assert_eq!(second.ram_used_mb, None);
+        assert_eq!(second.swap_used_mb, None);
+    }
+
+    #[test]
+    fn swap_series_merge_into_existing_instants() {
+        let assets = vec![asset("a1", "10.0.0.5", None)];
+        let fetched = FetchedUtilization {
+            cpu_series: vec![series("10.0.0.5:9100", vec![(1700000000.0, 12.5)])],
+            ram_series: vec![],
+            swap_series: vec![series(
+                "10.0.0.5:9100",
+                vec![(1700000000.0, 1048576.0), (1700000300.0, 2097152.0)],
+            )],
+            skipped_points: 0,
+        };
+        let assembled = assemble_samples(&fetched, &assets);
+        assert_eq!(assembled.samples.len(), 2);
+        let first = &assembled.samples[0];
+        assert_eq!(first.cpu_usage_percent, Some(12.5));
+        assert_eq!(first.swap_used_mb, Some(1));
+        let second = &assembled.samples[1];
+        assert_eq!(second.cpu_usage_percent, None);
+        assert_eq!(second.swap_used_mb, Some(2));
     }
 
     #[test]
@@ -522,6 +569,7 @@ mod tests {
                 ),
             ],
             ram_series: vec![],
+            swap_series: vec![],
             skipped_points: 0,
         };
         let assembled = assemble_samples(&fetched, &assets);

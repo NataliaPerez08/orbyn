@@ -26,8 +26,12 @@ use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml
 use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::prometheus::{
     assemble_samples, ImportOptions, PrometheusClient, DEFAULT_CPU_QUERY, DEFAULT_RAM_QUERY,
+    DEFAULT_SWAP_QUERY,
 };
 use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
+use orbyn::integrations::zabbix::{
+    assemble_samples as zabbix_assemble_samples, ImportOptions as ZabbixImportOptions, ZabbixClient,
+};
 use orbyn::output::{Format, Inventory};
 use orbyn::store::postgres::PostgresStore;
 use orbyn::store::sqlite::SqliteStore;
@@ -323,6 +327,13 @@ enum Command {
         action: PrometheusAction,
     },
 
+    /// Pull historical CPU/RAM/swap utilization from Zabbix into metric
+    /// samples (one week by default).
+    Zabbix {
+        #[command(subcommand)]
+        action: ZabbixAction,
+    },
+
     /// Show the dependency graph as an edge list.
     Graph {
         #[arg(long, value_enum, default_value_t = Format::Table)]
@@ -451,6 +462,34 @@ enum PrometheusAction {
         /// bytes).
         #[arg(long)]
         ram_query: Option<String>,
+        /// Override the swap-used query (must aggregate per `instance`,
+        /// bytes). A swap query the endpoint cannot answer is skipped with a
+        /// warning; CPU and RAM history still import.
+        #[arg(long)]
+        swap_query: Option<String>,
+    },
+}
+
+/// Sub-actions of `orbyn zabbix`.
+#[derive(Debug, Subcommand)]
+enum ZabbixAction {
+    /// Import historical CPU/RAM/swap utilization samples from Zabbix.
+    Import {
+        /// Zabbix JSON-RPC endpoint, e.g.
+        /// https://zabbix.example.com/zabbix/api_jsonrpc.php.
+        #[arg(long)]
+        url: String,
+        /// API token: from ORBYN_ZABBIX_TOKEN, or `-` to read one line from
+        /// stdin so it never lands in argv.
+        #[arg(long, env = "ORBYN_ZABBIX_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        /// Skip TLS certificate verification (for self-signed Zabbix).
+        #[arg(long)]
+        no_verify: bool,
+        /// Hours of history to import (168 = one meeting week, the
+        /// right-sizing minimum).
+        #[arg(long, default_value_t = 168)]
+        lookback_hours: i64,
     },
 }
 
@@ -784,6 +823,7 @@ async fn main() -> anyhow::Result<()> {
                     step,
                     cpu_query,
                     ram_query,
+                    swap_query,
                 },
         } => {
             let token = resolve_secret(token, "--token", "ORBYN_PROMETHEUS_TOKEN")?;
@@ -827,6 +867,7 @@ async fn main() -> anyhow::Result<()> {
                     step: step.clone(),
                     cpu_query: cpu_query.unwrap_or_else(|| DEFAULT_CPU_QUERY.to_string()),
                     ram_query: ram_query.unwrap_or_else(|| DEFAULT_RAM_QUERY.to_string()),
+                    swap_query: swap_query.unwrap_or_else(|| DEFAULT_SWAP_QUERY.to_string()),
                 };
                 let fetched = client
                     .fetch_utilization(&opts)
@@ -853,6 +894,95 @@ async fn main() -> anyhow::Result<()> {
                      skipped, {} unmatched series); see `orbyn metrics <asset>`.",
                     assembled.samples.len() - inserted,
                     assembled.unmatched_series
+                );
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Zabbix {
+            action:
+                ZabbixAction::Import {
+                    url,
+                    token,
+                    no_verify,
+                    lookback_hours,
+                },
+        } => {
+            let token = resolve_secret(token, "--token", "ORBYN_ZABBIX_TOKEN")?;
+            if no_verify {
+                tracing::warn!("--no-verify disables TLS certificate verification for Zabbix");
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed Zabbix instance; \
+                     connections can be silently intercepted."
+                );
+            }
+            if is_plain_http(&url) && token.is_some() {
+                eprintln!(
+                    "WARNING: --url uses plain HTTP; the Zabbix token will travel \
+                     unencrypted over the network (audit OY-12)."
+                );
+            }
+            if lookback_hours <= 0 {
+                bail!("--lookback-hours must be positive");
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            if let Some(token) = &token {
+                redactor.add_value(token);
+            }
+            let audit = begin_audit(
+                store.as_ref(),
+                "zabbix.import",
+                "metrics",
+                Some(&format!("{lookback_hours}h lookback")),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let client = ZabbixClient::new(&url, token, no_verify)
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let end = Utc::now();
+                let start = end - chrono::Duration::hours(lookback_hours);
+                let opts = ZabbixImportOptions { start, end };
+                let fetched = client
+                    .fetch_utilization(&opts)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                if fetched.skipped_points > 0 {
+                    tracing::warn!(
+                        skipped = fetched.skipped_points,
+                        "Zabbix returned points that did not parse; they were skipped"
+                    );
+                }
+                if fetched.unsupported_items > 0 {
+                    tracing::warn!(
+                        items = fetched.unsupported_items,
+                        "Zabbix items were skipped: expected bytes for memory, or an \
+                         unsupported key"
+                    );
+                }
+                if fetched.hosts_without_items > 0 {
+                    tracing::warn!(
+                        hosts = fetched.hosts_without_items,
+                        "Zabbix hosts carry none of the supported utilization items"
+                    );
+                }
+                let assets = store.list_assets().await?;
+                let assembled = zabbix_assemble_samples(&fetched, &assets);
+                if assembled.samples.is_empty() {
+                    bail!(
+                        "no Zabbix host matched a known asset ({} unmatched hosts); discover \
+                         or import assets first, or check the host interfaces and names",
+                        assembled.unmatched_hosts
+                    );
+                }
+                let inserted = store.insert_metric_samples(&assembled.samples).await?;
+                eprintln!(
+                    "Imported {inserted} metric samples from Zabbix ({} duplicates skipped, \
+                     {} unmatched hosts); see `orbyn metrics <asset>`.",
+                    assembled.samples.len() - inserted,
+                    assembled.unmatched_hosts
                 );
                 Ok(())
             }
@@ -1901,10 +2031,18 @@ mod tests {
             .expect("prometheus import subcommand")
             .render_help()
             .to_string();
+        let zabbix_import_help = cmd
+            .find_subcommand_mut("zabbix")
+            .expect("zabbix subcommand")
+            .find_subcommand_mut("import")
+            .expect("zabbix import subcommand")
+            .render_help()
+            .to_string();
         std::env::remove_var("ORBYN_SNMP_COMMUNITY");
         std::env::remove_var("ORBYN_NETBOX_TOKEN");
         std::env::remove_var("ORBYN_WINRM_PASSWORD");
         std::env::remove_var("ORBYN_PROMETHEUS_TOKEN");
+        std::env::remove_var("ORBYN_ZABBIX_TOKEN");
 
         // The variable name stays documented, its current value never leaks.
         assert!(
@@ -1934,6 +2072,14 @@ mod tests {
         assert!(
             !prometheus_import_help.contains("help-leak-canary"),
             "token env value leaked into help: {prometheus_import_help}"
+        );
+        assert!(
+            zabbix_import_help.contains("ORBYN_ZABBIX_TOKEN"),
+            "env var name stays documented: {zabbix_import_help}"
+        );
+        assert!(
+            !zabbix_import_help.contains("help-leak-canary"),
+            "token env value leaked into help: {zabbix_import_help}"
         );
     }
 
@@ -1982,6 +2128,7 @@ mod tests {
             "import",
             "netbox",
             "prometheus",
+            "zabbix",
             "graph",
             "assess",
             "completions",

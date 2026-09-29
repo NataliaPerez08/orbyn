@@ -188,11 +188,12 @@ explainable (evidence + rule version) right-sizing recommendation.
   (IP or hostname). Re-imports are idempotent (one sample per asset and
   instant). A bearer token, when needed, travels through curl stdin
   (`-H @-`), never argv.
-- Rule catalog 0.7.0 adds `rs.window-insufficient` (guidance when evidence
+- Rule catalog 0.8.0 adds `rs.window-insufficient` (guidance when evidence
   is too weak), `rs.cpu-overprovisioned` / `rs.ram-overprovisioned`
   (p99 + 50% headroom suggestions, only from a ready window) and
-  `rs.cpu-saturated` / `rs.ram-saturated` (p95 >= 90% warnings). Every
-  finding carries the observation window as evidence.
+  `rs.cpu-saturated` / `rs.ram-saturated` (p95 >= 90% warnings), plus
+  `rs.swap-pressure`, `rs.utilization-trend` and `rs.storage-overprovisioned`.
+  Every finding carries the observation window as evidence.
 
 ## Post-v1.0 — Evolution phases
 
@@ -240,10 +241,7 @@ supported field without silent loss.
 
 ### Phase 3 — Evidence-based right-sizing
 
-**Status:** partially implemented: the Prometheus importer and the first
-right-sizing rules shipped with v1.2 (see above). Remaining: Zabbix
-importer, swap/storage rules, minimum observation-window tuning and
-cross-window comparison.
+**Status:** implemented.
 
 **Goal:** produce explainable recommendations with sufficient confidence.
 
@@ -258,6 +256,28 @@ cross-window comparison.
 **Exit criterion:** an asset with sufficient utilization data produces a
 reproducible recommendation; an asset without sufficient data produces an
 explicit warning.
+
+Shipped in this phase:
+
+- Rule catalog **0.8.0** adds `rs.swap-pressure` (sustained swap over a ready
+  window: the working set does not fit in RAM), `rs.utilization-trend`
+  (p95 grew >= 20% between the prior and the recent week, so the current week
+  is not a stable baseline) and `rs.storage-overprovisioned` (a >= 100 GiB
+  volume at <= 20% used). The storage rule is explicitly labelled a
+  point-in-time observation rather than a utilization window, because disk
+  usage is only sampled at discovery.
+- Windows summarize swap alongside CPU and RAM, and a window spanning two
+  full right-sizing weeks is split into a prior and a recent half
+  (`orbyn metrics` shows the trend, and its CSV carries `prior_p95` /
+  `recent_p95` rows). A single week produces no comparison.
+- `orbyn prometheus import --swap-query` imports swap used, so the swap rule
+  is reachable from Prometheus. A swap query the endpoint cannot answer is
+  skipped with a warning rather than failing the import.
+- `orbyn zabbix import` pulls a week of CPU, RAM and swap history through the
+  Zabbix JSON-RPC API (`host.get`, `item.get`, `history.get` through `curl`),
+  mapping hosts onto assets by interface IP then name. The API token travels
+  inside the JSON-RPC envelope on curl stdin (`--data-binary @-`), never argv.
+  Memory items are only accepted when Zabbix reports their unit as bytes.
 
 ### Phase 4 — Scale and operations
 

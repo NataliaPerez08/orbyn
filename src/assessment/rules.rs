@@ -97,6 +97,24 @@ pub fn catalog() -> &'static [Rule] {
             description: "Observed RAM utilization is saturated (p95 >= 90% of total)",
             evaluate: rule_rs_ram_saturated,
         },
+        Rule {
+            id: "rs.swap-pressure",
+            description: "Sustained swap usage over the window; the working set does \
+                          not fit in RAM",
+            evaluate: rule_rs_swap_pressure,
+        },
+        Rule {
+            id: "rs.utilization-trend",
+            description: "Utilization grew between the prior and the recent week \
+                          (p95 up >= 20%), so the current week is not a baseline",
+            evaluate: rule_rs_utilization_trend,
+        },
+        Rule {
+            id: "rs.storage-overprovisioned",
+            description: "Filesystem is large and nearly empty; the target disk can \
+                          be smaller (point-in-time observation, not a window)",
+            evaluate: rule_rs_storage_overprovisioned,
+        },
     ]
 }
 
@@ -526,6 +544,31 @@ const RAM_OVERPROVISIONED_SHARE: f64 = 0.6;
 /// Floor for a suggested RAM allocation: never propose less than 1 GiB.
 const RAM_SUGGESTION_FLOOR_MB: f64 = 1024.0;
 
+/// Absolute floor for swap pressure, in MB. A busy host paging a few MB of
+/// swap is normal; sustained swap is not.
+const SWAP_PRESSURE_FLOOR_MB: f64 = 256.0;
+
+/// Swap pressure also counts at this share of total RAM: 10% of 16 GiB is
+/// 1.6 GiB of paging, which is a capacity problem regardless of the floor.
+const SWAP_PRESSURE_RAM_SHARE: f64 = 0.1;
+
+/// A half-week-over-week growth factor in p95 that ends a stable baseline.
+const TREND_GROWTH_FACTOR: f64 = 1.2;
+
+/// A filesystem must be at least this large (in KB, 100 GiB) before a
+/// right-sizing opinion about it is worth an engineer's time.
+const STORAGE_MIN_SIZE_KB: u64 = 100 * 1024 * 1024;
+
+/// A filesystem at or below this used percentage counts as oversized.
+const STORAGE_OVERPROVISIONED_PCT: u32 = 20;
+
+/// A filesystem is only called oversized when the headroom-sized suggestion
+/// fits within this share of the current volume.
+const STORAGE_OVERPROVISIONED_SHARE: f64 = 0.5;
+
+/// Floor for a suggested volume size, in KB: never propose less than 20 GiB.
+const STORAGE_SUGGESTION_FLOOR_KB: u64 = 20 * 1024 * 1024;
+
 fn rule_rs_window_insufficient(input: &AssessmentInput, findings: &mut Vec<Finding>) {
     for window in &input.metric_windows {
         if window.stats.right_sizing_ready() {
@@ -710,6 +753,218 @@ fn rule_rs_ram_saturated(input: &AssessmentInput, findings: &mut Vec<Finding>) {
                 window_evidence(&window.stats),
             ],
             asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+/// Sustained swap usage over a right-sizing window: the working set does not
+/// fit in RAM, so the host is paying paging latency. A snapshot of swap is
+/// not evidence — only a full week's p95 is, which is why this reuses the
+/// ready-window gate.
+fn rule_rs_swap_pressure(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(p95_mb) = window.stats.swap_p95_mb else {
+            continue;
+        };
+        let total_mb = input
+            .capacities
+            .iter()
+            .find(|c| c.asset_id == window.asset_id)
+            .and_then(|c| c.ram_total_mb);
+        // Without a RAM total only the absolute floor can apply; the share
+        // threshold exists to catch big hosts, so it is skipped, not guessed.
+        let threshold = match total_mb {
+            Some(total_mb) => {
+                (total_mb as f64 * SWAP_PRESSURE_RAM_SHARE).max(SWAP_PRESSURE_FLOOR_MB)
+            }
+            None => SWAP_PRESSURE_FLOOR_MB,
+        };
+        if p95_mb < threshold {
+            continue;
+        }
+        let share = total_mb.map(|t| format!(" ({:.1}% of {t} MB RAM)", p95_mb / t as f64 * 100.0));
+        findings.push(Finding {
+            rule_id: "rs.swap-pressure".into(),
+            severity: Severity::Warning,
+            message: format!(
+                "sustained swap usage (p95 {p95_mb:.0} MB >= {threshold:.0} MB{}) over the \
+                 window; the working set does not fit in RAM, so expect paging latency \
+                 during migration",
+                share.as_deref().unwrap_or("")
+            ),
+            evidence: vec![
+                format!(
+                    "observed swap: avg {:.0} MB  p95 {p95_mb:.0} MB  p99 {:.0} MB  peak {:.0} MB",
+                    window.stats.swap_avg_mb.unwrap_or(0.0),
+                    window.stats.swap_p99_mb.unwrap_or(0.0),
+                    window.stats.swap_peak_mb.unwrap_or(0.0)
+                ),
+                format!(
+                    "threshold: max({SWAP_PRESSURE_FLOOR_MB:.0} MB absolute, \
+                     {SWAP_PRESSURE_RAM_SHARE:.0} of total RAM) = {threshold:.0} MB"
+                ),
+                format!(
+                    "observed RAM: p99 {:.0} MB",
+                    window.stats.ram_p99_mb.unwrap_or(0.0)
+                ),
+                window_evidence(&window.stats),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+/// Week-over-week growth in p95. Sizing a host to this week when the workload
+/// is growing would under-provision it within a month, so the finding says
+/// the baseline is moving rather than proposing a smaller allocation.
+fn rule_rs_utilization_trend(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(comparison) = &window.stats.comparison else {
+            continue;
+        };
+        let cpu = growth(
+            comparison.cpu_p95_prior_percent,
+            comparison.cpu_p95_recent_percent,
+        )
+        .filter(|g| g.grew());
+        let ram =
+            growth(comparison.ram_p95_prior_mb, comparison.ram_p95_recent_mb).filter(|g| g.grew());
+        if cpu.is_none() && ram.is_none() {
+            continue;
+        }
+        let moved: Vec<String> = [
+            cpu.map(|g| format!("CPU p95 {:.1}% -> {:.1}%", g.prior, g.recent)),
+            ram.map(|g| format!("RAM p95 {:.0} MB -> {:.0} MB", g.prior, g.recent)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let mut evidence = vec![format!(
+            "compared halves: {:.0}h prior ({} samples) vs {:.0}h recent ({} samples)",
+            comparison.sub_window_hours,
+            comparison.prior_sample_count,
+            comparison.sub_window_hours,
+            comparison.recent_sample_count,
+        )];
+        for (label, g) in [("CPU p95", cpu), ("RAM p95", ram)] {
+            if let Some(g) = g {
+                evidence.push(format!(
+                    "{label}: {:.1} -> {:.1} ({:+.0}%)",
+                    g.prior,
+                    g.recent,
+                    (g.ratio() - 1.0) * 100.0
+                ));
+            }
+        }
+        evidence.push(window_evidence(&window.stats));
+
+        findings.push(Finding {
+            rule_id: "rs.utilization-trend".into(),
+            severity: Severity::Info,
+            message: format!(
+                "utilization is growing week over week ({}); at least {TREND_GROWTH_FACTOR:.1}x \
+                 between the two halves, so the current week is not a stable baseline for \
+                 right-sizing",
+                moved.join(", ")
+            ),
+            evidence,
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+/// Prior and recent p95, when both halves carry data and the prior is
+/// non-zero (growth against a zero baseline is undefined, not infinite).
+#[derive(Clone, Copy)]
+struct Growth {
+    prior: f64,
+    recent: f64,
+}
+
+impl Growth {
+    fn ratio(&self) -> f64 {
+        self.recent / self.prior
+    }
+
+    fn grew(&self) -> bool {
+        self.ratio() >= TREND_GROWTH_FACTOR
+    }
+}
+
+fn growth(prior: Option<f64>, recent: Option<f64>) -> Option<Growth> {
+    let (prior, recent) = (prior?, recent?);
+    if prior <= 0.0 {
+        return None;
+    }
+    Some(Growth { prior, recent })
+}
+
+/// A large, nearly empty filesystem. This is a *point-in-time* observation
+/// from the last discovery, not a utilization window, so it is reported as
+/// Info and its evidence says so: a volume that fills up between scans looks
+/// identical to one that is genuinely oversized.
+fn rule_rs_storage_overprovisioned(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for asset in &input.assets {
+        let oversized: Vec<(String, u64)> = input
+            .filesystems
+            .iter()
+            .filter(|f| f.asset_id == asset.id)
+            .filter(|f| f.size_kb >= STORAGE_MIN_SIZE_KB)
+            .filter(|f| f.used_pct.unwrap_or(u32::MAX) <= STORAGE_OVERPROVISIONED_PCT)
+            .filter_map(|f| {
+                let used_kb = f.used_kb? as f64;
+                let suggested = (used_kb * RIGHT_SIZING_HEADROOM)
+                    .ceil()
+                    .max(STORAGE_SUGGESTION_FLOOR_KB as f64) as u64;
+                (suggested as f64 <= f.size_kb as f64 * STORAGE_OVERPROVISIONED_SHARE)
+                    .then(|| (f.mount.clone(), suggested))
+            })
+            .collect();
+        if oversized.is_empty() {
+            continue;
+        }
+        let evidence: Vec<String> = input
+            .filesystems
+            .iter()
+            .filter(|f| f.asset_id == asset.id)
+            .filter(|f| oversized.iter().any(|(mount, _)| *mount == f.mount))
+            .map(|f| {
+                let used = f.used_kb.unwrap_or(0);
+                let suggested = oversized
+                    .iter()
+                    .find(|(mount, _)| *mount == f.mount)
+                    .map(|(_, s)| *s)
+                    .unwrap_or(used);
+                format!(
+                    "{}: {}% used ({} KB) on a {} KB volume -> {} KB \
+                     (ceil(used x {RIGHT_SIZING_HEADROOM}), floor {} KB)",
+                    f.mount,
+                    f.used_pct.unwrap_or(0),
+                    used,
+                    f.size_kb,
+                    suggested,
+                    STORAGE_SUGGESTION_FLOOR_KB
+                )
+            })
+            .collect();
+        findings.push(Finding {
+            rule_id: "rs.storage-overprovisioned".into(),
+            severity: Severity::Info,
+            message: format!(
+                "storage is oversized: {} volume(s) are <= {STORAGE_OVERPROVISIONED_PCT}% used; \
+                 a smaller target disk keeps migration windows short",
+                oversized.len()
+            ),
+            evidence: evidence
+                .into_iter()
+                .chain(std::iter::once(
+                    "point-in-time observation from the last discovery, not a utilization \
+                     window; re-verify with `orbyn discover` after a migration or a data load"
+                        .to_string(),
+                ))
+                .collect(),
+            asset_id: Some(asset.id.clone()),
         });
     }
 }
@@ -1132,6 +1387,84 @@ mod tests {
         }
     }
 
+    /// A ready window that also carries swap samples and, when
+    /// `swap_series` is set, a two-week span with a prior/recent split.
+    fn window_with_swap(asset_id: &str, swap_mb: u64) -> AssetWindow {
+        let start = Utc::now() - chrono::Duration::hours(200);
+        let samples: Vec<crate::domain::MetricSample> = (0..24)
+            .map(|i| crate::domain::MetricSample {
+                asset_id: asset_id.into(),
+                sampled_at: start + chrono::Duration::hours(i * 8),
+                cpu_usage_percent: Some(10.0),
+                ram_used_mb: Some(1024),
+                ram_available_mb: None,
+                swap_used_mb: Some(swap_mb),
+                load_1m: None,
+                load_5m: None,
+                load_15m: None,
+            })
+            .collect();
+        let stats = crate::metrics::summarize(&samples).expect("window summarizes");
+        assert!(stats.right_sizing_ready(), "fixture must be ready");
+        AssetWindow {
+            asset_id: asset_id.into(),
+            stats,
+        }
+    }
+
+    /// A ready two-week window whose recent half is `recent_x` the prior
+    /// half, so the trend rule has a comparison to read.
+    fn window_with_trend(asset_id: &str, prior: f64, recent: f64) -> AssetWindow {
+        let end = Utc::now();
+        let samples: Vec<crate::domain::MetricSample> = (0..48)
+            .map(|i| {
+                let age = i * 8;
+                // Older samples form the prior half of the comparison.
+                let cpu = if age > 168 { prior } else { recent };
+                crate::domain::MetricSample {
+                    asset_id: asset_id.into(),
+                    sampled_at: end - chrono::Duration::hours(age),
+                    cpu_usage_percent: Some(cpu as f32),
+                    ram_used_mb: Some(1024),
+                    ram_available_mb: None,
+                    swap_used_mb: None,
+                    load_1m: None,
+                    load_5m: None,
+                    load_15m: None,
+                }
+            })
+            .collect();
+        let stats = crate::metrics::summarize(&samples).expect("window summarizes");
+        assert!(stats.right_sizing_ready(), "fixture must be ready");
+        assert!(
+            stats.comparison.is_some(),
+            "fixture must carry a comparison"
+        );
+        AssetWindow {
+            asset_id: asset_id.into(),
+            stats,
+        }
+    }
+
+    fn filesystem_for(
+        asset_id: &str,
+        mount: &str,
+        size_kb: u64,
+        used_kb: u64,
+        used_pct: u32,
+    ) -> Filesystem {
+        Filesystem {
+            asset_id: asset_id.into(),
+            device: Some("/dev/sda1".into()),
+            mount: mount.into(),
+            fs_type: Some("ext4".into()),
+            size_kb,
+            used_kb: Some(used_kb),
+            available_kb: Some(size_kb - used_kb),
+            used_pct: Some(used_pct),
+        }
+    }
+
     #[test]
     fn insufficient_window_fires_and_suggests_import() {
         let mut window = ready_window("a1", 10.0, 1024.0);
@@ -1243,5 +1576,180 @@ mod tests {
         assert!(run(&input, "rs.cpu-overprovisioned").is_empty());
         assert!(run(&input, "rs.ram-overprovisioned").is_empty());
         assert_eq!(run(&input, "rs.window-insufficient").len(), 1);
+    }
+
+    #[test]
+    fn sustained_swap_warns() {
+        // 4096 MB of swap p95 on 16384 MB of RAM: 25% of RAM, well past both
+        // the 256 MB floor and the 10% share.
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window_with_swap("a1", 4096)],
+            ..Default::default()
+        };
+        let findings = run(&input, "rs.swap-pressure");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Warning);
+        assert!(
+            findings[0].message.contains("p95 4096 MB"),
+            "{}",
+            findings[0].message
+        );
+        assert!(
+            findings[0].message.contains("25.0% of 16384 MB RAM"),
+            "{}",
+            findings[0].message
+        );
+        // The evidence shows the observed stats, the threshold, and the window.
+        assert!(findings[0].evidence[0].contains("observed swap"));
+        assert!(findings[0].evidence[1].contains("= 1638 MB"));
+        assert!(findings[0].evidence[3].contains("window:"));
+    }
+
+    #[test]
+    fn trivial_swap_is_not_pressure() {
+        // 64 MB of swap p95 on 16384 MB of RAM: under the 256 MB floor.
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window_with_swap("a1", 64)],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.swap-pressure").is_empty());
+    }
+
+    #[test]
+    fn swap_pressure_needs_a_ready_window() {
+        // A snapshot of swap usage is not evidence of sustained pressure.
+        let mut window = window_with_swap("a1", 4096);
+        window.stats.span_hours = Some(0.0);
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.swap-pressure").is_empty());
+    }
+
+    #[test]
+    fn swap_pressure_uses_the_floor_without_a_ram_total() {
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            metric_windows: vec![window_with_swap("a1", 512)],
+            ..Default::default()
+        };
+        let findings = run(&input, "rs.swap-pressure");
+        assert_eq!(findings.len(), 1);
+        // Without a RAM total only the absolute floor applies, and the
+        // finding says so rather than inventing a percentage.
+        assert!(
+            findings[0].message.contains(">= 256 MB"),
+            "{}",
+            findings[0].message
+        );
+        assert!(
+            !findings[0].message.contains("%"),
+            "{}",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn growing_utilization_is_reported_as_a_trend() {
+        // CPU p95 10% -> 30%: 3x, past the 1.2x growth factor.
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window_with_trend("a1", 10.0, 30.0)],
+            ..Default::default()
+        };
+        let findings = run(&input, "rs.utilization-trend");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(
+            findings[0].message.contains("CPU p95 10.0% -> 30.0%"),
+            "{}",
+            findings[0].message
+        );
+        assert!(
+            findings[0].evidence[1].contains("+200%"),
+            "{}",
+            findings[0].evidence[1]
+        );
+        // The two halves are named in the evidence, with their sample counts.
+        assert!(findings[0].evidence[0].contains("168h prior"));
+    }
+
+    #[test]
+    fn flat_and_falling_utilization_are_not_a_trend() {
+        for (prior, recent) in [(10.0, 11.0), (10.0, 5.0)] {
+            let input = AssessmentInput {
+                assets: vec![asset("a1", "10.0.0.1", None)],
+                metric_windows: vec![window_with_trend("a1", prior, recent)],
+                ..Default::default()
+            };
+            assert!(
+                run(&input, "rs.utilization-trend").is_empty(),
+                "{prior} -> {recent} is not growth"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_week_has_no_trend_to_report() {
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            metric_windows: vec![ready_window("a1", 10.0, 1024.0)],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.utilization-trend").is_empty());
+    }
+
+    #[test]
+    fn oversized_storage_is_flagged_with_math_and_a_caveat() {
+        // 500 GiB volume, 50 GiB used (10%): ceil(50 x 1.5) = 75 GiB, which
+        // is 15% of the volume.
+        let size_kb = 500 * 1024 * 1024u64;
+        let used_kb = 50 * 1024 * 1024u64;
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            filesystems: vec![filesystem_for("a1", "/", size_kb, used_kb, 10)],
+            ..Default::default()
+        };
+        let findings = run(&input, "rs.storage-overprovisioned");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(
+            findings[0].evidence[0].contains("-> 78643200 KB"),
+            "{:?}",
+            findings[0].evidence[0]
+        );
+        // The caveat is not optional: this is a point-in-time observation.
+        assert!(
+            findings[0]
+                .evidence
+                .iter()
+                .any(|e| e.contains("point-in-time")),
+            "{:?}",
+            findings[0].evidence
+        );
+    }
+
+    #[test]
+    fn full_or_small_disks_are_not_flagged_as_oversized() {
+        let big = 500 * 1024 * 1024u64;
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            filesystems: vec![
+                // Well used, even though it is huge.
+                filesystem_for("a1", "/", big, 450 * 1024 * 1024, 90),
+                // Nearly empty, but too small to be worth an opinion.
+                filesystem_for("a1", "/boot", 2 * 1024 * 1024, 100 * 1024, 5),
+            ],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.storage-overprovisioned").is_empty());
     }
 }

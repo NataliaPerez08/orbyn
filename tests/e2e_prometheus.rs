@@ -34,6 +34,14 @@ if [[ "$url" == *node_cpu_seconds_total* ]]; then
 elif [[ "$url" == *node_memory_MemTotal* ]]; then
   values="${ORBYN_PROM_RAM_VALUES}"
   instance="${ORBYN_PROM_RAM_INSTANCE:-10.0.0.2:9100}"
+elif [[ "$url" == *node_memory_SwapTotal* ]]; then
+  if [[ -z "${ORBYN_PROM_SWAP_VALUES:-}" ]]; then
+    # No swap series configured: behave like an exporter without swap.
+    printf '{"status":"success","data":{"resultType":"matrix","result":[]}}'
+    exit 0
+  fi
+  values="${ORBYN_PROM_SWAP_VALUES}"
+  instance="${ORBYN_PROM_RAM_INSTANCE:-10.0.0.2:9100}"
 else
   printf '{"status":"error","errorType":"bad_data","error":"unknown query"}'
   exit 0
@@ -81,15 +89,39 @@ fn prom_points(count: usize, interval_hours: i64, values: &[f64]) -> String {
     (0..count)
         .map(|i| {
             let ts = now - i as i64 * interval_hours * 3600;
-            let v = values[i % values.len()];
-            if v.fract() == 0.0 {
-                format!("[{ts},\"{v:.0}\"]")
-            } else {
-                format!("[{ts},\"{v:.2}\"]")
-            }
+            prom_point(ts, values[i % values.len()])
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// One Prometheus `[clock,"value"]` point, with integers emitted unadorned
+/// so byte-sized memory values survive the round trip.
+#[cfg(unix)]
+fn prom_point(ts: i64, v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("[{ts},\"{v:.0}\"]")
+    } else {
+        format!("[{ts},\"{v:.2}\"]")
+    }
+}
+
+/// 48 points 8h apart (376h of span) with a low-utilization prior week and a
+/// busier recent week, plus a constant swap level. The split mirrors the
+/// importer's own window comparison: points older than 168h are the prior
+/// half.
+#[cfg(unix)]
+fn prom_points_growing(prior_cpu: f64, recent_cpu: f64, swap_mb: f64) -> (String, String, String) {
+    let now = chrono::Utc::now().timestamp();
+    let (mut cpu, mut ram, mut swap) = (Vec::new(), Vec::new(), Vec::new());
+    for i in 0..48 {
+        let ts = now - i as i64 * 8 * 3600;
+        let cpu_v = if i * 8 > 168 { prior_cpu } else { recent_cpu };
+        cpu.push(prom_point(ts, cpu_v));
+        ram.push(prom_point(ts, 2048.0));
+        swap.push(prom_point(ts, swap_mb * 1024.0 * 1024.0));
+    }
+    (cpu.join(","), ram.join(","), swap.join(","))
 }
 
 #[cfg(unix)]
@@ -257,7 +289,94 @@ fn assess_right_sizes_a_week_of_utilization() {
         assess.contains("window: 24 samples over 184.0h"),
         "{assess}"
     );
-    assert!(assess.contains("0.7.0"), "{assess}");
+    assert!(assess.contains("0.8.0"), "{assess}");
+}
+
+#[cfg(unix)]
+#[test]
+fn assess_reports_swap_pressure_and_a_growing_trend() {
+    let dir = TempDir::new("prom-swap-trend");
+    let ssh = fake_bin(&dir, "ssh", FAKE_SSH_NO_SNAPSHOTS_SCRIPT);
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+
+    // Host-level collection records the allocation (4 cores, ~16 GB).
+    run_ok_combined(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.5", "--collector", "ssh"])
+            .env("ORBYN_SSH_BIN", &ssh),
+    );
+
+    // Two weeks: a quiet prior week (5% CPU, no swap) and a recent week at
+    // 30% CPU with 4 GB of swap in use.
+    let (cpu, ram, swap) = prom_points_growing(5.0, 30.0, 4096.0);
+    run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_PROM_SWAP_VALUES", &swap)
+            .env("ORBYN_PROM_CPU_INSTANCE", "10.0.0.5:9100")
+            .env("ORBYN_PROM_RAM_INSTANCE", "10.0.0.5:9100"),
+    );
+
+    // The window reports swap statistics and the week-over-week split.
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5"]));
+    assert!(metrics.contains("48 samples over 376.0h"), "{metrics}");
+    assert!(metrics.contains("Swap used  : avg 4.00 GiB"), "{metrics}");
+    assert!(
+        metrics.contains("Trend      : last 168h vs the 168h before it"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("CPU p95: p95 5.00% -> 30.00%"),
+        "{metrics}"
+    );
+
+    let csv = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5", "--format", "csv"]));
+    assert!(csv.contains("swap_used_mb,p95,4096"), "{csv}");
+    assert!(csv.contains("cpu_usage_percent,prior_p95,5"), "{csv}");
+    assert!(csv.contains("cpu_usage_percent,recent_p95,30"), "{csv}");
+
+    // The assessment raises the paging warning and the trend, both gated on
+    // the same ready window.
+    let assess = run_ok(orbyn(&dir).args(["assess", "--format", "csv"]));
+    assert!(assess.contains("rs.swap-pressure"), "{assess}");
+    assert!(
+        assess.contains("sustained swap usage (p95 4096 MB"),
+        "{assess}"
+    );
+    assert!(assess.contains("rs.utilization-trend"), "{assess}");
+    assert!(assess.contains("CPU p95 5.0% -> 30.0%"), "{assess}");
+    assert!(!assess.contains("rs.window-insufficient"), "{assess}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prometheus_import_tolerates_an_exporter_without_swap() {
+    let dir = TempDir::new("prom-no-swap");
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+    import_json(&dir, INVENTORY_JSON);
+
+    // No ORBYN_PROM_SWAP_VALUES: the fake returns an empty swap matrix, the
+    // way an exporter without swap metrics would.
+    let (cpu, ram) = week_of_low_utilization();
+    let out = run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram),
+    );
+    assert!(
+        out.contains("Imported 24 metric samples from Prometheus"),
+        "{out}"
+    );
+
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.2"]));
+    assert!(metrics.contains("sufficient for right-sizing"), "{metrics}");
+    // No swap samples means no swap line, not a line full of zeroes.
+    assert!(!metrics.contains("Swap used"), "{metrics}");
+    let assess = run_ok(orbyn(&dir).args(["assess", "--format", "csv"]));
+    assert!(!assess.contains("rs.swap-pressure"), "{assess}");
 }
 
 #[cfg(unix)]

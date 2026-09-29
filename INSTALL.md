@@ -16,6 +16,7 @@ by the collectors you plan to use:
 | Windows host discovery (native WinRM) | `curl` |
 | NetBox import | `curl` |
 | Prometheus utilization import | `curl` |
+| Zabbix utilization import | `curl` |
 | DNS relationship evidence (CNAME chains, PTR) | `dig` (optional; without it only forward IP matching via the system resolver) |
 
 SSH host discovery uses key-based authentication through `ssh-agent` or an

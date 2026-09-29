@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{Asset, Capacity, Connection, Dependency, Filesystem, Service};
 
 /// Version of the rule catalog. Bump whenever a rule changes behavior so
-/// reports stay comparable across releases.
-pub const RULES_VERSION: &str = "0.7.0";
+/// reports stay comparable across releases. 0.8.0 added the swap-pressure,
+/// utilization-trend and storage-overprovisioned rules.
+pub const RULES_VERSION: &str = "0.8.0";
 
 /// A named assessment rule result: what was found, why it matters, and the
 /// evidence that produced it.

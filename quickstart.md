@@ -125,6 +125,10 @@ orbyn netbox import --url https://netbox.example.com --token - < ~/.netbox-token
 # onto assets by the `instance` label — IP or hostname). Run it from cron
 # for continuous evidence; re-importing the same window is a no-op.
 orbyn prometheus import --url http://prometheus:9090
+# ... or from a Zabbix JSON-RPC API (hosts map onto assets by interface IP,
+# then by name; read-only)
+orbyn zabbix import --url https://zabbix.example.com/zabbix/api_jsonrpc.php \
+    --token - < ~/.zabbix-token
 orbyn metrics 10.0.0.10        # span, percentiles, right-sizing readiness
 ```
 

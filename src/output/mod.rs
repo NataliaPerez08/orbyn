@@ -259,6 +259,13 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
                         s.ram_p99_mb,
                         s.ram_peak_mb,
                     ),
+                    (
+                        "swap_used_mb",
+                        s.swap_avg_mb,
+                        s.swap_p95_mb,
+                        s.swap_p99_mb,
+                        s.swap_peak_mb,
+                    ),
                 ];
                 for (name, avg, p95, p99, peak) in rows {
                     out.push_str(&format!(
@@ -267,6 +274,34 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
                         fmt_opt_float(p95),
                         fmt_opt_float(p99),
                         fmt_opt_float(peak),
+                    ));
+                }
+                if let Some(cmp) = &s.comparison {
+                    for (name, prior, recent) in [
+                        (
+                            "cpu_usage_percent",
+                            cmp.cpu_p95_prior_percent,
+                            cmp.cpu_p95_recent_percent,
+                        ),
+                        ("ram_used_mb", cmp.ram_p95_prior_mb, cmp.ram_p95_recent_mb),
+                        (
+                            "swap_used_mb",
+                            cmp.swap_p95_prior_mb,
+                            cmp.swap_p95_recent_mb,
+                        ),
+                    ] {
+                        out.push_str(&format!(
+                            "{name},prior_p95,{}\n{name},recent_p95,{}\n",
+                            fmt_opt_float(prior),
+                            fmt_opt_float(recent),
+                        ));
+                    }
+                    out.push_str(&format!(
+                        "comparison_sub_window_hours,,{}\ncomparison_prior_samples,,{}\n\
+                         comparison_recent_samples,,{}\n",
+                        fmt_opt_float(Some(cmp.sub_window_hours)),
+                        cmp.prior_sample_count,
+                        cmp.recent_sample_count,
                     ));
                 }
                 out.push_str(&format!(
@@ -293,18 +328,6 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
         Format::Table => match stats {
             None => "No metric samples recorded for this asset yet.\n".to_string(),
             Some(s) => {
-                let mb = |v: Option<f64>| {
-                    v.map(|mb| {
-                        if mb >= 1024.0 {
-                            format!("{:.2} GiB", mb / 1024.0)
-                        } else {
-                            format!("{mb:.0} MB")
-                        }
-                    })
-                    .unwrap_or_else(|| "-".into())
-                };
-                let pct =
-                    |v: Option<f64>| v.map(|v| format!("{v:.2}%")).unwrap_or_else(|| "-".into());
                 let span = match (s.span_hours, s.window_start, s.window_end) {
                     (Some(hours), Some(start), Some(end)) => format!(
                         "{} samples over {:.1}h ({} .. {})",
@@ -328,22 +351,100 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
                 format!(
                     "Utilization window: {span}\n\
                      CPU usage : avg {}   p95 {}   p99 {}   peak {}\n\
-                     RAM used  : avg {}   p95 {}   p99 {}   peak {}\n\
-                     Confidence: {} (evidence quality)\n\
-                     Window    : {readiness}\n",
-                    pct(s.cpu_avg_percent),
-                    pct(s.cpu_p95_percent),
-                    pct(s.cpu_p99_percent),
-                    pct(s.cpu_peak_percent),
-                    mb(s.ram_avg_mb),
-                    mb(s.ram_p95_mb),
-                    mb(s.ram_p99_mb),
-                    mb(s.ram_peak_mb),
-                    display_confidence(s.confidence),
-                )
+                     RAM used  : avg {}   p95 {}   p99 {}   peak {}\n",
+                    fmt_pct(s.cpu_avg_percent),
+                    fmt_pct(s.cpu_p95_percent),
+                    fmt_pct(s.cpu_p99_percent),
+                    fmt_pct(s.cpu_peak_percent),
+                    fmt_mb(s.ram_avg_mb),
+                    fmt_mb(s.ram_p95_mb),
+                    fmt_mb(s.ram_p99_mb),
+                    fmt_mb(s.ram_peak_mb),
+                ) + &swap_line(s)
+                    + &comparison_lines(s)
+                    + &format!(
+                        "Confidence: {} (evidence quality)\n\
+                         Window    : {readiness}\n",
+                        display_confidence(s.confidence),
+                    )
             }
         },
     }
+}
+
+/// Swap row, shown only when the window actually carries swap samples: a
+/// dash everywhere would read as "swap is zero" on hosts that never report
+/// it.
+fn swap_line(s: &WindowStats) -> String {
+    if s.swap_p95_mb.is_none() {
+        return String::new();
+    }
+    format!(
+        "Swap used  : avg {}   p95 {}   p99 {}   peak {}\n",
+        fmt_mb(s.swap_avg_mb),
+        fmt_mb(s.swap_p95_mb),
+        fmt_mb(s.swap_p99_mb),
+        fmt_mb(s.swap_peak_mb),
+    )
+}
+
+/// Week-over-week block, shown only when the window spans two right-sizing
+/// weeks and both halves carry enough samples.
+fn comparison_lines(s: &WindowStats) -> String {
+    let Some(cmp) = &s.comparison else {
+        return String::new();
+    };
+    let mut out = format!(
+        "Trend      : last {:.0}h vs the {:.0}h before it ({} vs {} samples)\n",
+        cmp.sub_window_hours, cmp.sub_window_hours, cmp.recent_sample_count, cmp.prior_sample_count,
+    );
+    let mut line = |label: &str,
+                    prior: Option<f64>,
+                    recent: Option<f64>,
+                    render: &dyn Fn(Option<f64>) -> String| {
+        if prior.is_none() && recent.is_none() {
+            return;
+        }
+        out.push_str(&format!(
+            "  {label}: p95 {} -> {}\n",
+            render(prior),
+            render(recent)
+        ));
+    };
+    line(
+        "CPU p95",
+        cmp.cpu_p95_prior_percent,
+        cmp.cpu_p95_recent_percent,
+        &fmt_pct,
+    );
+    line(
+        "RAM p95",
+        cmp.ram_p95_prior_mb,
+        cmp.ram_p95_recent_mb,
+        &fmt_mb,
+    );
+    line(
+        "Swap p95",
+        cmp.swap_p95_prior_mb,
+        cmp.swap_p95_recent_mb,
+        &fmt_mb,
+    );
+    out
+}
+
+fn fmt_mb(v: Option<f64>) -> String {
+    v.map(|mb| {
+        if mb >= 1024.0 {
+            format!("{:.2} GiB", mb / 1024.0)
+        } else {
+            format!("{mb:.0} MB")
+        }
+    })
+    .unwrap_or_else(|| "-".into())
+}
+
+fn fmt_pct(v: Option<f64>) -> String {
+    v.map(|v| format!("{v:.2}%")).unwrap_or_else(|| "-".into())
 }
 
 fn display_confidence(c: SampleConfidence) -> &'static str {
@@ -1119,6 +1220,7 @@ fn severity_str(severity: Severity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::WindowComparison;
     use chrono::{Duration, Utc};
 
     fn asset(id: &str, ip: &str, hostname: Option<&str>) -> Asset {
@@ -1157,6 +1259,89 @@ mod tests {
         assert_eq!(human_kb(10 * 1024), "10.0M");
         assert_eq!(human_kb(50 * 1024 * 1024), "50.0G");
         assert_eq!(human_kb(1024 * 1024 * 1024), "1024.0G");
+    }
+
+    /// A window with CPU/RAM only, as an importer that never queries swap
+    /// would produce.
+    fn stats_without_swap() -> WindowStats {
+        WindowStats {
+            sample_count: 24,
+            window_start: None,
+            window_end: None,
+            span_hours: Some(184.0),
+            cpu_avg_percent: Some(20.0),
+            cpu_p95_percent: Some(25.0),
+            cpu_p99_percent: Some(25.0),
+            cpu_peak_percent: Some(25.0),
+            ram_avg_mb: Some(2560.0),
+            ram_p95_mb: Some(3072.0),
+            ram_p99_mb: Some(3072.0),
+            ram_peak_mb: Some(3072.0),
+            swap_avg_mb: None,
+            swap_p95_mb: None,
+            swap_p99_mb: None,
+            swap_peak_mb: None,
+            confidence: SampleConfidence::High,
+            comparison: None,
+        }
+    }
+
+    #[test]
+    fn metrics_table_hides_swap_when_there_are_no_swap_samples() {
+        let out = metrics(Some(&stats_without_swap()), Format::Table);
+        assert!(!out.contains("Swap used"), "{out}");
+        assert!(!out.contains("Trend"), "{out}");
+    }
+
+    #[test]
+    fn metrics_table_renders_swap_and_the_week_over_week_trend() {
+        let mut stats = stats_without_swap();
+        stats.swap_avg_mb = Some(512.0);
+        stats.swap_p95_mb = Some(1024.0);
+        stats.swap_p99_mb = Some(2048.0);
+        stats.swap_peak_mb = Some(2048.0);
+        stats.comparison = Some(WindowComparison {
+            sub_window_hours: 168.0,
+            prior_sample_count: 26,
+            recent_sample_count: 22,
+            prior_span_hours: Some(168.0),
+            recent_span_hours: Some(168.0),
+            cpu_p95_prior_percent: Some(10.0),
+            cpu_p95_recent_percent: Some(40.0),
+            ram_p95_prior_mb: Some(2048.0),
+            ram_p95_recent_mb: Some(3072.0),
+            swap_p95_prior_mb: None,
+            swap_p95_recent_mb: Some(1024.0),
+        });
+
+        let out = metrics(Some(&stats), Format::Table);
+        assert!(
+            out.contains("Swap used  : avg 512 MB   p95 1.00 GiB"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Trend      : last 168h vs the 168h before it (22 vs 26 samples)"),
+            "{out}"
+        );
+        assert!(out.contains("CPU p95: p95 10.00% -> 40.00%"), "{out}");
+        assert!(out.contains("RAM p95: p95 2.00 GiB -> 3.00 GiB"), "{out}");
+        // A half that carries no swap data shows as "-", not as a silent
+        // omission: "swap appeared this week" is the useful signal.
+        assert!(out.contains("Swap p95: p95 - -> 1.00 GiB"), "{out}");
+        // A metric with no data in either half gets no trend line at all.
+        stats
+            .comparison
+            .as_mut()
+            .expect("comparison")
+            .swap_p95_recent_mb = None;
+        let out = metrics(Some(&stats), Format::Table);
+        assert!(!out.contains("Swap p95:"), "{out}");
+
+        let csv = metrics(Some(&stats), Format::Csv);
+        assert!(csv.contains("swap_used_mb,p95,1024"), "{csv}");
+        assert!(csv.contains("cpu_usage_percent,prior_p95,10"), "{csv}");
+        assert!(csv.contains("cpu_usage_percent,recent_p95,40"), "{csv}");
+        assert!(csv.contains("comparison_sub_window_hours,,168"), "{csv}");
     }
 
     #[test]
