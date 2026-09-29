@@ -49,11 +49,11 @@ src/
 │   ├── sqlite.rs         # SQLite via sqlx
 │   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
 │   └── rows.rs           # row decoding shared by both backends
-├── integrations/         # NetBox importer + Ansible/Terraform exporters (v1.1)
+├── integrations/         # NetBox + Prometheus importers, Ansible/Terraform exporters
 ├── graph/                # dependency graph
-├── metrics/              # capacity/utilization processing
+├── metrics/              # capacity/utilization processing (windows, right-sizing readiness)
 ├── assessment/           # migration assessment engine
-│   ├── rules.rs          # rule catalog + evaluators
+│   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
 │   └── grouping.rs       # application grouping (union-find)
 └── output/               # table / json / csv rendering
 ```
@@ -72,7 +72,8 @@ Examples:
 - PowerShell CIM queries on Windows (over OpenSSH, or native WS-Man/WinRM
   over HTTPS).
 - NetBox (read-only importer).
-- vCenter, Zabbix and Prometheus (deferred/planned).
+- Prometheus (read-only historical utilization importer, v1.2).
+- vCenter and Zabbix (deferred/planned).
 - Flow telemetry or eBPF (planned).
 
 Collectors must return typed observations and never write directly to database
@@ -292,8 +293,8 @@ asset_capacity
 Time-series observations:
 
 ```text
-metric_samples
-- sampled_at
+metric_samples                       -- one row per asset and instant
+- sampled_at                         -- (unique index on asset_id, sampled_at)
 - cpu_usage_percent
 - ram_used_mb
 - ram_available_mb
@@ -304,8 +305,18 @@ metric_samples
 ```
 
 Right-sizing must specify its observation window, sample count, aggregation,
-and safety factor. `src/metrics/` provides windowed aggregation with a minimum
-sample-count guard; a single snapshot is never treated as utilization evidence.
+and safety factor. `src/metrics/` provides windowed aggregation with a
+minimum sample-count guard; a single snapshot is never treated as
+utilization evidence. Windows also carry their temporal span, and a window
+only counts as right-sizing-ready with high sample confidence over at least
+168h of history — which is what `orbyn prometheus import` produces
+(`src/integrations/prometheus.rs`): it pulls `/api/v1/query_range` through
+`curl`, maps series onto assets by the `instance` label, and inserts
+idempotently (re-importing the same window is a no-op). The `rs.*`
+assessment rules (catalog 0.7.0) consume these windows: over-provisioning
+suggestions apply p99 + 50% headroom, saturation warnings fire at
+p95 >= 90%, and weak evidence yields explicit guidance instead of a
+recommendation.
 
 ## Future scaling
 

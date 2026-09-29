@@ -269,6 +269,20 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
                     "confidence,,{}\nsample_count,0,{}\n",
                     s.confidence, s.sample_count
                 ));
+                out.push_str(&format!(
+                    "window_start,,{}\nwindow_end,,{}\nspan_hours,,{}\n",
+                    s.window_start.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                    s.window_end.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                    fmt_opt_float(s.span_hours),
+                ));
+                out.push_str(&format!(
+                    "right_sizing_ready,,{}\n",
+                    if s.right_sizing_ready() {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                ));
             }
             out
         }
@@ -287,12 +301,32 @@ pub fn metrics(stats: Option<&WindowStats>, format: Format) -> String {
                 };
                 let pct =
                     |v: Option<f64>| v.map(|v| format!("{v:.2}%")).unwrap_or_else(|| "-".into());
+                let span = match (s.span_hours, s.window_start, s.window_end) {
+                    (Some(hours), Some(start), Some(end)) => format!(
+                        "{} samples over {:.1}h ({} .. {})",
+                        s.sample_count,
+                        hours,
+                        start.format("%Y-%m-%d %H:%M"),
+                        end.format("%Y-%m-%d %H:%M"),
+                    ),
+                    _ => format!("{} samples (no time span)", s.sample_count),
+                };
+                let readiness = if s.right_sizing_ready() {
+                    "sufficient for right-sizing".to_string()
+                } else {
+                    format!(
+                        "insufficient for right-sizing (needs >= {:.0}h of history \
+                         with high confidence; import periodic samples, e.g. \
+                         `orbyn prometheus import`)",
+                        crate::metrics::MIN_WINDOW_HOURS_FOR_RIGHT_SIZING
+                    )
+                };
                 format!(
-                    "Utilization window: {} samples\n\
+                    "Utilization window: {span}\n\
                      CPU usage : avg {}   p95 {}   p99 {}   peak {}\n\
                      RAM used  : avg {}   p95 {}   p99 {}   peak {}\n\
-                     Confidence: {} (evidence quality)\n",
-                    s.sample_count,
+                     Confidence: {} (evidence quality)\n\
+                     Window    : {readiness}\n",
                     pct(s.cpu_avg_percent),
                     pct(s.cpu_p95_percent),
                     pct(s.cpu_p99_percent),

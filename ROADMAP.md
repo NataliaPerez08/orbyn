@@ -159,6 +159,13 @@ criterion only requires one source-of-truth and one automation export).
 
 ## v1.2 — CPU/RAM utilization
 
+**Status:** implemented. Snapshots ship with host-level discovery (3 samples
+per SSH/WinRM probe); a week of history comes from the Prometheus importer
+(`orbyn prometheus import`). Zabbix is deferred to Phase 3 (the milestone
+required "Zabbix and/or Prometheus"). Periodic *scheduling* of collection is
+intentionally out of scope for the CLI product: run the importer from
+cron/systemd timers.
+
 - Snapshot resource collector.
 - Periodic CPU/RAM observations.
 - Historical metrics ingestion interface.
@@ -171,6 +178,21 @@ criterion only requires one source-of-truth and one automation export).
 
 **Exit criterion:** an asset with one meeting week of utilization can produce an
 explainable (evidence + rule version) right-sizing recommendation.
+
+- Windows carry their temporal span; `orbyn metrics` reports span, sample
+  confidence and right-sizing readiness (>= 168h of history with high
+  confidence). Snapshots never qualify on their own.
+- `orbyn prometheus import` pulls a week of CPU/RAM history
+  (`/api/v1/query_range` through `curl`, node_exporter queries by default,
+  overridable) and maps series onto assets by the `instance` label
+  (IP or hostname). Re-imports are idempotent (one sample per asset and
+  instant). A bearer token, when needed, travels through curl stdin
+  (`-H @-`), never argv.
+- Rule catalog 0.7.0 adds `rs.window-insufficient` (guidance when evidence
+  is too weak), `rs.cpu-overprovisioned` / `rs.ram-overprovisioned`
+  (p99 + 50% headroom suggestions, only from a ready window) and
+  `rs.cpu-saturated` / `rs.ram-saturated` (p95 >= 90% warnings). Every
+  finding carries the observation window as evidence.
 
 ## Post-v1.0 — Evolution phases
 
@@ -215,6 +237,11 @@ descoped by design (Orbyn stays read-only against NetBox).
 supported field without silent loss.
 
 ### Phase 3 — Evidence-based right-sizing
+
+**Status:** partially implemented: the Prometheus importer and the first
+right-sizing rules shipped with v1.2 (see above). Remaining: Zabbix
+importer, swap/storage rules, minimum observation-window tuning and
+cross-window comparison.
 
 **Goal:** produce explainable recommendations with sufficient confidence.
 

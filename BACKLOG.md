@@ -94,9 +94,11 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Periodic metric sampling (samples persisted as observations to `metric_samples`).
 - [x] **P1** p95/p99 aggregation (`orbyn metrics`, avg/p95/p99/peak).
 - [x] **P1** Observation quality/confidence model (`SampleConfidence` on count + validity).
-- [ ] **P2** Prometheus importer.
+- [x] **P1** Observation-window quality indicator (span + confidence; right-sizing
+  readiness requires >= 168h with high confidence).
+- [x] **P2** Prometheus importer (`orbyn prometheus import`, idempotent re-imports).
 - [ ] **P2** Zabbix importer.
-- [ ] **P2** Right-sizing rules with evidence.
+- [x] **P2** Right-sizing rules with evidence (catalog 0.7.0: `rs.*`).
 - [ ] **P3** Cloud SKU adapters.
 
 ## Security
@@ -134,11 +136,13 @@ added; today the product surface is `orbyn` subcommands.
 
 ### Phase 3 — Evidence-based right-sizing
 
-- [ ] **P1** Add CPU, RAM, swap and storage right-sizing rules.
-- [ ] **P1** Define minimum observation windows and insufficient-data behavior.
-- [ ] **P2** Add Prometheus importer.
+- [x] **P1** Add CPU, RAM, swap and storage right-sizing rules. (CPU/RAM shipped
+  in v1.2 catalog 0.7.0; swap/storage remain.)
+- [x] **P1** Define minimum observation windows and insufficient-data behavior.
+  (168h + high confidence; `rs.window-insufficient` is the explicit warning.)
+- [x] **P2** Add Prometheus importer.
 - [ ] **P2** Add Zabbix importer.
-- [ ] **P1** Include evidence, confidence and rule version in recommendations.
+- [x] **P1** Include evidence, confidence and rule version in recommendations.
 - [ ] **P2** Add utilization-window comparison.
 
 ### Phase 4 — Scale and operations

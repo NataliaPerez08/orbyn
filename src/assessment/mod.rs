@@ -17,7 +17,7 @@ use crate::domain::{Asset, Capacity, Connection, Dependency, Filesystem, Service
 
 /// Version of the rule catalog. Bump whenever a rule changes behavior so
 /// reports stay comparable across releases.
-pub const RULES_VERSION: &str = "0.6.0";
+pub const RULES_VERSION: &str = "0.7.0";
 
 /// A named assessment rule result: what was found, why it matters, and the
 /// evidence that produced it.
@@ -77,6 +77,17 @@ pub struct AssessmentInput {
     pub capacities: Vec<Capacity>,
     pub dependencies: Vec<Dependency>,
     pub connections: Vec<Connection>,
+    /// Summarized utilization windows (one per asset with enough samples),
+    /// consumed by the `rs.*` right-sizing rules.
+    pub metric_windows: Vec<AssetWindow>,
+}
+
+/// A per-asset utilization window summary, gathered from the store's metric
+/// samples by `orbyn assess`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetWindow {
+    pub asset_id: String,
+    pub stats: crate::metrics::WindowStats,
 }
 
 /// Per-asset migration complexity (0-100, higher = more complex).

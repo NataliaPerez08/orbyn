@@ -1,9 +1,10 @@
 //! Central secret redaction.
 //!
 //! Orbyn holds credentials in process memory (NetBox token, SNMP community,
-//! WinRM password) and embeds them at the edges into errors or persisted job
-//! records. A [`Redactor`] replaces known values with a placeholder so
-//! secrets never escape to logs, stderr, or the database.
+//! WinRM password, Prometheus token) and embeds them at the edges into
+//! errors or persisted job records. A [`Redactor`] replaces known values
+//! with a placeholder so secrets never escape to logs, stderr, or the
+//! database.
 
 /// Placeholder used in place of a redacted secret.
 pub const REDACTED: &str = "[REDACTED]";
@@ -46,6 +47,7 @@ impl Redactor {
             std::env::var("ORBYN_NETBOX_TOKEN").unwrap_or_default(),
             std::env::var("ORBYN_SNMP_COMMUNITY").unwrap_or_default(),
             std::env::var("ORBYN_WINRM_PASSWORD").unwrap_or_default(),
+            std::env::var("ORBYN_PROMETHEUS_TOKEN").unwrap_or_default(),
         ]);
         redactor
     }

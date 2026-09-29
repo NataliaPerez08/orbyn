@@ -34,7 +34,8 @@ async fn table_names(store: &SqliteStore) -> Vec<String> {
 
 async fn index_names(store: &SqliteStore) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
-        "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'index' \
+         AND (name LIKE 'idx_%' OR name LIKE 'uq_%') ORDER BY name",
     )
     .fetch_all(store.pool())
     .await
@@ -73,6 +74,7 @@ async fn migrations_create_expected_indexes() {
     let indexes = index_names(&store).await;
     for expected in [
         "idx_metric_samples_asset_time",
+        "uq_metric_samples_asset_instant",
         "idx_asset_interfaces_asset",
         "idx_asset_filesystems_asset",
         "idx_discovery_jobs_started",
@@ -157,7 +159,7 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .fetch_one(upgraded.pool())
         .await
         .expect("count applied migrations");
-    assert_eq!(migration_count, 7, "all current migrations must be applied");
+    assert_eq!(migration_count, 8, "all current migrations must be applied");
     assert!(table_names(&upgraded)
         .await
         .iter()

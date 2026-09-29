@@ -141,8 +141,12 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     ~`store_observations` logs `"observation type not yet persisted"` for
     `Observation::MetricSample`. CPU/RAM utilization and right-sizing are v1.2.~
     Snapshot sampling ships as part of discovery (3 samples per SSH probe);
-    `orbyn metrics` aggregates avg/p95/p99/peak with a confidence label.
-    Periodic *scheduling* of metric collection remains a follow-up.
+    `orbyn metrics` aggregates avg/p95/p99/peak with a confidence label and
+    the window span. Since v1.2, `orbyn prometheus import` pulls a week of
+    history (idempotent re-imports) and the `rs.*` rules produce explainable
+    right-sizing findings from ready windows. Periodic *scheduling* of
+    collection remains out of scope: run the importer from cron/systemd
+    timers.
 
 20. **NetBox import is minimal** — `gap` ~~FIXED~~
     `orbyn netbox import` now also pulls `dcim/interfaces` and

@@ -22,11 +22,11 @@ or authorization service and must not be used as one.
   logged.
 - Secret flags (`--token`, `--community`, `--winrm-password`) can be kept off
   the command line: all fall back to environment variables
-  (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`) and
-  accept the literal `-` to read one line from stdin. Values supplied
-  explicitly on the command line trigger a runtime warning (they are visible
-  in `ps` and shell history) and are registered with the redactor so they
-  cannot leak into errors, logs or job records.
+  (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`,
+  `ORBYN_PROMETHEUS_TOKEN`) and accept the literal `-` to read one line from
+  stdin. Values supplied explicitly on the command line trigger a runtime
+  warning (they are visible in `ps` and shell history) and are registered
+  with the redactor so they cannot leak into errors, logs or job records.
 - Orbyn avoids storing credentials whenever possible. The SSH-based host
   collectors store **no credentials at all**: authentication is delegated to
   ssh-agent or a user-referred identity file through a credential profile
@@ -40,9 +40,12 @@ or authorization service and must not be used as one.
   Basic credentials never travel in cleartext.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
-- API tokens (NetBox) are streamed to `curl` through stdin (`-H @-`), never
-  written to a temporary file or exposed through process arguments, logs, or
-  CLI output.
+- API tokens (NetBox, Prometheus) are streamed to `curl` through stdin
+  (`-H @-`), never written to a temporary file or exposed through process
+  arguments, logs, or CLI output. Prometheus responses are additionally
+  bounded: 16 MiB per response, 60 s per request and a 50k-point cap per
+  query, so a hostile endpoint cannot exhaust memory with an endless
+  matrix.
 - The SNMP community travels to `snmpwalk` through a short-lived `0600`
   `snmp.conf` inside a `0700` directory; directories left behind by abruptly
   terminated runs are removed (best effort, current-user owned, age-gated)
@@ -65,8 +68,8 @@ or authorization service and must not be used as one.
   a partial payload.
 - Child processes never inherit Orbyn's secret-bearing environment
   variables (`ORBYN_SNMP_COMMUNITY`, `ORBYN_NETBOX_TOKEN`,
-  `ORBYN_WINRM_PASSWORD`, `ORBYN_DB`): a hijacked collector binary cannot
-  read them from its own environment.
+  `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`, `ORBYN_DB`): a hijacked
+  collector binary cannot read them from its own environment.
 
 ## Reporting a vulnerability
 

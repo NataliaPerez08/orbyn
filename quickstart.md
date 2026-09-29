@@ -119,6 +119,12 @@ orbyn export --format terraform --tf-import aws_instance \
 orbyn netbox import --url https://netbox.example.com --token "$ORBYN_NETBOX_TOKEN"
 # ... or pipe the token with `--token -` so it never lands in argv
 orbyn netbox import --url https://netbox.example.com --token - < ~/.netbox-token
+
+# Prometheus historical utilization import (one week by default; series map
+# onto assets by the `instance` label — IP or hostname). Run it from cron
+# for continuous evidence; re-importing the same window is a no-op.
+orbyn prometheus import --url http://prometheus:9090
+orbyn metrics 10.0.0.10        # span, percentiles, right-sizing readiness
 ```
 
 ```bash
@@ -143,6 +149,8 @@ orbyn deps dns                                 # DNS relationship evidence
 
 orbyn assess                    # explainable findings + complexity scores
 orbyn assess --rules            # the rule catalog and its version
+# with a week of Prometheus history, the rs.* rules add right-sizing
+# recommendations (over-provisioning suggestions, saturation warnings)
 ```
 
 ## Troubleshooting

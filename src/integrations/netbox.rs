@@ -41,10 +41,10 @@ const NETBOX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Hosts are lowercased reg-names or canonical IPv6 literals and ports are
 /// normalized to the scheme default, so origins compare with `==`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct UrlOrigin {
-    scheme: String,
-    host: String,
-    port: u16,
+pub(crate) struct UrlOrigin {
+    pub(crate) scheme: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
 }
 
 /// Parse the origin of an absolute http(s) URL under a strict grammar.
@@ -58,7 +58,7 @@ struct UrlOrigin {
 /// Pagination `next` URLs come from the server; a prefix check is not enough
 /// (`https://netbox.example.com.evil/` and `https://netbox.example.com@evil/`
 /// both pass one), so callers must compare parsed origins instead.
-fn url_origin(url: &str) -> Option<UrlOrigin> {
+pub(crate) fn url_origin(url: &str) -> Option<UrlOrigin> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
@@ -554,6 +554,7 @@ impl NetBoxClient {
             .env_remove("ORBYN_SNMP_COMMUNITY")
             .env_remove("ORBYN_NETBOX_TOKEN")
             .env_remove("ORBYN_WINRM_PASSWORD")
+            .env_remove("ORBYN_PROMETHEUS_TOKEN")
             .env_remove("ORBYN_DB")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

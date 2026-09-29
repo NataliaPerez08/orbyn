@@ -272,7 +272,8 @@ impl crate::store::traits::Store for PostgresStore {
                         "INSERT INTO metric_samples \
                            (id, asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
                             ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+                         ON CONFLICT (asset_id, sampled_at) DO NOTHING",
                     )
                     .bind(uuid::Uuid::new_v4().to_string())
                     .bind(&sample.asset_id)
@@ -524,6 +525,55 @@ impl crate::store::traits::Store for PostgresStore {
             .context("listing metric samples")?;
         rows.reverse(); // oldest first for windowed aggregation
         Ok(rows.into_iter().map(MetricSampleRow::into_sample).collect())
+    }
+
+    async fn list_all_metric_samples(&self) -> Result<Vec<crate::domain::MetricSample>> {
+        let rows = sqlx::query_as::<_, MetricSampleRow>(
+            "SELECT asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                    ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m \
+             FROM metric_samples ORDER BY asset_id, sampled_at",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing all metric samples")?;
+        Ok(rows.into_iter().map(MetricSampleRow::into_sample).collect())
+    }
+
+    async fn insert_metric_samples(
+        &self,
+        samples: &[crate::domain::MetricSample],
+    ) -> Result<usize> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("beginning metric import transaction")?;
+        let mut inserted = 0usize;
+        for sample in samples {
+            let result = sqlx::query(
+                "INSERT INTO metric_samples \
+                   (id, asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                    ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+                 ON CONFLICT (asset_id, sampled_at) DO NOTHING",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&sample.asset_id)
+            .bind(sample.sampled_at.to_rfc3339())
+            .bind(sample.cpu_usage_percent.map(f64::from))
+            .bind(sample.ram_used_mb.map(|v| v as i64))
+            .bind(sample.ram_available_mb.map(|v| v as i64))
+            .bind(sample.swap_used_mb.map(|v| v as i64))
+            .bind(sample.load_1m.map(f64::from))
+            .bind(sample.load_5m.map(f64::from))
+            .bind(sample.load_15m.map(f64::from))
+            .execute(&mut *tx)
+            .await
+            .context("inserting metric sample")?;
+            inserted += result.rows_affected() as usize;
+        }
+        tx.commit().await.context("committing transaction")?;
+        Ok(inserted)
     }
 
     async fn confirm_dependency(

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::OnceLock;
 
-use super::{AssessmentInput, Finding, Severity};
+use super::{AssessmentInput, AssetWindow, Finding, Severity};
 use crate::domain::{Dependency, EvidenceKind, Filesystem, Service};
 
 /// A rule in the catalog: stable id, human description, and its evaluator.
@@ -68,6 +68,34 @@ pub fn catalog() -> &'static [Rule] {
             id: "disk.near-full",
             description: "Filesystem is nearly full (data transfer / target sizing risk)",
             evaluate: rule_disk_near_full,
+        },
+        Rule {
+            id: "rs.window-insufficient",
+            description: "Utilization samples exist but the window is too short or too \
+                          noisy for right-sizing",
+            evaluate: rule_rs_window_insufficient,
+        },
+        Rule {
+            id: "rs.cpu-overprovisioned",
+            description: "CPU allocation is oversized for the observed utilization \
+                          (p99 + 50% headroom fits half the cores)",
+            evaluate: rule_rs_cpu_overprovisioned,
+        },
+        Rule {
+            id: "rs.ram-overprovisioned",
+            description: "RAM allocation is oversized for the observed utilization \
+                          (p99 + 50% headroom fits 60% of the total)",
+            evaluate: rule_rs_ram_overprovisioned,
+        },
+        Rule {
+            id: "rs.cpu-saturated",
+            description: "Observed CPU utilization is saturated (p95 >= 90%)",
+            evaluate: rule_rs_cpu_saturated,
+        },
+        Rule {
+            id: "rs.ram-saturated",
+            description: "Observed RAM utilization is saturated (p95 >= 90% of total)",
+            evaluate: rule_rs_ram_saturated,
         },
     ]
 }
@@ -436,7 +464,7 @@ fn rule_capacity_missing(input: &AssessmentInput, findings: &mut Vec<Finding>) {
                           until host-level collection runs"
                     .into(),
                 evidence: vec![format!(
-                    "run `orbyn discover --target {} --collector ssh` (or windows)",
+                    "run `orbyn discover --target {} --collector ssh` (or windows/winrm)",
                     asset.ip
                 )],
                 asset_id: Some(asset.id.clone()),
@@ -478,6 +506,232 @@ fn rule_disk_near_full(input: &AssessmentInput, findings: &mut Vec<Finding>) {
             asset_id: Some(asset.id.clone()),
         });
     }
+}
+
+/// Headroom applied to the observed p99 when a right-sizing rule proposes a
+/// smaller allocation. 1.5 keeps 50% above the observed peak-of-peaks.
+pub const RIGHT_SIZING_HEADROOM: f64 = 1.5;
+
+/// p95 utilization at which an allocation counts as saturated.
+const SATURATION_P95_PERCENT: f64 = 90.0;
+
+/// A CPU allocation is only reported as oversized when the p99 suggestion
+/// (with headroom) fits within this share of the current cores.
+const CPU_OVERPROVISIONED_SHARE: f64 = 0.5;
+
+/// A RAM allocation is only reported as oversized when the p99 suggestion
+/// (with headroom) fits within this share of the current total.
+const RAM_OVERPROVISIONED_SHARE: f64 = 0.6;
+
+/// Floor for a suggested RAM allocation: never propose less than 1 GiB.
+const RAM_SUGGESTION_FLOOR_MB: f64 = 1024.0;
+
+fn rule_rs_window_insufficient(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in &input.metric_windows {
+        if window.stats.right_sizing_ready() {
+            continue;
+        }
+        findings.push(Finding {
+            rule_id: "rs.window-insufficient".into(),
+            severity: Severity::Info,
+            message: "utilization evidence is insufficient for right-sizing; keep \
+                      collecting (or import history) before sizing decisions"
+                .into(),
+            evidence: vec![
+                format!(
+                    "{} samples over {:.1}h with {} confidence",
+                    window.stats.sample_count,
+                    window.stats.span_hours.unwrap_or(0.0),
+                    window.stats.confidence
+                ),
+                format!(
+                    "right-sizing needs >= {:.0}h of history with high confidence \
+                     (`orbyn prometheus import` pulls a week in one run)",
+                    crate::metrics::MIN_WINDOW_HOURS_FOR_RIGHT_SIZING
+                ),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+fn rule_rs_cpu_overprovisioned(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(cores) = input
+            .capacities
+            .iter()
+            .find(|c| c.asset_id == window.asset_id)
+            .and_then(|c| c.cpu_cores)
+        else {
+            continue;
+        };
+        let Some(p99) = window.stats.cpu_p99_percent else {
+            continue;
+        };
+        let suggested = ((cores as f64 * p99 / 100.0 * RIGHT_SIZING_HEADROOM)
+            .ceil()
+            .max(1.0)) as u32;
+        if (suggested as f64) > cores as f64 * CPU_OVERPROVISIONED_SHARE {
+            continue;
+        }
+        findings.push(Finding {
+            rule_id: "rs.cpu-overprovisioned".into(),
+            severity: Severity::Info,
+            message: format!(
+                "CPU allocation is oversized: {cores} cores could shrink to \
+                 {suggested} (p99 {p99:.1}% with {:.0}% headroom)",
+                RIGHT_SIZING_HEADROOM * 100.0 - 100.0
+            ),
+            evidence: vec![
+                format!(
+                    "observed CPU: p95 {:.1}%  p99 {:.1}%  peak {:.1}%",
+                    window.stats.cpu_p95_percent.unwrap_or(0.0),
+                    p99,
+                    window.stats.cpu_peak_percent.unwrap_or(0.0)
+                ),
+                format!(
+                    "suggestion: ceil({cores} cores x p99 {:.1}% x {RIGHT_SIZING_HEADROOM}) \
+                     = {suggested} cores",
+                    p99
+                ),
+                window_evidence(&window.stats),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+fn rule_rs_ram_overprovisioned(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(total_mb) = input
+            .capacities
+            .iter()
+            .find(|c| c.asset_id == window.asset_id)
+            .and_then(|c| c.ram_total_mb)
+        else {
+            continue;
+        };
+        let Some(p99_mb) = window.stats.ram_p99_mb else {
+            continue;
+        };
+        let suggested_mb = (p99_mb * RIGHT_SIZING_HEADROOM)
+            .ceil()
+            .max(RAM_SUGGESTION_FLOOR_MB);
+        if suggested_mb > total_mb as f64 * RAM_OVERPROVISIONED_SHARE {
+            continue;
+        }
+        findings.push(Finding {
+            rule_id: "rs.ram-overprovisioned".into(),
+            severity: Severity::Info,
+            message: format!(
+                "RAM allocation is oversized: {} MB could shrink to {suggested_mb:.0} MB \
+                 (p99 {:.1}% of total with {:.0}% headroom)",
+                total_mb,
+                p99_mb / total_mb as f64 * 100.0,
+                RIGHT_SIZING_HEADROOM * 100.0 - 100.0
+            ),
+            evidence: vec![
+                format!(
+                    "observed RAM: p95 {:.0} MB  p99 {p99_mb:.0} MB  peak {:.0} MB",
+                    window.stats.ram_p95_mb.unwrap_or(0.0),
+                    window.stats.ram_peak_mb.unwrap_or(0.0)
+                ),
+                format!(
+                    "suggestion: ceil(p99 {p99_mb:.0} MB x {RIGHT_SIZING_HEADROOM}) \
+                     = {suggested_mb:.0} MB (floor {:.0} MB)",
+                    RAM_SUGGESTION_FLOOR_MB
+                ),
+                window_evidence(&window.stats),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+fn rule_rs_cpu_saturated(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(p95) = window.stats.cpu_p95_percent else {
+            continue;
+        };
+        if p95 < SATURATION_P95_PERCENT {
+            continue;
+        }
+        findings.push(Finding {
+            rule_id: "rs.cpu-saturated".into(),
+            severity: Severity::Warning,
+            message: format!(
+                "CPU utilization is saturated (p95 {p95:.1}% >= {SATURATION_P95_PERCENT:.0}%); \
+                 the workload needs more capacity or tuning before migration"
+            ),
+            evidence: vec![
+                format!(
+                    "observed CPU: p95 {p95:.1}%  p99 {:.1}%  peak {:.1}%",
+                    window.stats.cpu_p99_percent.unwrap_or(0.0),
+                    window.stats.cpu_peak_percent.unwrap_or(0.0)
+                ),
+                window_evidence(&window.stats),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+fn rule_rs_ram_saturated(input: &AssessmentInput, findings: &mut Vec<Finding>) {
+    for window in ready_windows(input) {
+        let Some(total_mb) = input
+            .capacities
+            .iter()
+            .find(|c| c.asset_id == window.asset_id)
+            .and_then(|c| c.ram_total_mb)
+        else {
+            continue;
+        };
+        let Some(p95_mb) = window.stats.ram_p95_mb else {
+            continue;
+        };
+        let p95_pct = p95_mb / total_mb as f64 * 100.0;
+        if p95_pct < SATURATION_P95_PERCENT {
+            continue;
+        }
+        findings.push(Finding {
+            rule_id: "rs.ram-saturated".into(),
+            severity: Severity::Warning,
+            message: format!(
+                "RAM utilization is saturated (p95 {p95_pct:.1}% of {total_mb} MB \
+                 >= {SATURATION_P95_PERCENT:.0}%); the workload risks swapping or OOM \
+                 during migration"
+            ),
+            evidence: vec![
+                format!(
+                    "observed RAM: p95 {p95_mb:.0} MB  p99 {:.0} MB  peak {:.0} MB",
+                    window.stats.ram_p99_mb.unwrap_or(0.0),
+                    window.stats.ram_peak_mb.unwrap_or(0.0)
+                ),
+                window_evidence(&window.stats),
+            ],
+            asset_id: Some(window.asset_id.clone()),
+        });
+    }
+}
+
+/// Right-sizing rules only trust windows that are ready for it: high
+/// sample confidence over at least a meeting week of history.
+fn ready_windows(input: &AssessmentInput) -> impl Iterator<Item = &AssetWindow> {
+    input
+        .metric_windows
+        .iter()
+        .filter(|w| w.stats.right_sizing_ready())
+}
+
+/// Shared evidence line: the observation window behind a right-sizing
+/// finding, so every recommendation shows the data it rests on.
+fn window_evidence(stats: &crate::metrics::WindowStats) -> String {
+    format!(
+        "window: {} samples over {:.1}h ({} confidence)",
+        stats.sample_count,
+        stats.span_hours.unwrap_or(0.0),
+        stats.confidence
+    )
 }
 
 /// Evidence line for an exposed service.
@@ -838,5 +1092,154 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), catalog.len());
+    }
+
+    /// A high-confidence utilization window spanning a full week.
+    fn ready_window(asset_id: &str, cpu_p99: f64, ram_p99_mb: f64) -> AssetWindow {
+        let start = Utc::now() - chrono::Duration::hours(200);
+        let samples: Vec<crate::domain::MetricSample> = (0..24)
+            .map(|i| crate::domain::MetricSample {
+                asset_id: asset_id.into(),
+                sampled_at: start + chrono::Duration::hours(i * 8),
+                cpu_usage_percent: Some(cpu_p99 as f32),
+                ram_used_mb: Some(ram_p99_mb as u64),
+                ram_available_mb: None,
+                swap_used_mb: None,
+                load_1m: None,
+                load_5m: None,
+                load_15m: None,
+            })
+            .collect();
+        let stats = crate::metrics::summarize(&samples).expect("window summarizes");
+        assert!(stats.right_sizing_ready(), "fixture must be ready");
+        AssetWindow {
+            asset_id: asset_id.into(),
+            stats,
+        }
+    }
+
+    fn capacity_for(asset_id: &str, cores: u32, ram_total_mb: u64) -> crate::domain::Capacity {
+        crate::domain::Capacity {
+            asset_id: asset_id.into(),
+            cpu_model: None,
+            cpu_sockets: None,
+            cpu_cores: Some(cores),
+            cpu_threads: None,
+            ram_total_mb: Some(ram_total_mb),
+            collected_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn insufficient_window_fires_and_suggests_import() {
+        let mut window = ready_window("a1", 10.0, 1024.0);
+        window.stats.span_hours = Some(2.0); // high confidence, tiny span
+        let input = AssessmentInput {
+            metric_windows: vec![window],
+            ..Default::default()
+        };
+        let findings = run(&input, "rs.window-insufficient");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].evidence[1].contains("prometheus import"));
+
+        // A ready window produces no insufficiency finding.
+        let input = AssessmentInput {
+            metric_windows: vec![ready_window("a1", 10.0, 1024.0)],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.window-insufficient").is_empty());
+    }
+
+    #[test]
+    fn overprovisioned_cpu_and_ram_are_flagged_with_math() {
+        // 16 cores, p99 10% -> ceil(16 x 0.10 x 1.5) = 3 <= 8 (half).
+        // 16384 MB, p99 4096 -> ceil(4096 x 1.5) = 6144 <= 9830 (60%).
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 16, 16384)],
+            metric_windows: vec![ready_window("a1", 10.0, 4096.0)],
+            ..Default::default()
+        };
+        let cpu = run(&input, "rs.cpu-overprovisioned");
+        assert_eq!(cpu.len(), 1);
+        assert_eq!(cpu[0].severity, Severity::Info);
+        assert!(cpu[0].message.contains("16 cores"), "{}", cpu[0].message);
+        assert!(cpu[0].message.contains("3"), "{}", cpu[0].message);
+        assert!(cpu[0].evidence[1].contains("= 3 cores"));
+
+        let ram = run(&input, "rs.ram-overprovisioned");
+        assert_eq!(ram.len(), 1);
+        assert!(ram[0].message.contains("16384 MB"), "{}", ram[0].message);
+        assert!(ram[0].evidence[1].contains("= 6144 MB"));
+    }
+
+    #[test]
+    fn well_used_allocations_are_not_flagged() {
+        // p99 60% of 8 cores -> ceil(8 x 0.6 x 1.5) = 8 > 4: no finding.
+        // p99 12288 of 16384 MB -> 18432 > 9830: no finding.
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![ready_window("a1", 60.0, 12288.0)],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.cpu-overprovisioned").is_empty());
+        assert!(run(&input, "rs.ram-overprovisioned").is_empty());
+        assert!(run(&input, "rs.cpu-saturated").is_empty());
+        assert!(run(&input, "rs.ram-saturated").is_empty());
+    }
+
+    #[test]
+    fn saturated_cpu_and_ram_warn() {
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![ready_window("a1", 95.0, 15872.0)],
+            ..Default::default()
+        };
+        let cpu = run(&input, "rs.cpu-saturated");
+        assert_eq!(cpu.len(), 1);
+        assert_eq!(cpu[0].severity, Severity::Warning);
+        assert!(cpu[0].message.contains("p95 95.0%"), "{}", cpu[0].message);
+
+        let ram = run(&input, "rs.ram-saturated");
+        assert_eq!(ram.len(), 1);
+        assert_eq!(ram[0].severity, Severity::Warning);
+        // 15872/16384 = 96.9% >= 90%.
+        assert!(ram[0].message.contains("96.9%"), "{}", ram[0].message);
+    }
+
+    #[test]
+    fn snapshots_never_drive_right_sizing() {
+        // High sample count but zero span (three discovery snapshots): the
+        // critical rule holds — no recommendation, only the insufficiency
+        // guidance.
+        let snapshots: Vec<crate::domain::MetricSample> = (0..12)
+            .map(|i| crate::domain::MetricSample {
+                asset_id: "a1".into(),
+                sampled_at: Utc::now() + chrono::Duration::seconds(i),
+                cpu_usage_percent: Some(2.0),
+                ram_used_mb: Some(512),
+                ram_available_mb: None,
+                swap_used_mb: None,
+                load_1m: None,
+                load_5m: None,
+                load_15m: None,
+            })
+            .collect();
+        let stats = crate::metrics::summarize(&snapshots).expect("window summarizes");
+        let input = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 32, 65536)],
+            metric_windows: vec![AssetWindow {
+                asset_id: "a1".into(),
+                stats,
+            }],
+            ..Default::default()
+        };
+        assert!(run(&input, "rs.cpu-overprovisioned").is_empty());
+        assert!(run(&input, "rs.ram-overprovisioned").is_empty());
+        assert_eq!(run(&input, "rs.window-insufficient").len(), 1);
     }
 }

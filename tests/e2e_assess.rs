@@ -64,7 +64,7 @@ fn assess_reports_findings_scores_and_groups() {
     seed(&dir);
 
     let table = run_ok(orbyn(&dir).args(["assess"]));
-    assert!(table.contains("Rules version : 0.6.0"));
+    assert!(table.contains("Rules version : 0.7.0"));
     assert!(table.contains("os.eol"), "EOL OS finding: {table}");
     assert!(table.contains("dep.hub"), "hub finding: {table}");
     assert!(table.contains("dep.external"), "external finding: {table}");
@@ -89,7 +89,7 @@ fn assess_json_is_parseable_and_complete() {
     let json = run_ok(orbyn(&dir).args(["assess", "--format", "json"]));
     let report: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    assert_eq!(report["rules_version"], "0.6.0");
+    assert_eq!(report["rules_version"], "0.7.0");
     assert_eq!(report["assets_assessed"], 3);
     let score = report["overall_score"].as_u64().expect("score");
     assert!(score <= 100);
@@ -114,7 +114,7 @@ fn assess_rules_catalog_lists_rules() {
     let dir = TempDir::new("assess-rules");
 
     let out = run_ok(orbyn(&dir).args(["assess", "--rules"]));
-    assert!(out.contains("Rules version: 0.6.0"));
+    assert!(out.contains("Rules version: 0.7.0"));
     for rule in [
         "os.missing",
         "os.eol",
@@ -125,6 +125,11 @@ fn assess_rules_catalog_lists_rules() {
         "dep.unconfirmed",
         "capacity.missing",
         "disk.near-full",
+        "rs.window-insufficient",
+        "rs.cpu-overprovisioned",
+        "rs.ram-overprovisioned",
+        "rs.cpu-saturated",
+        "rs.ram-saturated",
     ] {
         assert!(out.contains(rule), "catalog missing {rule}: {out}");
     }

@@ -66,6 +66,14 @@ pub trait Store: Send + Sync {
         asset_id: &str,
         limit: Option<usize>,
     ) -> Result<Vec<MetricSample>>;
+    /// Every recorded utilization sample, ordered by asset then time. Used
+    /// by `assess` to build per-asset windows without N+1 queries.
+    async fn list_all_metric_samples(&self) -> Result<Vec<MetricSample>>;
+    /// Persist a batch of historical utilization samples (e.g. imported
+    /// from Prometheus). A sample colliding on (asset, instant) with an
+    /// existing row is skipped, so re-importing the same window is
+    /// idempotent. Returns the number of samples actually inserted.
+    async fn insert_metric_samples(&self, samples: &[MetricSample]) -> Result<usize>;
     /// Active connections observed on an asset (dependency evidence).
     async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;

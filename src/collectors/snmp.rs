@@ -216,6 +216,7 @@ impl SnmpCollector {
             .env_remove("ORBYN_SNMP_COMMUNITY")
             .env_remove("ORBYN_NETBOX_TOKEN")
             .env_remove("ORBYN_WINRM_PASSWORD")
+            .env_remove("ORBYN_PROMETHEUS_TOKEN")
             .env_remove("ORBYN_DB")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

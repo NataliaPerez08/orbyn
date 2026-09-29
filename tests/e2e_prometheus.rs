@@ -1,0 +1,300 @@
+//! End-to-end tests for the Prometheus historical utilization importer: a
+//! fake `curl` serves `/api/v1/query_range` responses so the full flow —
+//! query, inventory mapping, idempotent persistence, utilization windows
+//! and right-sizing assessment — runs without a network.
+
+mod common;
+
+#[cfg(unix)]
+use common::*;
+#[cfg(unix)]
+use std::path::PathBuf;
+
+/// A fake `curl` implementing a minimal Prometheus range-query endpoint:
+/// it dispatches on the (percent-encoded) query inside the URL and emits
+/// one series per query, with points and instance labels taken from the
+/// test's environment. It logs argv and the stdin config so secret
+/// handling can be asserted.
+#[cfg(unix)]
+const FAKE_PROM_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+log="${ORBYN_PROM_LOG}"
+url=""
+for a in "$@"; do
+  case "$a" in
+    */api/v1/query_range*) url="$a" ;;
+  esac
+done
+if [[ -n "$log" ]]; then
+  printf '%s\n' "$@" >> "$log.argv"
+  cat >> "$log.stdin"
+fi
+if [[ "$url" == *node_cpu_seconds_total* ]]; then
+  values="${ORBYN_PROM_CPU_VALUES}"
+  instance="${ORBYN_PROM_CPU_INSTANCE:-10.0.0.2:9100}"
+elif [[ "$url" == *node_memory_MemTotal* ]]; then
+  values="${ORBYN_PROM_RAM_VALUES}"
+  instance="${ORBYN_PROM_RAM_INSTANCE:-10.0.0.2:9100}"
+else
+  printf '{"status":"error","errorType":"bad_data","error":"unknown query"}'
+  exit 0
+fi
+printf '{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"%s","job":"node"},"values":[%s]}]}}' "$instance" "$values"
+"#;
+
+/// A fake `ssh` emitting a Linux host probe without the `###metric`
+/// snapshots, so the Prometheus import is the asset's only utilization
+/// window (the snapshots would otherwise poison the percentiles).
+#[cfg(unix)]
+const FAKE_SSH_NO_SNAPSHOTS_SCRIPT: &str = r#"#!/usr/bin/env bash
+cat <<'OUT'
+###os
+NAME="Ubuntu"
+PRETTY_NAME="Ubuntu 22.04.4 LTS"
+###kernel
+5.15.0-94-generic
+###hostname
+web-01
+###cpu
+Architecture:        x86_64
+CPU(s):              8
+Thread(s) per core:  2
+Core(s) per socket:  4
+Socket(s):           1
+Model name:          Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz
+###mem
+MemTotal:       16384532 kB
+###disk
+Filesystem     Type   1024-blocks      Used Available Capacity Mounted on
+/dev/sda1      ext4       52425716  12345678  37380844      25% /
+###svc
+nginx.service                 loaded active running A high performance web server and reverse proxy
+###conn
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+OUT
+"#;
+
+/// Points for one series: `count` samples, `interval_hours` apart, ending
+/// now, cycling through `values`.
+#[cfg(unix)]
+fn prom_points(count: usize, interval_hours: i64, values: &[f64]) -> String {
+    let now = chrono::Utc::now().timestamp();
+    (0..count)
+        .map(|i| {
+            let ts = now - i as i64 * interval_hours * 3600;
+            let v = values[i % values.len()];
+            if v.fract() == 0.0 {
+                format!("[{ts},\"{v:.0}\"]")
+            } else {
+                format!("[{ts},\"{v:.2}\"]")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(unix)]
+fn prom_env(dir: &TempDir, curl: &PathBuf) -> std::process::Command {
+    let mut cmd = orbyn(dir);
+    cmd.env("ORBYN_CURL_BIN", curl)
+        .env("ORBYN_PROMETHEUS_TOKEN", "prom-secret-token");
+    cmd
+}
+
+#[cfg(unix)]
+fn week_of_low_utilization() -> (String, String) {
+    // 24 points 8h apart: a 184h window, well past the 168h minimum.
+    let cpu = prom_points(24, 8, &[15.0, 20.0, 25.0]);
+    let ram = prom_points(24, 8, &[2147483648.0, 3221225472.0]); // 2048/3072 MB
+    (cpu, ram)
+}
+
+#[cfg(unix)]
+#[test]
+fn prometheus_import_builds_a_week_of_history() {
+    let dir = TempDir::new("prom");
+    let log = dir.path().join("prom-curl");
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+    import_json(&dir, INVENTORY_JSON);
+
+    let (cpu, ram) = week_of_low_utilization();
+    let out = run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_PROM_LOG", log.to_str().unwrap()),
+    );
+    assert!(
+        out.contains("Imported 24 metric samples from Prometheus"),
+        "{out}"
+    );
+    assert!(out.contains("0 duplicates"), "{out}");
+
+    // The window summarizes with its span and right-sizing readiness.
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.2"]));
+    assert!(metrics.contains("24 samples over 184.0h"), "{metrics}");
+    assert!(metrics.contains("sufficient for right-sizing"), "{metrics}");
+    assert!(metrics.contains("p95 25.00%"), "{metrics}");
+
+    let csv = run_ok(orbyn(&dir).args(["metrics", "10.0.0.2", "--format", "csv"]));
+    assert!(csv.contains("right_sizing_ready,,true"), "{csv}");
+    assert!(csv.contains("span_hours,,"), "{csv}");
+
+    // The import is recorded in the audit trail.
+    let audit = run_ok(orbyn(&dir).args(["audit", "--format", "csv"]));
+    assert!(audit.contains("prometheus.import"), "{audit}");
+
+    // The token reached curl only through the stdin header, never argv.
+    let argv = std::fs::read_to_string(log.with_extension("argv")).expect("argv log");
+    assert!(
+        !argv.contains("prom-secret-token"),
+        "token leaked to argv: {argv}"
+    );
+    assert!(
+        argv.contains("/api/v1/query_range?query="),
+        "expected the range query URL in argv: {argv}"
+    );
+    assert!(
+        argv.contains("node_cpu_seconds_total"),
+        "the PromQL must travel percent-encoded in the URL: {argv}"
+    );
+    let stdin_log = std::fs::read_to_string(log.with_extension("stdin")).expect("stdin log");
+    assert!(
+        stdin_log.contains("Authorization: Bearer prom-secret-token"),
+        "token must be delivered through the stdin header: {stdin_log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prometheus_reimport_is_idempotent() {
+    let dir = TempDir::new("prom-idempotent");
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+    import_json(&dir, INVENTORY_JSON);
+
+    let (cpu, ram) = week_of_low_utilization();
+    let import = || {
+        let mut cmd = prom_env(&dir, &curl);
+        cmd.args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram);
+        cmd
+    };
+    let first = run_ok_combined(&mut import());
+    assert!(first.contains("Imported 24 metric samples"), "{first}");
+
+    // Re-importing the same window inserts nothing and duplicates nothing.
+    let second = run_ok_combined(&mut import());
+    assert!(second.contains("Imported 0 metric samples"), "{second}");
+    assert!(second.contains("24 duplicates skipped"), "{second}");
+
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.2"]));
+    assert!(metrics.contains("24 samples over"), "{metrics}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prometheus_unmatched_series_fail_cleanly() {
+    let dir = TempDir::new("prom-unmatched");
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+    import_json(&dir, INVENTORY_JSON);
+
+    let (cpu, ram) = week_of_low_utilization();
+    let out = run_fail(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_PROM_CPU_INSTANCE", "10.0.0.99:9100")
+            .env("ORBYN_PROM_RAM_INSTANCE", "10.0.0.99:9100"),
+    );
+    assert!(out.contains("no series matched a known asset"), "{out}");
+    assert!(out.contains("2 unmatched series"), "{out}");
+
+    // The failed import is still auditable.
+    let audit = run_ok(orbyn(&dir).args(["audit", "--format", "csv"]));
+    assert!(audit.contains("failed"), "{audit}");
+}
+
+#[cfg(unix)]
+#[test]
+fn assess_right_sizes_a_week_of_utilization() {
+    let dir = TempDir::new("prom-right-size");
+    let ssh = fake_bin(&dir, "ssh", FAKE_SSH_NO_SNAPSHOTS_SCRIPT);
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+
+    // Host-level collection records the allocation (8 cores, ~16 GB).
+    run_ok_combined(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.5", "--collector", "ssh"])
+            .env("ORBYN_SSH_BIN", &ssh),
+    );
+
+    // One meeting week of low utilization, then the assessment.
+    let (cpu, ram) = week_of_low_utilization();
+    run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_PROM_CPU_INSTANCE", "10.0.0.5:9100")
+            .env("ORBYN_PROM_RAM_INSTANCE", "10.0.0.5:9100"),
+    );
+
+    let assess = run_ok(orbyn(&dir).args(["assess", "--format", "csv"]));
+    assert!(assess.contains("rs.cpu-overprovisioned"), "{assess}");
+    // 4 physical cores, p99 25%: ceil(4 x 0.25 x 1.5) = 2 cores.
+    assert!(assess.contains("4 cores could shrink to 2"), "{assess}");
+    assert!(assess.contains("rs.ram-overprovisioned"), "{assess}");
+    assert!(
+        !assess.contains("rs.window-insufficient"),
+        "a ready window must not be called insufficient: {assess}"
+    );
+    assert!(!assess.contains("rs.cpu-saturated"), "{assess}");
+
+    // The recommendation carries its evidence and rule version.
+    assert!(
+        assess.contains("window: 24 samples over 184.0h"),
+        "{assess}"
+    );
+    assert!(assess.contains("0.7.0"), "{assess}");
+}
+
+#[cfg(unix)]
+#[test]
+fn assess_warns_when_the_window_is_too_short() {
+    let dir = TempDir::new("prom-short-window");
+    let ssh = fake_bin(&dir, "ssh", FAKE_SSH_NO_SNAPSHOTS_SCRIPT);
+    let curl = fake_bin(&dir, "curl", FAKE_PROM_CURL_SCRIPT);
+
+    run_ok_combined(
+        orbyn(&dir)
+            .args(["discover", "--target", "10.0.0.5", "--collector", "ssh"])
+            .env("ORBYN_SSH_BIN", &ssh),
+    );
+
+    // 15 hourly points: high sample confidence, but only a 14h window.
+    let cpu = prom_points(15, 1, &[15.0, 20.0, 25.0]);
+    let ram = prom_points(15, 1, &[2147483648.0]);
+    run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_PROM_CPU_INSTANCE", "10.0.0.5:9100")
+            .env("ORBYN_PROM_RAM_INSTANCE", "10.0.0.5:9100"),
+    );
+
+    let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.5"]));
+    assert!(
+        metrics.contains("insufficient for right-sizing"),
+        "{metrics}"
+    );
+
+    let assess = run_ok(orbyn(&dir).args(["assess", "--format", "csv"]));
+    assert!(assess.contains("rs.window-insufficient"), "{assess}");
+    assert!(
+        !assess.contains("rs.cpu-overprovisioned"),
+        "snapshots and short windows must never drive sizing: {assess}"
+    );
+}

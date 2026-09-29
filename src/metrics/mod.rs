@@ -6,8 +6,13 @@
 //!
 //! Windows are summarized into avg/p95/p99/peak statistics and assigned a
 //! [`SampleConfidence`] tier from the number of samples and their validity,
-//! so consumers (CLI reports, future right-sizing rules) can weigh evidence
-//! instead of trusting any single sample.
+//! so consumers (CLI reports, right-sizing rules) can weigh evidence
+//! instead of trusting any single sample. The window also carries its
+//! temporal span: right-sizing requires both high-confidence samples and
+//! an observation window of at least
+//! [`MIN_WINDOW_HOURS_FOR_RIGHT_SIZING`] hours (one meeting week).
+
+use chrono::{DateTime, Utc};
 
 use crate::domain::MetricSample;
 
@@ -15,6 +20,12 @@ use crate::domain::MetricSample;
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct WindowStats {
     pub sample_count: usize,
+    /// Oldest valid sample time in the window.
+    pub window_start: Option<DateTime<Utc>>,
+    /// Newest valid sample time in the window.
+    pub window_end: Option<DateTime<Utc>>,
+    /// `(end - start)` in hours; `None` when the window has no span.
+    pub span_hours: Option<f64>,
     pub cpu_avg_percent: Option<f64>,
     pub cpu_p95_percent: Option<f64>,
     pub cpu_p99_percent: Option<f64>,
@@ -54,6 +65,25 @@ impl std::fmt::Display for SampleConfidence {
 /// support any utilization claims.
 pub const MIN_SAMPLES_FOR_STATS: usize = 2;
 
+/// Minimum observation window (in hours) before utilization evidence can
+/// support a right-sizing recommendation: one meeting week. Sample count
+/// alone is not enough — three snapshots seconds apart are still one
+/// moment in time.
+pub const MIN_WINDOW_HOURS_FOR_RIGHT_SIZING: f64 = 168.0;
+
+impl WindowStats {
+    /// Whether this window is strong enough to support a right-sizing
+    /// recommendation: high sample confidence over an observation window
+    /// of at least [`MIN_WINDOW_HOURS_FOR_RIGHT_SIZING`] hours.
+    pub fn right_sizing_ready(&self) -> bool {
+        self.confidence == SampleConfidence::High
+            && self
+                .span_hours
+                .map(|h| h >= MIN_WINDOW_HOURS_FOR_RIGHT_SIZING)
+                .unwrap_or(false)
+    }
+}
+
 /// Samples with plausible values. A sample is *valid* when every field it
 /// carries is inside its physical range; samples that carry nothing usable are
 /// invalid noise that would corrupt percentiles.
@@ -92,8 +122,18 @@ pub fn summarize(samples: &[MetricSample]) -> Option<WindowStats> {
         .max(ram.len())
         .min(if valid.is_empty() { 0 } else { valid.len() });
 
+    let window_start = valid.iter().map(|s| s.sampled_at).min();
+    let window_end = valid.iter().map(|s| s.sampled_at).max();
+    let span_hours = match (window_start, window_end) {
+        (Some(start), Some(end)) => Some((end - start).num_seconds() as f64 / 3600.0),
+        _ => None,
+    };
+
     Some(WindowStats {
         sample_count: samples.len(),
+        window_start,
+        window_end,
+        span_hours,
         cpu_avg_percent: cpu_avg,
         cpu_p95_percent: cpu_p95,
         cpu_p99_percent: cpu_p99,
@@ -142,9 +182,13 @@ mod tests {
     use chrono::Utc;
 
     fn sample(cpu: f32, ram_mb: u64) -> MetricSample {
+        sample_at(cpu, ram_mb, Utc::now())
+    }
+
+    fn sample_at(cpu: f32, ram_mb: u64, at: DateTime<Utc>) -> MetricSample {
         MetricSample {
             asset_id: "a1".into(),
-            sampled_at: Utc::now(),
+            sampled_at: at,
             cpu_usage_percent: Some(cpu),
             ram_used_mb: Some(ram_mb),
             ram_available_mb: None,
@@ -198,5 +242,42 @@ mod tests {
         assert_eq!(confidence_for(5, 10), SampleConfidence::Medium);
         assert_eq!(confidence_for(12, 24), SampleConfidence::High);
         assert_eq!(confidence_for(2, 10), SampleConfidence::Low); // <50% valid
+    }
+
+    #[test]
+    fn span_covers_oldest_to_newest_valid_sample() {
+        let start = Utc::now() - chrono::Duration::hours(200);
+        let samples: Vec<MetricSample> = (0..20)
+            .map(|i| sample_at(10.0, 1024, start + chrono::Duration::hours(i * 10)))
+            .collect();
+        let stats = summarize(&samples).expect("window exists");
+        assert_eq!(stats.window_start, Some(start));
+        assert_eq!(stats.window_end, Some(start + chrono::Duration::hours(190)));
+        let span = stats.span_hours.expect("span exists");
+        assert!((span - 190.0).abs() < 0.01, "span was {span}");
+    }
+
+    #[test]
+    fn right_sizing_needs_high_confidence_and_a_week_of_span() {
+        // High confidence but zero span (snapshots seconds apart): not ready.
+        let snapshots: Vec<MetricSample> = (0..12).map(|i| sample(i as f32, 1024)).collect();
+        let stats = summarize(&snapshots).expect("window exists");
+        assert_eq!(stats.confidence, SampleConfidence::High);
+        assert!(!stats.right_sizing_ready());
+
+        // High confidence over 168h+: ready.
+        let start = Utc::now() - chrono::Duration::hours(200);
+        let week: Vec<MetricSample> = (0..24)
+            .map(|i| sample_at(10.0, 1024, start + chrono::Duration::hours(i * 8)))
+            .collect();
+        let stats = summarize(&week).expect("window exists");
+        assert!(stats.right_sizing_ready());
+
+        // A week of span but too few valid samples: not ready.
+        let sparse: Vec<MetricSample> = (0..3)
+            .map(|i| sample_at(10.0, 1024, start + chrono::Duration::hours(i * 84)))
+            .collect();
+        let stats = summarize(&sparse).expect("window exists");
+        assert!(!stats.right_sizing_ready());
     }
 }

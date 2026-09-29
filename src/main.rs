@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 
-use orbyn::assessment::{run_assessment, AssessmentInput};
+use orbyn::assessment::{run_assessment, AssessmentInput, AssetWindow};
 use orbyn::collectors::credentials::CredentialProfile;
 use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
@@ -19,11 +19,14 @@ use orbyn::collectors::{validate_target_with_policy, Collector, ScanTarget, Scan
 use orbyn::config::{Config, DbTarget};
 use orbyn::domain::{
     asset_id, Asset, AuditEvent, Criticality, Dependency, DiscoveryJob, EvidenceKind, Interface,
-    JobOutcome, JobStatus, Observation, Service,
+    JobOutcome, JobStatus, MetricSample, Observation, Service,
 };
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
 use orbyn::integrations::netbox::NetBoxClient;
+use orbyn::integrations::prometheus::{
+    assemble_samples, ImportOptions, PrometheusClient, DEFAULT_CPU_QUERY, DEFAULT_RAM_QUERY,
+};
 use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
 use orbyn::output::{Format, Inventory};
 use orbyn::store::postgres::PostgresStore;
@@ -244,8 +247,8 @@ enum Command {
         format: Format,
     },
 
-    /// Show a resource utilization window (avg/p95/p99/peak + confidence) for
-    /// an asset (by ID or IP).
+    /// Show a resource utilization window (span, avg/p95/p99/peak,
+    /// confidence, right-sizing readiness) for an asset (by ID or IP).
     Metrics {
         /// Asset ID or IP address.
         asset: String,
@@ -311,6 +314,13 @@ enum Command {
     Netbox {
         #[command(subcommand)]
         action: NetboxAction,
+    },
+
+    /// Pull historical CPU/RAM utilization from Prometheus into metric
+    /// samples (one week by default).
+    Prometheus {
+        #[command(subcommand)]
+        action: PrometheusAction,
     },
 
     /// Show the dependency graph as an edge list.
@@ -408,6 +418,39 @@ enum NetboxAction {
         /// Skip TLS certificate verification (for self-signed NetBox).
         #[arg(long)]
         no_verify: bool,
+    },
+}
+
+/// Sub-actions of `orbyn prometheus`.
+#[derive(Debug, Subcommand)]
+enum PrometheusAction {
+    /// Import historical CPU/RAM utilization samples from Prometheus.
+    Import {
+        /// Prometheus base URL, e.g. http://prometheus:9090.
+        #[arg(long)]
+        url: String,
+        /// Bearer token: from ORBYN_PROMETHEUS_TOKEN, or `-` to read one
+        /// line from stdin so it never lands in argv.
+        #[arg(long, env = "ORBYN_PROMETHEUS_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        /// Skip TLS certificate verification (for self-signed Prometheus).
+        #[arg(long)]
+        no_verify: bool,
+        /// Hours of history to import (168 = one meeting week, the
+        /// right-sizing minimum).
+        #[arg(long, default_value_t = 168)]
+        lookback_hours: i64,
+        /// Query resolution step (Prometheus duration, e.g. 5m).
+        #[arg(long, default_value = "5m")]
+        step: String,
+        /// Override the CPU utilization query (must aggregate per
+        /// `instance`, percent).
+        #[arg(long)]
+        cpu_query: Option<String>,
+        /// Override the RAM-used query (must aggregate per `instance`,
+        /// bytes).
+        #[arg(long)]
+        ram_query: Option<String>,
     },
 }
 
@@ -730,6 +773,91 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Imported {} from NetBox.", parts.join(", "));
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
+        }
+        Command::Prometheus {
+            action:
+                PrometheusAction::Import {
+                    url,
+                    token,
+                    no_verify,
+                    lookback_hours,
+                    step,
+                    cpu_query,
+                    ram_query,
+                },
+        } => {
+            let token = resolve_secret(token, "--token", "ORBYN_PROMETHEUS_TOKEN")?;
+            if no_verify {
+                tracing::warn!("--no-verify disables TLS certificate verification for Prometheus");
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed Prometheus instance; \
+                     connections can be silently intercepted."
+                );
+            }
+            if is_plain_http(&url) && token.is_some() {
+                eprintln!(
+                    "WARNING: --url uses plain HTTP; the Prometheus token will travel \
+                     unencrypted over the network (audit OY-12)."
+                );
+            }
+            if lookback_hours <= 0 {
+                bail!("--lookback-hours must be positive");
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            if let Some(token) = &token {
+                redactor.add_value(token);
+            }
+            let audit = begin_audit(
+                store.as_ref(),
+                "prometheus.import",
+                "metrics",
+                Some(&format!("{lookback_hours}h lookback, step {step}")),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let client = PrometheusClient::new(&url, token, no_verify)
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let end = Utc::now();
+                let start = end - chrono::Duration::hours(lookback_hours);
+                let opts = ImportOptions {
+                    start,
+                    end,
+                    step: step.clone(),
+                    cpu_query: cpu_query.unwrap_or_else(|| DEFAULT_CPU_QUERY.to_string()),
+                    ram_query: ram_query.unwrap_or_else(|| DEFAULT_RAM_QUERY.to_string()),
+                };
+                let fetched = client
+                    .fetch_utilization(&opts)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                if fetched.skipped_points > 0 {
+                    tracing::warn!(
+                        skipped = fetched.skipped_points,
+                        "Prometheus returned points that did not parse; they were skipped"
+                    );
+                }
+                let assets = store.list_assets().await?;
+                let assembled = assemble_samples(&fetched, &assets);
+                if assembled.samples.is_empty() {
+                    bail!(
+                        "no series matched a known asset ({} unmatched series); discover \
+                         or import assets first, or check the `instance` labels",
+                        assembled.unmatched_series
+                    );
+                }
+                let inserted = store.insert_metric_samples(&assembled.samples).await?;
+                eprintln!(
+                    "Imported {inserted} metric samples from Prometheus ({} duplicates \
+                     skipped, {} unmatched series); see `orbyn metrics <asset>`.",
+                    assembled.samples.len() - inserted,
+                    assembled.unmatched_series
+                );
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
         }
         Command::Graph {
             format,
@@ -1107,6 +1235,7 @@ async fn assessment_input(store: &dyn Store) -> Result<AssessmentInput> {
     let capacities = store.list_all_capacities().await?;
     let connections = store.list_all_connections().await?;
     let dependencies = store.list_dependencies().await?;
+    let metric_windows = metric_windows(store).await?;
     Ok(AssessmentInput {
         assets,
         services,
@@ -1114,7 +1243,31 @@ async fn assessment_input(store: &dyn Store) -> Result<AssessmentInput> {
         capacities,
         dependencies,
         connections,
+        metric_windows,
     })
+}
+
+/// Summarize every asset's recorded samples into utilization windows (one
+/// bulk read; no per-asset queries). Assets with too few samples produce
+/// no window at all — `capacity.missing` already covers the gap.
+async fn metric_windows(store: &dyn Store) -> Result<Vec<AssetWindow>> {
+    let samples = store.list_all_metric_samples().await?;
+    let mut by_asset: std::collections::HashMap<String, Vec<MetricSample>> =
+        std::collections::HashMap::new();
+    for sample in samples {
+        by_asset
+            .entry(sample.asset_id.clone())
+            .or_default()
+            .push(sample);
+    }
+    let mut windows: Vec<AssetWindow> = by_asset
+        .into_iter()
+        .filter_map(|(asset_id, samples)| {
+            orbyn::metrics::summarize(&samples).map(|stats| AssetWindow { asset_id, stats })
+        })
+        .collect();
+    windows.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
+    Ok(windows)
 }
 
 /// Resolve an asset reference that may be an id, an IP address, or a
@@ -1725,6 +1878,7 @@ mod tests {
         std::env::set_var("ORBYN_SNMP_COMMUNITY", "help-leak-canary");
         std::env::set_var("ORBYN_NETBOX_TOKEN", "help-leak-canary");
         std::env::set_var("ORBYN_WINRM_PASSWORD", "help-leak-canary");
+        std::env::set_var("ORBYN_PROMETHEUS_TOKEN", "help-leak-canary");
         let mut cmd = Cli::command();
         let discover_help = cmd
             .find_subcommand_mut("discover")
@@ -1739,9 +1893,18 @@ mod tests {
             .expect("netbox import subcommand")
             .render_help()
             .to_string();
+        let mut cmd = Cli::command();
+        let prometheus_import_help = cmd
+            .find_subcommand_mut("prometheus")
+            .expect("prometheus subcommand")
+            .find_subcommand_mut("import")
+            .expect("prometheus import subcommand")
+            .render_help()
+            .to_string();
         std::env::remove_var("ORBYN_SNMP_COMMUNITY");
         std::env::remove_var("ORBYN_NETBOX_TOKEN");
         std::env::remove_var("ORBYN_WINRM_PASSWORD");
+        std::env::remove_var("ORBYN_PROMETHEUS_TOKEN");
 
         // The variable name stays documented, its current value never leaks.
         assert!(
@@ -1763,6 +1926,14 @@ mod tests {
         assert!(
             !netbox_import_help.contains("help-leak-canary"),
             "token env value leaked into help: {netbox_import_help}"
+        );
+        assert!(
+            prometheus_import_help.contains("ORBYN_PROMETHEUS_TOKEN"),
+            "env var name stays documented: {prometheus_import_help}"
+        );
+        assert!(
+            !prometheus_import_help.contains("help-leak-canary"),
+            "token env value leaked into help: {prometheus_import_help}"
         );
     }
 
@@ -1810,6 +1981,7 @@ mod tests {
             "export",
             "import",
             "netbox",
+            "prometheus",
             "graph",
             "assess",
             "completions",

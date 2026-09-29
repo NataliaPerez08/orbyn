@@ -172,6 +172,19 @@ The repository currently provides:
   * `orbyn metrics <id-or-ip>` summarizes a utilization window with
     avg/p95/p99/peak CPU and RAM plus a `SampleConfidence` label based on
     sample count and validity.
+* CPU/RAM utilization and right-sizing (v1.2):
+  * `orbyn prometheus import` pulls a week of historical CPU/RAM
+    utilization from a Prometheus server (`/api/v1/query_range` through
+    `curl`; node_exporter queries by default, overridable) and maps series
+    onto assets by the `instance` label (IP or hostname). Re-imports are
+    idempotent.
+  * Utilization windows carry their temporal span; `orbyn metrics` reports
+    span, confidence and right-sizing readiness (>= 168h of history with
+    high confidence — snapshots alone never qualify).
+  * Rule catalog 0.7.0: `rs.window-insufficient` guidance, CPU/RAM
+    over-provisioned suggestions (p99 + 50% headroom) and CPU/RAM
+    saturation warnings (p95 >= 90%), each carrying its observation window
+    as evidence.
 * Dependency mapping (v0.4):
   * Active connection observations from the SSH/Windows host probes
     (`ss -tnp` / `Get-NetTCPConnection`), reconciled into dependency edges
@@ -188,15 +201,18 @@ The repository currently provides:
     changes) evaluating the normalized domain — never raw collector output.
   * Rules: legacy/EOL OS detection, insecure and management service exposure,
     dependency hubs (blast radius), external/unmanaged coupling, unconfirmed
-    edges, missing CPU/RAM capacity, nearly-full filesystems.
+    edges, missing CPU/RAM capacity, nearly-full filesystems, and the
+    right-sizing rules above (`rs.*`).
   * Explainable findings (rule id, severity, message, evidence) with
     per-asset complexity scores (0-100) and an overall complexity band.
   * Application grouping primitives: assets coupled by runtime/manual
     dependency edges are grouped as likely co-migrating applications.
   * `orbyn assess` (table/JSON/CSV report) and `orbyn assess --rules`
     (rule catalog).
-* Third-party integrations (v1.1):
+* Third-party integrations:
   * NetBox source-of-truth importer (`orbyn netbox import`).
+  * Prometheus historical utilization importer
+    (`orbyn prometheus import`).
   * Ansible inventory exporter (`orbyn export --format ansible`).
   * Terraform-friendly export (`orbyn export --format terraform`).
   * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
@@ -214,7 +230,8 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
-* `curl` for the NetBox importer and the native WinRM transport
+* `curl` for the NetBox and Prometheus importers and the native WinRM
+  transport
 
 Host-level collection uses key-based authentication (ssh-agent or
 `--identity-file`); passwords are never passed through the CLI or stored.
@@ -299,7 +316,8 @@ orbyn disks <id-or-ip> [--format ...]             Filesystem inventory
 orbyn host-services <id-or-ip> [--format ...]     Running host services (systemd units / Windows services)
 orbyn connections <id-or-ip> [--format ...]       Active connections observed on a host
 orbyn metrics <id-or-ip> [--samples N] [--format ...]
-                                                 Utilization window: avg/p95/p99/peak + confidence
+                                                  Utilization window: span, avg/p95/p99/peak,
+                                                  confidence, right-sizing readiness
 orbyn graph [--format ...] [--mermaid] [--asset <id-or-ip>]
 orbyn deps add <src> <tgt> [--proto tcp --port N]     Add a manual dependency
 orbyn deps confirm <src> <tgt> [--proto --port]       Confirm observed edges
@@ -315,9 +333,10 @@ orbyn import --format json|csv [--file <file>]    Import inventory (file or stdi
 orbyn export [--format json|csv|ansible|ansible-yaml|terraform] [--group-by <key>] \
     [--tf-import <resource-type>] [--output <file>]
 orbyn netbox import --url <url> [--token <t>|--token -]  Import devices/VMs from NetBox (SoT)
+orbyn prometheus import --url <url> [--token <t>|--token -] [--lookback-hours 168] \
+    [--step 5m] [--cpu-query <q>] [--ram-query <q>] [--no-verify]
+                                                   Import historical CPU/RAM utilization
 orbyn completions bash|zsh|fish                      Generate a shell completion script
-orbyn graph [--format ...]
-orbyn assess [--format ...]
 ```
 
 Example session:
@@ -339,6 +358,11 @@ orbyn discover --target 10.0.0.20 --collector windows --user administrator \
 # ... or Windows hosts over native WinRM (Basic auth over HTTPS)
 orbyn discover --target 10.0.0.20 --collector winrm --user administrator \
     --winrm-password - <<< "$ORBYN_WINRM_PASSWORD"
+
+# import a week of CPU/RAM history from Prometheus (node_exporter queries
+# by default; run from cron for continuous evidence)
+orbyn prometheus import --url http://prometheus:9090
+orbyn metrics 10.0.0.10          # span, percentiles, right-sizing readiness
 
 # inspect what was found
 orbyn assets
@@ -396,6 +420,7 @@ clean for piping.
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
 | `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client, WinRM transport) |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
+| `ORBYN_PROMETHEUS_TOKEN` | _(unset)_ | Prometheus bearer token (or `--token`, `--token -` for stdin) |
 | `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the
