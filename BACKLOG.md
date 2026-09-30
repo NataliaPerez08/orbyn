@@ -174,9 +174,11 @@ fixtures plus end-to-end tests.
 - [x] **P1** Define the common cloud-provider adapter contract
   (`integrations::cloud::CloudAdapter` + `CloudProvenance` + shared
   `CurlClient`).
-- [x] **P1** Implement Proxmox VE adapter: nodes, QEMU VMs, LXC containers,
-  interfaces (guest agent / container API) and CPU/RAM capacity.
-  (`orbyn proxmox import`; storage/pools are not yet mapped.)
+- [x] **P1** Implement Proxmox VE adapter: nodes, node storage/datastores, QEMU
+  VMs, LXC containers, interfaces (guest agent / container API / config
+  fallback), guest OS identity, filesystems (agent `get-fsinfo` + LXC `rootfs`)
+  and CPU/RAM capacity, with pools mapped to the asset owner and templates
+  skipped. (`orbyn proxmox import`.)
 - [x] **P1** Implement AWS adapter: EC2 instances, elastic network interfaces,
   tags and STS account provenance. (`orbyn aws import`; EBS/VPC/subnet
   resources are not yet separate assets.)

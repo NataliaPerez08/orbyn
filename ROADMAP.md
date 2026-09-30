@@ -324,11 +324,17 @@ Shipped in this phase:
   on stdin, caps requests/response size/timeouts, and replays only transient
   failures.
 - `orbyn proxmox import` reads nodes, QEMU VMs and LXC containers from a
-  Proxmox VE cluster (`/cluster/status`, `/cluster/resources`, `/nodes`). Guest
-  interfaces and addresses come from the QEMU guest agent or the container API;
-  capacity (CPU cores, RAM) comes from the cluster resource list. A guest
-  without a reachable IP is skipped with a note. Authentication uses a Proxmox
-  API token, streamed to `curl` on stdin.
+  Proxmox VE cluster (`/cluster/status`, `/cluster/resources`, `/nodes`).
+  Interfaces and addresses come from the QEMU guest agent or the container API,
+  falling back to the guest config (`netN`/`ipconfigN` static addresses) so
+  stopped containers and agent-less VMs are still imported. Guest OS identity
+  comes from the agent (`agent/get-osinfo`) or the config `ostype`; disk usage
+  comes from the agent (`agent/get-fsinfo`) and the LXC `rootfs` volume; each
+  node's active datastores (`/nodes/{node}/storage`) are attributed to the node.
+  CPU/RAM allocation comes from the guest config (resources as fallback), and
+  pools become the asset owner. Templates are skipped, and a guest with no
+  address anywhere is skipped with a note. Authentication uses a Proxmox API
+  token, streamed to `curl` on stdin.
 - `orbyn aws import` reads EC2 instances and their elastic network interfaces
   from the EC2 query API, signed with SigV4 implemented from the specification
   (no SDK). The AWS account id is resolved from STS when permitted. Credentials

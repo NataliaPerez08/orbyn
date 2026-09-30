@@ -213,8 +213,11 @@ Cloud adapters (Phase 5) live in `src/integrations/cloud/`. They implement the
 client that fetches a provider inventory, normalizes it into
 `CloudAsset`/`Interface`/`Service`/`Capacity`/`Filesystem` rows, and attaches
 `CloudProvenance` (provider, account, region, observation time). The `ProxmoxClient`
-adapter reads nodes, QEMU VMs and LXC containers over the Proxmox REST API with
-an API token; the `AwsClient` adapter reads EC2 instances and elastic network
+adapter reads nodes, node storage/datastores, QEMU VMs and LXC containers over
+the Proxmox REST API with an API token, including guest interfaces (live or from
+the config), OS identity (`agent/get-osinfo` / `ostype`), filesystems
+(`agent/get-fsinfo` / LXC `rootfs`) and CPU/RAM allocation, with pools mapped to
+the asset owner; the `AwsClient` adapter reads EC2 instances and elastic network
 interfaces over the EC2 query API, signing each request with SigV4
 (`src/integrations/cloud/aws/sigv4.rs`) from environment credentials. Both use
 the shared `CurlClient`, which streams headers (including credentials) to

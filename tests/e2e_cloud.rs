@@ -53,6 +53,47 @@ JSON
 ]}
 JSON
     ;;
+  */nodes/pve1/qemu/100/config)
+    cat <<'JSON'
+{"data":{"ostype":"l26","cores":2,"sockets":1,"memory":"2048","net0":"virtio=BC:24:11:B6:97:E4,bridge=vmbr1","ipconfig0":"gw=10.0.0.1,ip=10.0.0.5/24"}}
+JSON
+    ;;
+  */nodes/pve1/qemu/100/agent/get-osinfo)
+    cat <<'JSON'
+{"data":{"result":{"name":"Ubuntu","pretty-name":"Ubuntu 24.04.5 LTS","version-id":"24.04"}}}
+JSON
+    ;;
+  */nodes/pve1/qemu/100/agent/get-fsinfo)
+    cat <<'JSON'
+{"data":{"result":[
+  {"name":"sda1","mountpoint":"/","type":"ext4","total-bytes":23826268160,"used-bytes":4626456576,"disk":[{"dev":"/dev/sda1"}]}
+]}}
+JSON
+    ;;
+  */nodes/pve1/lxc/200/config)
+    cat <<'JSON'
+{"data":{"ostype":"debian","cores":1,"memory":512,"rootfs":"local-lvm:vm-200-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=10.0.0.6/24"}}
+JSON
+    ;;
+  */nodes/pve1/qemu/300/config)
+    cat <<'JSON'
+{"data":{"ostype":"l26","cores":1,"sockets":1,"memory":"1024","net0":"virtio=BC:24:11:00:00:01,bridge=vmbr0"}}
+JSON
+    ;;
+  */nodes/pve1/storage)
+    cat <<'JSON'
+{"data":[
+  {"storage":"local","type":"dir","active":1,"total":100861726720,"used":63545442304,"avail":32145547264},
+  {"storage":"local-lvm","type":"lvmthin","active":1,"total":373553102848,"used":133171681165,"avail":240381421683}
+]}
+JSON
+    ;;
+  */nodes/pve2/storage)
+    printf '{"data":[]}'
+    ;;
+  */nodes/pve1/qemu/300/agent/*)
+    printf '{"data":null}'
+    ;;
   */nodes)
     cat <<'JSON'
 {"data":[
@@ -82,7 +123,9 @@ fn proxmox_import_pulls_nodes_vms_and_containers() {
             .env("ORBYN_CURL_BIN", &curl),
     );
     assert!(
-        out.contains("Imported 4 assets, 2 interfaces, 4 capacity rows from Proxmox"),
+        out.contains(
+            "Imported 4 assets, 2 interfaces, 4 capacity rows, 4 filesystems from Proxmox"
+        ),
         "{out}"
     );
     assert!(out.contains("proxmox:root@pam"), "{out}");
@@ -114,10 +157,21 @@ fn proxmox_import_pulls_nodes_vms_and_containers() {
     assert!(ct_ifaces.contains("eth0"), "{ct_ifaces}");
     assert!(ct_ifaces.contains("10.0.0.6"), "{ct_ifaces}");
 
-    // Provenance tags land on the imported rows.
+    // Disk usage from the guest agent, the container rootfs and node datastores.
+    let web_disks = run_ok(orbyn(&dir).args(["disks", "web-01", "--format", "csv"]));
+    assert!(web_disks.contains("/dev/sda1"), "{web_disks}");
+
+    let ct_disks = run_ok(orbyn(&dir).args(["disks", "ct-01", "--format", "csv"]));
+    assert!(ct_disks.contains("local-lvm:vm-200-disk-0"), "{ct_disks}");
+
+    let node_disks = run_ok(orbyn(&dir).args(["disks", "pve1", "--format", "csv"]));
+    assert!(node_disks.contains("local-lvm"), "{node_disks}");
+
+    // Provenance tags land on the imported rows, with OS identity from the agent.
     let web = run_ok(orbyn(&dir).args(["asset", "web-01"]));
     assert!(web.contains("cloud:proxmox"), "{web}");
     assert!(web.contains("proxmox-vmid:100"), "{web}");
+    assert!(web.contains("Ubuntu 24.04.5 LTS"), "{web}");
 
     // The job is recorded under the provider.
     let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));

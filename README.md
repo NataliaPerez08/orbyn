@@ -229,9 +229,9 @@ The repository currently provides:
   * Terraform-friendly export (`orbyn export --format terraform`).
   * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
 * Cloud and platform adapters (Phase 5, read-only):
-  * Proxmox VE importer (`orbyn proxmox import`): nodes, QEMU VMs and LXC
-    containers with per-guest interfaces (guest agent / container API) and
-    CPU/RAM capacity.
+  * Proxmox VE importer (`orbyn proxmox import`): nodes, node datastores, QEMU
+    VMs and LXC containers with per-guest interfaces (guest agent / container
+    API / config fallback), OS identity, filesystems and CPU/RAM capacity.
   * AWS importer (`orbyn aws import`): EC2 instances and their elastic
     network interfaces via the signed EC2 query API (SigV4, no SDK), with
     the account id resolved from STS when permitted.
@@ -600,7 +600,7 @@ The underlying asset and dependency model should remain portable.
 | NetBox     | Source-of-truth import (devices/VMs)  | v1.1   |
 | Prometheus | Historical utilization                | v1.2+  |
 | Zabbix     | Historical utilization                | v1.2+  |
-| Proxmox VE | Nodes, VMs, containers, interfaces    | Phase 5 |
+| Proxmox VE | Nodes, storage, VMs, containers, disks, interfaces | Phase 5 |
 | AWS        | EC2 instances and network interfaces  | Phase 5 |
 | eBPF       | Runtime dependency observations       | Later  |
 
