@@ -188,6 +188,50 @@ fn import_deduplicates_rows_by_ip_with_warning() {
 
 #[cfg(unix)]
 #[test]
+fn import_refuses_input_over_the_cap() {
+    // The production cap is 64 MiB (audit OY-19): an oversized file must be
+    // refused with a clear error instead of being buffered.
+    let dir = TempDir::new("import-cap");
+    let file = dir.path().join("huge.json");
+    let payload = vec![b'a'; orbyn::import::MAX_IMPORT_INPUT_BYTES as usize + 1];
+    std::fs::write(&file, &payload).expect("write oversized json");
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["import", "--format", "json", "--file"])
+            .arg(&file),
+    );
+    assert!(out.contains("exceeds the import limit"), "got: {out}");
+
+    // Nothing was imported: the read fails before any parsing or persist.
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert_eq!(assets.lines().count(), 1, "header only: {assets}");
+}
+
+#[cfg(unix)]
+#[test]
+fn import_accepts_input_at_the_cap() {
+    let dir = TempDir::new("import-cap-edge");
+    let file = dir.path().join("exactly-at-the-cap.json");
+    // A valid inventory padded with JSON whitespace to exactly the cap.
+    let inventory =
+        br#"{"assets":[{"ip":"10.0.0.1","hostname":"api-01","device_class":"server"}]}"#;
+    let padding = orbyn::import::MAX_IMPORT_INPUT_BYTES as usize - inventory.len();
+    let mut payload = Vec::with_capacity(inventory.len() + padding);
+    payload.extend_from_slice(inventory);
+    payload.resize(payload.len() + padding, b' ');
+    std::fs::write(&file, &payload).expect("write json");
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["import", "--format", "json", "--file"])
+            .arg(&file),
+    );
+    assert!(out.contains("Imported 1 assets"), "got: {out}");
+}
+
+#[cfg(unix)]
+#[test]
 fn jobs_history_respects_limit_and_csv() {
     let dir = TempDir::new("jobs");
     let bin = fake_bin(&dir, "nmap", FAKE_NMAP_SCRIPT);

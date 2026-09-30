@@ -42,6 +42,29 @@ pub struct CapturedProcess {
     pub stderr_truncated: bool,
 }
 
+/// The error [`run_captured`] returns when the lifecycle limit expires,
+/// carrying the caller's `timeout_msg`.
+///
+/// It is a distinct type so a caller that may replay the call (the external
+/// API clients, via [`crate::http`]) can recognize its own timeouts instead of
+/// matching on the message; every other failure stays an ordinary
+/// [`anyhow::Error`].
+#[derive(Debug)]
+pub struct Timeout(pub String);
+
+impl std::fmt::Display for Timeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Timeout {}
+
+/// True when `e` is a lifecycle timeout reported by [`run_captured`].
+pub fn is_timeout(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Timeout>().is_some()
+}
+
 /// Run `child` to completion, reading stdout and stderr concurrently under a
 /// single lifecycle timeout.
 ///
@@ -135,7 +158,7 @@ pub async fn run_captured(
             // process is left running after the timeout.
             let _ = child.start_kill();
             let _ = child.wait().await;
-            Err(anyhow!(timeout_msg))
+            Err(Timeout(timeout_msg).into())
         }
     }
 }

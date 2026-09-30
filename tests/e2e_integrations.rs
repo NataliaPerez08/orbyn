@@ -54,6 +54,10 @@ JSON
       ;;
   esac
 done
+# The status curl appends with -w: Orbyn reads it to tell a good response
+# from a rate limit or a server error. One trailer per invocation, after the
+# body of the matched endpoint.
+printf '200'
 "#;
 
 #[cfg(unix)]
@@ -80,7 +84,12 @@ JSON
   *"/api/dcim/interfaces/"*|*"/api/virtualization/interfaces/"*|*"/api/ipam/ip-addresses/"*)
     printf '%s\n' '{"count":0,"next":null,"results":[]}'
     ;;
+  *)
+    printf 'malformed request'
+    exit 22
+    ;;
 esac
+printf '200'
 "#;
 
 #[cfg(unix)]
@@ -315,6 +324,7 @@ case "$url" in
     printf '%s\n' '{"count":0,"next":null,"results":[]}'
     ;;
 esac
+printf '200'
 "#;
     let curl = fake_bin(&dir, "curl", script);
     let stdin_log = dir.path().join("curl-stdin.log");
@@ -392,6 +402,7 @@ JSON
     printf '%s\n' '{"count":0,"next":null,"results":[]}'
     ;;
 esac
+printf '200'
 "#;
 
 #[cfg(unix)]
@@ -419,6 +430,136 @@ fn netbox_import_rejects_hostile_pagination_url() {
     let log = std::fs::read_to_string(&log).expect("curl args log");
     assert_eq!(log.lines().count(), 1, "exactly one request: {log}");
     assert!(!log.contains(".evil"), "hostile URL must not be fetched");
+}
+
+/// A fake `curl` that answers the first `ORBYN_RETRY_FAILURES` calls with a
+/// 503 and then serves the NetBox fixtures, counting every invocation in
+/// `$ORBYN_RETRY_COUNTER`. It proves the client replays a transient failure
+/// and then succeeds.
+#[cfg(unix)]
+const RETRY_THEN_OK_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+counter="${ORBYN_RETRY_COUNTER}"
+n=0
+if [[ -f "$counter" ]]; then n="$(cat "$counter")"; fi
+n=$((n + 1))
+printf '%s' "$n" > "$counter"
+if [[ "$n" -le "${ORBYN_RETRY_FAILURES:-2}" ]]; then
+  printf 'the NetBox API is warming up'
+  printf '503'
+  exit 0
+fi
+for a in "$@"; do
+  case "$a" in
+    */api/dcim/devices/*)
+      cat <<'JSON'
+{"count":1,"next":null,"results":[
+  {"id":101,"name":"rtr-core-1","role":{"name":"Router","slug":"router"},"primary_ip":{"address":"10.0.0.1/24"},"tags":[]}
+]}
+JSON
+      ;;
+    *"/api/"*)
+      printf '%s\n' '{"count":0,"next":null,"results":[]}'
+      ;;
+  esac
+done
+printf '200'
+"#;
+
+/// A fake `curl` that rejects every call with a 401 and counts invocations:
+/// a rejected credential is permanent, so the client must not replay it.
+#[cfg(unix)]
+const UNAUTHORIZED_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+counter="${ORBYN_RETRY_COUNTER}"
+n=0
+if [[ -f "$counter" ]]; then n="$(cat "$counter")"; fi
+n=$((n + 1))
+printf '%s' "$n" > "$counter"
+printf 'invalid token'
+printf '401'
+"#;
+
+#[cfg(unix)]
+#[test]
+fn netbox_retries_a_server_error_then_succeeds() {
+    let dir = TempDir::new("netbox-retry");
+    let curl = fake_bin(&dir, "curl", RETRY_THEN_OK_CURL_SCRIPT);
+    let counter = dir.path().join("curl-calls");
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_RETRY_COUNTER", &counter),
+    );
+    assert!(out.contains("Imported 1 assets from NetBox"), "got: {out}");
+
+    let calls: usize = std::fs::read_to_string(&counter)
+        .expect("counter")
+        .trim()
+        .parse()
+        .expect("numeric counter");
+    // 2 rejected attempts + 1 that succeeded + the four empty endpoints.
+    assert_eq!(
+        calls,
+        3 + 4,
+        "the 503 must be replayed, then succeed: {calls}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn netbox_does_not_replay_a_rejected_credential() {
+    let dir = TempDir::new("netbox-401");
+    let curl = fake_bin(&dir, "curl", UNAUTHORIZED_CURL_SCRIPT);
+    let counter = dir.path().join("curl-calls");
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_RETRY_COUNTER", &counter),
+    );
+    assert!(
+        out.contains("HTTP 401"),
+        "the status must be reported: {out}"
+    );
+    assert!(
+        out.contains("failed: NetBox returned HTTP 401"),
+        "a permanent failure must not claim retries: {out}"
+    );
+
+    let calls: usize = std::fs::read_to_string(&counter)
+        .expect("counter")
+        .trim()
+        .parse()
+        .expect("numeric counter");
+    assert_eq!(calls, 1, "a 401 must be attempted exactly once: {calls}");
+}
+
+#[cfg(unix)]
+#[test]
+fn netbox_reports_an_exhausted_retry_budget() {
+    let dir = TempDir::new("netbox-retry-exhausted");
+    let curl = fake_bin(&dir, "curl", RETRY_THEN_OK_CURL_SCRIPT);
+    let counter = dir.path().join("curl-calls");
+
+    // More failures than the retry budget allows: the import fails, and the
+    // message says how many attempts were spent.
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["netbox", "import", "--url", "https://netbox.example.com"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_RETRY_COUNTER", &counter)
+            .env("ORBYN_RETRY_FAILURES", "99"),
+    );
+    assert!(out.contains("failed after 3 attempts"), "got: {out}");
+
+    let calls: usize = std::fs::read_to_string(&counter)
+        .expect("counter")
+        .trim()
+        .parse()
+        .expect("numeric counter");
+    assert_eq!(calls, 3, "attempts stay bounded: {calls}");
 }
 
 #[cfg(unix)]

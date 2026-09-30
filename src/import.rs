@@ -6,9 +6,51 @@
 //! an export/import round-trip keeps interfaces and services instead of
 //! silently dropping them.
 
+use std::io::Read;
+
 use anyhow::{bail, Context, Result};
 
 use crate::parsing::{normalize_ip, split_csv_line};
+
+/// Maximum accepted `orbyn import` input, whether it comes from a file or
+/// from stdin (audit OY-19).
+///
+/// 64 MiB is far above a realistic inventory export — a few hundred thousand
+/// assets with interfaces and services land well under it — while still
+/// bounding what a redirected file or a hostile producer can make Orbyn buffer
+/// in memory. Larger estates are imported in several runs.
+pub const MAX_IMPORT_INPUT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read import input, refusing anything larger than
+/// [`MAX_IMPORT_INPUT_BYTES`].
+///
+/// The limit is enforced while reading rather than from file metadata alone:
+/// stdin and process substitution have no useful size, and a file can grow
+/// between the `stat` and the read.
+pub fn read_capped<R: Read>(reader: &mut R, what: &str) -> Result<String> {
+    read_capped_within(reader, what, MAX_IMPORT_INPUT_BYTES)
+}
+
+/// [`read_capped`] with an explicit limit (the unit tests use a small one).
+pub fn read_capped_within<R: Read>(reader: &mut R, what: &str, limit: u64) -> Result<String> {
+    let mut bytes = Vec::new();
+    // One byte past the limit is enough to tell "exactly at the limit" from
+    // "over it" without buffering the overflow.
+    let read = reader
+        .by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading {what}"))?;
+    if read as u64 > limit {
+        bail!(
+            "{what} exceeds the import limit of {} bytes; import the inventory \
+             in smaller pieces",
+            limit
+        );
+    }
+    String::from_utf8(bytes).with_context(|| format!("{what} is not valid UTF-8"))
+}
+
 /// An asset row accepted by `orbyn import` (JSON or CSV).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ImportedAsset {
@@ -346,6 +388,9 @@ pub fn deduplicate(rows: Vec<ImportedAsset>) -> (Vec<ImportedAsset>, usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]
@@ -550,5 +595,61 @@ mod tests {
         let (kept, dup) = deduplicate(vec![row("10.0.0.1"), row("::ffff:10.0.0.1")]);
         assert_eq!(dup, 1);
         assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn capped_read_accepts_input_at_the_limit() {
+        let input = "a".repeat(16);
+        let read = read_capped_within(&mut input.as_bytes(), "import from stdin", 16)
+            .expect("input at the limit is accepted");
+        assert_eq!(read.len(), 16);
+    }
+
+    #[test]
+    fn capped_read_rejects_oversized_input() {
+        let input = "a".repeat(17);
+        let error = read_capped_within(&mut input.as_bytes(), "import from stdin", 16)
+            .expect_err("oversized input is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds the import limit of 16 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn capped_read_stops_at_the_limit_instead_of_buffering_the_rest() {
+        // A hostile producer streams forever: the reader must not drain it.
+        struct Endless(Rc<Cell<u64>>);
+        impl Read for Endless {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0.set(self.0.get() + buf.len() as u64);
+                for slot in buf.iter_mut() {
+                    *slot = b'x';
+                }
+                Ok(buf.len())
+            }
+        }
+
+        let offered = Rc::new(Cell::new(0u64));
+        let mut endless = Endless(offered.clone());
+        let error = read_capped_within(&mut endless, "import from stdin", 4096)
+            .expect_err("an endless stream is refused");
+        assert!(
+            error.to_string().contains("exceeds the import limit"),
+            "{error}"
+        );
+        assert_eq!(
+            offered.get(),
+            4097,
+            "at most one byte past the limit is ever read"
+        );
+    }
+
+    #[test]
+    fn capped_read_rejects_invalid_utf8() {
+        let input = vec![0xff, 0xfe, 0x00];
+        assert!(read_capped_within(&mut input.as_slice(), "import file x.json", 64).is_err());
     }
 }

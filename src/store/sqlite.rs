@@ -97,6 +97,81 @@ impl SqliteStore {
     }
 }
 
+/// The annotation values an edit resolves to: requested fields replaced,
+/// unset fields cleared, tags merged with the stored ones.
+struct MergedAnnotation {
+    environment: Option<String>,
+    owner: Option<String>,
+    criticality: Option<String>,
+    tags: Vec<String>,
+}
+
+/// Resolve `annotations` against the asset's current row.
+///
+/// Shared by the single-asset and bulk paths; the executor is generic so the
+/// same resolution runs inside a transaction or on the pool directly.
+async fn merged_annotation<'e, E>(
+    id: &str,
+    annotations: &AssetAnnotations,
+    executor: E,
+) -> Result<MergedAnnotation>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let row = sqlx::query("SELECT environment, owner, criticality, tags FROM assets WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .context("fetching asset for annotation")?
+        .ok_or_else(|| anyhow!("no asset matches '{id}'"))?;
+
+    let current_tags: Vec<String> = row
+        .try_get::<String, _>("tags")
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let mut tags = current_tags;
+    tags.retain(|t| !annotations.remove_tags.iter().any(|r| r == t));
+    for tag in &annotations.add_tags {
+        if !tags.contains(tag) {
+            tags.push(tag.clone());
+        }
+    }
+
+    let environment = if annotations.unset.contains(&AnnotationField::Environment) {
+        None
+    } else {
+        match annotations.environment.clone() {
+            Some(v) => Some(v),
+            None => row.try_get("environment")?,
+        }
+    };
+    let owner = if annotations.unset.contains(&AnnotationField::Owner) {
+        None
+    } else {
+        match annotations.owner.clone() {
+            Some(v) => Some(v),
+            None => row.try_get("owner")?,
+        }
+    };
+    let criticality = if annotations.unset.contains(&AnnotationField::Criticality) {
+        None
+    } else {
+        match &annotations.criticality {
+            Some(c) => Some(c.to_string()),
+            None => row.try_get("criticality")?,
+        }
+    };
+
+    Ok(MergedAnnotation {
+        environment,
+        owner,
+        criticality,
+        tags,
+    })
+}
+
 /// Restrict a path to owner-only access on Unix (audit OY-05).
 #[cfg(unix)]
 fn restrict_permissions(path: &std::path::Path, mode: u32) -> Result<()> {
@@ -676,67 +751,42 @@ impl crate::store::traits::Store for SqliteStore {
     }
 
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()> {
-        let row =
-            sqlx::query("SELECT environment, owner, criticality, tags FROM assets WHERE id = ?1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .context("fetching asset for annotation")?
-                .ok_or_else(|| anyhow!("no asset matches '{id}'"))?;
-
-        let current_tags: Vec<String> = row
-            .try_get::<String, _>("tags")
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
-
-        let mut tags = current_tags;
-        tags.retain(|t| !annotations.remove_tags.iter().any(|r| r == t));
-        for tag in &annotations.add_tags {
-            if !tags.contains(tag) {
-                tags.push(tag.clone());
-            }
-        }
-
-        let environment = if annotations.unset.contains(&AnnotationField::Environment) {
-            None
-        } else {
-            match annotations.environment {
-                Some(v) => Some(v),
-                None => row.try_get("environment")?,
-            }
-        };
-        let owner = if annotations.unset.contains(&AnnotationField::Owner) {
-            None
-        } else {
-            match annotations.owner {
-                Some(v) => Some(v),
-                None => row.try_get("owner")?,
-            }
-        };
-        let criticality: Option<String> =
-            if annotations.unset.contains(&AnnotationField::Criticality) {
-                None
-            } else {
-                match annotations.criticality {
-                    Some(c) => Some(c.to_string()),
-                    None => row.try_get("criticality")?,
-                }
-            };
-
+        let merged = merged_annotation(id, &annotations, &self.pool).await?;
         sqlx::query(
             "UPDATE assets SET environment = ?2, owner = ?3, criticality = ?4, tags = ?5 \
              WHERE id = ?1",
         )
         .bind(id)
-        .bind(&environment)
-        .bind(&owner)
-        .bind(&criticality)
-        .bind(serde_json::to_string(&tags)?)
+        .bind(&merged.environment)
+        .bind(&merged.owner)
+        .bind(&merged.criticality)
+        .bind(serde_json::to_string(&merged.tags)?)
         .execute(&self.pool)
         .await
         .context("annotating asset")?;
         Ok(())
+    }
+
+    /// Apply every edit in one transaction: a bulk import commits once
+    /// instead of once per asset.
+    async fn annotate_assets(&self, edits: Vec<(String, AssetAnnotations)>) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("beginning transaction")?;
+        for (id, annotations) in edits {
+            let merged = merged_annotation(&id, &annotations, &mut *tx).await?;
+            sqlx::query(
+                "UPDATE assets SET environment = ?2, owner = ?3, criticality = ?4, tags = ?5 \
+                 WHERE id = ?1",
+            )
+            .bind(&id)
+            .bind(&merged.environment)
+            .bind(&merged.owner)
+            .bind(&merged.criticality)
+            .bind(serde_json::to_string(&merged.tags)?)
+            .execute(&mut *tx)
+            .await
+            .context("annotating asset")?;
+        }
+        tx.commit().await.context("committing annotations")
     }
 
     async fn create_job(&self, job: DiscoveryJob) -> Result<()> {

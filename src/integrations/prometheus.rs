@@ -24,7 +24,11 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::domain::{Asset, MetricSample};
-use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES};
+use crate::http::{
+    excerpt, is_retryable_curl_exit, is_retryable_status, split_http_status, with_retries, Attempt,
+    CallFailure, RetryPolicy,
+};
+use crate::process::{is_timeout, run_captured, MAX_STDERR_CAPTURE_BYTES};
 
 use super::netbox::url_origin;
 
@@ -52,6 +56,7 @@ pub struct PrometheusClient {
     token: Option<String>,
     insecure: bool,
     binary: String,
+    retry: RetryPolicy,
 }
 
 /// Parameters of one utilization import.
@@ -110,6 +115,7 @@ impl PrometheusClient {
             token,
             insecure,
             binary: std::env::var("ORBYN_CURL_BIN").unwrap_or_else(|_| "curl".to_string()),
+            retry: RetryPolicy::default(),
         })
     }
 
@@ -199,12 +205,27 @@ impl PrometheusClient {
         Ok((series, skipped))
     }
 
-    /// GET a URL through curl. The Authorization header, when a token is
-    /// configured, is read by curl from stdin (`-H @-`) so the token never
-    /// hits the filesystem or the process argument list.
+    /// GET a URL, replaying only the failures a later attempt could fix
+    /// (timeouts, dropped connections, 429, 5xx). The Authorization header,
+    /// when a token is configured, is read by curl from stdin (`-H @-`) so the
+    /// token never hits the filesystem or the process argument list.
     async fn get_url(&self, url: &str) -> Result<String> {
+        with_retries(&self.retry, &format!("Prometheus request to {url}"), |_| {
+            self.get_once(url)
+        })
+        .await
+    }
+
+    /// One Prometheus HTTP request: the response body, or a failure classified
+    /// for retry.
+    async fn get_once(&self, url: &str) -> Attempt<String> {
         let mut cmd = Command::new(&self.binary);
-        cmd.arg("-sS");
+        cmd.arg("-sS")
+            // The HTTP status is appended to stdout (3 digits) so a rate limit
+            // or a server error is distinguishable from a good response
+            // without -f, which would discard the body an operator needs.
+            .arg("-w")
+            .arg("%{http_code}");
         if self.insecure {
             cmd.arg("--insecure");
         }
@@ -226,15 +247,20 @@ impl PrometheusClient {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let child = cmd
-            .spawn()
-            .context("failed to start curl; is it installed?")?;
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Err(CallFailure::permanent(format!(
+                    "failed to start curl; is it installed? {e}"
+                )))
+            }
+        };
 
         let stdin_payload = self
             .token
             .as_deref()
             .map(|t| format!("Authorization: Bearer {t}\n"));
-        let captured = run_captured(
+        let captured = match run_captured(
             child,
             stdin_payload.as_deref(),
             PROM_MAX_RESPONSE_BYTES,
@@ -242,22 +268,46 @@ impl PrometheusClient {
             PROM_REQUEST_TIMEOUT,
             format!("curl timed out against {url}"),
         )
-        .await?;
+        .await
+        {
+            Ok(captured) => captured,
+            Err(e) if is_timeout(&e) => return Err(CallFailure::transient(format!("{e:#}"))),
+            Err(e) => return Err(e.into()),
+        };
 
         if captured.stdout.len() as u64 > PROM_MAX_RESPONSE_BYTES {
-            return Err(anyhow!(
-                "Prometheus response exceeds the {} byte limit",
-                PROM_MAX_RESPONSE_BYTES
-            ));
+            return Err(CallFailure::permanent(format!(
+                "Prometheus response exceeds the {PROM_MAX_RESPONSE_BYTES} byte limit"
+            )));
         }
         if !captured.status.success() {
-            return Err(anyhow!(
-                "curl exited with {}: {}",
+            let message = format!(
+                "curl exited with {} against {url}: {}",
                 captured.status,
                 captured.stderr.trim()
-            ));
+            );
+            return Err(match captured.status.code() {
+                Some(code) if is_retryable_curl_exit(code) => CallFailure::transient(message),
+                _ => CallFailure::permanent(message),
+            });
         }
-        Ok(captured.stdout)
+        let Some((body, status)) = split_http_status(&captured.stdout) else {
+            return Err(CallFailure::permanent(format!(
+                "malformed curl response from {url}: no HTTP status trailer"
+            )));
+        };
+        if !(200..300).contains(&status) {
+            let message = format!(
+                "Prometheus returned HTTP {status} for {url}: {}",
+                excerpt(body)
+            );
+            return Err(if is_retryable_status(status) {
+                CallFailure::transient(message)
+            } else {
+                CallFailure::permanent(message)
+            });
+        }
+        Ok(body.to_string())
     }
 }
 

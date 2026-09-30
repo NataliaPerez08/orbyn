@@ -7,6 +7,7 @@
 //! data came from.
 
 pub mod ansible;
+pub mod cloud;
 pub mod netbox;
 pub mod prometheus;
 pub mod terraform;

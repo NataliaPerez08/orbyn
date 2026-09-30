@@ -39,7 +39,11 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::domain::{Asset, MetricSample};
-use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES};
+use crate::http::{
+    excerpt, is_retryable_curl_exit, is_retryable_status, split_http_status, with_retries, Attempt,
+    CallFailure, RetryPolicy,
+};
+use crate::process::{is_timeout, run_captured, MAX_STDERR_CAPTURE_BYTES};
 
 use super::netbox::url_origin;
 
@@ -79,6 +83,7 @@ pub struct ZabbixClient {
     token: Option<String>,
     insecure: bool,
     binary: String,
+    retry: RetryPolicy,
 }
 
 /// Parameters of one utilization import.
@@ -161,6 +166,7 @@ impl ZabbixClient {
             token,
             insecure,
             binary: std::env::var("ORBYN_CURL_BIN").unwrap_or_else(|_| "curl".to_string()),
+            retry: RetryPolicy::default(),
         })
     }
 
@@ -336,11 +342,30 @@ impl ZabbixClient {
         serde_json::from_value(result).with_context(|| format!("decoding Zabbix {method} result"))
     }
 
-    /// POST a JSON-RPC envelope through curl, with the envelope on stdin so
-    /// the API token never reaches the process argument list.
+    /// POST a JSON-RPC envelope, replaying only the failures a later attempt
+    /// could fix (timeouts, dropped connections, 429, 5xx). The envelope
+    /// travels on stdin, so the API token never reaches the process argument
+    /// list, and every method used here is a read-only query
+    /// (`host.get`, `item.get`, `history.get`).
     async fn post(&self, body: &str) -> Result<String> {
+        with_retries(
+            &self.retry,
+            &format!("Zabbix request to {}", self.endpoint),
+            |_| self.post_once(body),
+        )
+        .await
+    }
+
+    /// One Zabbix JSON-RPC request: the response body, or a failure classified
+    /// for retry.
+    async fn post_once(&self, body: &str) -> Attempt<String> {
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-sS")
+            // The HTTP status is appended to stdout (3 digits) so a rate limit
+            // or a server error is distinguishable from a good response
+            // without -f, which would discard the JSON-RPC fault body.
+            .arg("-w")
+            .arg("%{http_code}")
             .arg("-X")
             .arg("POST")
             .arg("-H")
@@ -366,10 +391,15 @@ impl ZabbixClient {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let child = cmd
-            .spawn()
-            .context("failed to start curl; is it installed?")?;
-        let captured = run_captured(
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Err(CallFailure::permanent(format!(
+                    "failed to start curl; is it installed? {e}"
+                )))
+            }
+        };
+        let captured = match run_captured(
             child,
             Some(body),
             ZABBIX_MAX_RESPONSE_BYTES,
@@ -377,22 +407,45 @@ impl ZabbixClient {
             ZABBIX_REQUEST_TIMEOUT,
             format!("curl timed out talking to Zabbix at {}", self.endpoint),
         )
-        .await?;
+        .await
+        {
+            Ok(captured) => captured,
+            Err(e) if is_timeout(&e) => return Err(CallFailure::transient(format!("{e:#}"))),
+            Err(e) => return Err(e.into()),
+        };
 
         if captured.stdout.len() as u64 > ZABBIX_MAX_RESPONSE_BYTES {
-            return Err(anyhow!(
-                "Zabbix response exceeds the {} byte limit",
-                ZABBIX_MAX_RESPONSE_BYTES
-            ));
+            return Err(CallFailure::permanent(format!(
+                "Zabbix response exceeds the {ZABBIX_MAX_RESPONSE_BYTES} byte limit"
+            )));
         }
         if !captured.status.success() {
-            return Err(anyhow!(
-                "curl exited with {}: {}",
+            let message = format!(
+                "curl exited with {} against {}: {}",
                 captured.status,
+                self.endpoint,
                 captured.stderr.trim()
-            ));
+            );
+            return Err(match captured.status.code() {
+                Some(code) if is_retryable_curl_exit(code) => CallFailure::transient(message),
+                _ => CallFailure::permanent(message),
+            });
         }
-        Ok(captured.stdout)
+        let Some((body, status)) = split_http_status(&captured.stdout) else {
+            return Err(CallFailure::permanent(format!(
+                "malformed curl response from {}: no HTTP status trailer",
+                self.endpoint
+            )));
+        };
+        if !(200..300).contains(&status) {
+            let message = format!("Zabbix returned HTTP {status}: {}", excerpt(body));
+            return Err(if is_retryable_status(status) {
+                CallFailure::transient(message)
+            } else {
+                CallFailure::permanent(message)
+            });
+        }
+        Ok(body.to_string())
     }
 }
 

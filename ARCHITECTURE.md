@@ -50,7 +50,8 @@ src/
 │   ├── sqlite.rs         # SQLite via sqlx
 │   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
 │   └── rows.rs           # row decoding shared by both backends
-├── integrations/         # NetBox + Prometheus importers, Ansible/Terraform exporters
+├── integrations/         # importers, cloud adapters, Ansible/Terraform exporters
+│   └── cloud/            # read-only provider adapters (Proxmox VE, AWS) + SigV4
 ├── metrics/              # capacity/utilization processing (windows, right-sizing readiness)
 ├── assessment/           # migration assessment engine
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
@@ -74,6 +75,8 @@ Examples:
 - NetBox (read-only importer).
 - Prometheus (read-only historical utilization importer, v1.2).
 - Zabbix (read-only historical utilization importer, Phase 3).
+- Proxmox VE (read-only cloud adapter, Phase 5).
+- AWS EC2 (read-only cloud adapter, Phase 5).
 - vCenter (deferred/planned).
 - Flow telemetry or eBPF (planned).
 
@@ -204,6 +207,22 @@ read-only source-of-truth importer (REST API via `curl`, token streamed through
 stdin), while Ansible (INI inventory) and Terraform (HCL `locals`) are
 pure exporters over the normalized domain. A collector/plugin SDK is documented
 in PLUGINS.md with a runnable `examples/custom_collector.rs`.
+
+Cloud adapters (Phase 5) live in `src/integrations/cloud/`. They implement the
+`CloudAdapter` contract (`src/integrations/cloud/mod.rs`): a read-only provider
+client that fetches a provider inventory, normalizes it into
+`CloudAsset`/`Interface`/`Service`/`Capacity`/`Filesystem` rows, and attaches
+`CloudProvenance` (provider, account, region, observation time). The `ProxmoxClient`
+adapter reads nodes, QEMU VMs and LXC containers over the Proxmox REST API with
+an API token; the `AwsClient` adapter reads EC2 instances and elastic network
+interfaces over the EC2 query API, signing each request with SigV4
+(`src/integrations/cloud/aws/sigv4.rs`) from environment credentials. Both use
+the shared `CurlClient`, which streams headers (including credentials) to
+`curl` on stdin, bounds requests/response size/timeouts, and replays only
+transient failures. Provenance is preserved without a schema change as tags
+(`cloud:<provider>`, `cloud-account:<id>`, `cloud-region:<region>`) plus a
+discovery job named after the provider and an audit event; an adapter skips
+resources it cannot address (e.g. a VM without a reachable IP) and reports them.
 
 Every edge retains its evidence source and confidence; manual confirmation
 raises confidence to 1.0. Guesses look like guesses: unconfirmed edges render

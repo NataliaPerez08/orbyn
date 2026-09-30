@@ -458,6 +458,94 @@ async fn annotation_merges_and_preserves() {
     assert_eq!(db.tags, vec!["postgres".to_string()], "tags kept");
 }
 
+/// The bulk annotation path must behave exactly like the single-asset one:
+/// this is what a large import uses, one transaction instead of one per asset.
+#[tokio::test]
+async fn bulk_annotation_applies_every_edit() {
+    let _ = std::fs::remove_file(format!("{}.bulk-ann", sample_db_path()));
+    let store = SqliteStore::open(std::path::Path::new(&format!(
+        "{}.bulk-ann",
+        sample_db_path()
+    )))
+    .await
+    .expect("open test db");
+
+    store
+        .store_observations(sample_observations())
+        .await
+        .expect("persist sample observations");
+
+    store
+        .annotate_assets(vec![
+            (
+                "asset-db".to_string(),
+                AssetAnnotations {
+                    environment: Some("prod".into()),
+                    owner: Some("platform".into()),
+                    criticality: Some(Criticality::Critical),
+                    add_tags: vec!["core".into()],
+                    remove_tags: vec![],
+                    unset: Vec::new(),
+                },
+            ),
+            (
+                "asset-api".to_string(),
+                AssetAnnotations {
+                    environment: Some("staging".into()),
+                    owner: None,
+                    criticality: Some(Criticality::Low),
+                    add_tags: vec!["edge".into(), "core".into()],
+                    remove_tags: vec![],
+                    unset: Vec::new(),
+                },
+            ),
+        ])
+        .await
+        .expect("bulk annotate");
+
+    let db = store.get_asset("asset-db").await.expect("fetch").unwrap();
+    assert_eq!(db.environment.as_deref(), Some("prod"));
+    assert_eq!(db.owner.as_deref(), Some("platform"));
+    assert_eq!(db.tags, vec!["core".to_string()]);
+
+    let web = store.get_asset("asset-api").await.expect("fetch").unwrap();
+    assert_eq!(web.environment.as_deref(), Some("staging"));
+    assert_eq!(web.criticality, Some(Criticality::Low));
+    assert_eq!(web.tags, vec!["edge".to_string(), "core".into()]);
+
+    // A later edit merges over the bulk write, exactly as it would after a
+    // single-asset annotation.
+    store
+        .annotate_assets(vec![(
+            "asset-api".to_string(),
+            AssetAnnotations {
+                environment: None,
+                owner: Some("web-team".into()),
+                criticality: None,
+                add_tags: vec![],
+                remove_tags: vec!["core".into()],
+                unset: Vec::new(),
+            },
+        )])
+        .await
+        .expect("second bulk annotate");
+    let web = store.get_asset("asset-api").await.expect("fetch").unwrap();
+    assert_eq!(web.tags, vec!["edge".to_string()]);
+    assert_eq!(web.owner.as_deref(), Some("web-team"));
+    assert_eq!(web.environment.as_deref(), Some("staging"), "kept");
+    assert_eq!(web.criticality, Some(Criticality::Low), "kept");
+
+    // An unknown asset fails the whole batch instead of silently skipping.
+    let err = store
+        .annotate_assets(vec![(
+            "asset-missing".to_string(),
+            AssetAnnotations::default(),
+        )])
+        .await
+        .expect_err("unknown asset");
+    assert!(err.to_string().contains("no asset matches"), "{err}");
+}
+
 #[tokio::test]
 async fn job_history_round_trip() {
     let _ = std::fs::remove_file(format!("{}.jobs", sample_db_path()));

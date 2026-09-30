@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,6 +23,9 @@ use orbyn::domain::{
 };
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
+use orbyn::integrations::cloud::aws::{AwsClient, AwsCredentials};
+use orbyn::integrations::cloud::proxmox::ProxmoxClient;
+use orbyn::integrations::cloud::{CloudCounts, CloudInventory};
 use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::prometheus::{
     assemble_samples, ImportOptions, PrometheusClient, DEFAULT_CPU_QUERY, DEFAULT_RAM_QUERY,
@@ -320,6 +323,18 @@ enum Command {
         action: NetboxAction,
     },
 
+    /// Pull nodes, VMs and containers from a Proxmox VE cluster (read-only).
+    Proxmox {
+        #[command(subcommand)]
+        action: ProxmoxAction,
+    },
+
+    /// Pull EC2 instances from AWS (read-only).
+    Aws {
+        #[command(subcommand)]
+        action: AwsAction,
+    },
+
     /// Pull historical CPU/RAM utilization from Prometheus into metric
     /// samples (one week by default).
     Prometheus {
@@ -427,6 +442,56 @@ enum NetboxAction {
         #[arg(long, env = "ORBYN_NETBOX_TOKEN", hide_env_values = true)]
         token: Option<String>,
         /// Skip TLS certificate verification (for self-signed NetBox).
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+/// Sub-actions of `orbyn proxmox`.
+#[derive(Debug, Subcommand)]
+enum ProxmoxAction {
+    /// Import nodes, VMs and containers from a Proxmox VE cluster.
+    Import {
+        /// Proxmox VE base URL, e.g. https://pve.example.com:8006.
+        #[arg(long)]
+        url: String,
+        /// Proxmox API token (`user@realm!tokenid=secret`): from
+        /// ORBYN_PROXMOX_TOKEN, or `-` to read one line from stdin so it
+        /// never lands in argv.
+        #[arg(long, env = "ORBYN_PROXMOX_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        /// Skip TLS certificate verification (for self-signed Proxmox).
+        #[arg(long)]
+        no_verify: bool,
+        /// Restrict the import to a single cluster node.
+        #[arg(long)]
+        node: Option<String>,
+    },
+}
+
+/// Sub-actions of `orbyn aws`.
+#[derive(Debug, Subcommand)]
+enum AwsAction {
+    /// Import EC2 instances and their network interfaces.
+    Import {
+        /// AWS region, e.g. eu-west-1 (from AWS_REGION or AWS_DEFAULT_REGION).
+        #[arg(long)]
+        region: Option<String>,
+        /// AWS access key id (from AWS_ACCESS_KEY_ID).
+        #[arg(long, env = "AWS_ACCESS_KEY_ID", hide_env_values = true)]
+        access_key: Option<String>,
+        /// AWS secret access key (from AWS_SECRET_ACCESS_KEY), or `-` to read
+        /// one line from stdin so it never lands in argv.
+        #[arg(long, env = "AWS_SECRET_ACCESS_KEY", hide_env_values = true)]
+        secret_key: Option<String>,
+        /// AWS session token (from AWS_SESSION_TOKEN), or `-` for stdin.
+        #[arg(long, env = "AWS_SESSION_TOKEN", hide_env_values = true)]
+        session_token: Option<String>,
+        /// Override the EC2 endpoint (from AWS_ENDPOINT_URL), for private
+        /// endpoints or tests.
+        #[arg(long, env = "AWS_ENDPOINT_URL", hide_env_values = true)]
+        endpoint_url: Option<String>,
+        /// Skip TLS certificate verification (for a self-signed endpoint).
         #[arg(long)]
         no_verify: bool,
     },
@@ -812,6 +877,158 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Imported {} from NetBox.", parts.join(", "));
             let jobs = store.list_jobs(Some(1)).await?;
             print!("{}", orbyn::output::jobs(&jobs, Format::Table));
+        }
+        Command::Proxmox {
+            action:
+                ProxmoxAction::Import {
+                    url,
+                    token,
+                    no_verify,
+                    node,
+                },
+        } => {
+            let token =
+                resolve_secret(token, "--token", "ORBYN_PROXMOX_TOKEN")?.ok_or_else(|| {
+                    anyhow!(
+                        "a Proxmox API token is required: pass --token, set \
+                     ORBYN_PROXMOX_TOKEN, or use --token - to read it from stdin"
+                    )
+                })?;
+            if no_verify {
+                tracing::warn!("--no-verify disables TLS certificate verification for Proxmox");
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed Proxmox instance; \
+                     connections can be silently intercepted."
+                );
+            }
+            if is_plain_http(&url) {
+                eprintln!(
+                    "WARNING: --url uses plain HTTP; the Proxmox API token will travel \
+                     unencrypted over the network (audit OY-12)."
+                );
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&token);
+            let audit = begin_audit(
+                store.as_ref(),
+                "proxmox.import",
+                "cloud",
+                Some(&format!(
+                    "url={url}{}",
+                    node.as_deref()
+                        .map(|n| format!(", node={n}"))
+                        .unwrap_or_default()
+                )),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let client = ProxmoxClient::new(&url, token, no_verify)
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?
+                    .with_node(node);
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("Proxmox", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Aws {
+            action:
+                AwsAction::Import {
+                    region,
+                    access_key,
+                    secret_key,
+                    session_token,
+                    endpoint_url,
+                    no_verify,
+                },
+        } => {
+            let region = region
+                .or_else(|| std::env::var("AWS_REGION").ok())
+                .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+                .filter(|r| !r.is_empty())
+                .ok_or_else(|| {
+                    anyhow!("an AWS region is required: pass --region or set AWS_REGION")
+                })?;
+            let access_key = access_key.filter(|k| !k.is_empty()).ok_or_else(|| {
+                anyhow!(
+                    "an AWS access key id is required: pass --access-key or set \
+                     AWS_ACCESS_KEY_ID"
+                )
+            })?;
+            let secret_key = resolve_secret(secret_key, "--secret-key", "AWS_SECRET_ACCESS_KEY")?
+                .ok_or_else(|| {
+                anyhow!(
+                    "an AWS secret access key is required: pass --secret-key, set \
+                         AWS_SECRET_ACCESS_KEY, or use --secret-key - to read it from stdin"
+                )
+            })?;
+            let session_token =
+                resolve_secret(session_token, "--session-token", "AWS_SESSION_TOKEN")?;
+            if no_verify {
+                tracing::warn!("--no-verify disables TLS certificate verification for AWS");
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed endpoint; connections \
+                     can be silently intercepted."
+                );
+            }
+            if let Some(endpoint) = &endpoint_url {
+                if is_plain_http(endpoint) {
+                    eprintln!(
+                        "WARNING: --endpoint-url uses plain HTTP; AWS credentials and the \
+                         signed request will travel unencrypted (audit OY-12)."
+                    );
+                }
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&secret_key);
+            if let Some(token) = &session_token {
+                redactor.add_value(token);
+            }
+            let audit = begin_audit(
+                store.as_ref(),
+                "aws.import",
+                "cloud",
+                Some(&format!(
+                    "region={region}{}",
+                    endpoint_url
+                        .as_deref()
+                        .map(|e| format!(", endpoint={e}"))
+                        .unwrap_or_default()
+                )),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let credentials = AwsCredentials {
+                    access_key,
+                    secret_key,
+                    session_token,
+                };
+                let client =
+                    AwsClient::new(credentials, &region, endpoint_url.as_deref(), no_verify)
+                        .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("AWS", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
         }
         Command::Prometheus {
             action:
@@ -1651,6 +1868,13 @@ async fn deps(store: &dyn Store, action: DepsAction) -> Result<()> {
     Ok(())
 }
 
+/// Asset rows written per transaction during an import.
+///
+/// Large enough that a bulk import pays a handful of commits instead of one
+/// per asset, small enough that a single transaction never holds the database
+/// write lock for a very long time.
+const IMPORT_WRITE_CHUNK: usize = 500;
+
 /// Parse an imported inventory, recording an audit job for the operation.
 async fn import_inventory(
     store: &dyn Store,
@@ -1808,39 +2032,48 @@ async fn persist_imported_inventory(
     };
     store.create_job(job.clone()).await?;
 
+    // Assets are written in batches and annotations in a single transaction:
+    // a commit per asset turns a large import into thousands of disk syncs.
     let mut persisted = 0u32;
+    let mut asset_observations = Vec::with_capacity(assets.len());
+    let mut annotation_edits = Vec::with_capacity(assets.len());
     for (row, ip, criticality) in assets {
         let id = asset_id(ip);
 
         let now = Utc::now();
-        store
-            .store_observation(Observation::Asset(Asset {
-                id: id.clone(),
-                ip,
-                hostname: row.hostname.clone(),
-                device_class: row.device_class.clone(),
-                os_name: row.os_name.clone(),
-                os_version: row.os_version.clone(),
-                sys_descr: None,
-                environment: None,
-                owner: None,
-                criticality: None,
-                tags: Vec::new(),
-                first_seen: now,
-                last_seen: now,
-            }))
-            .await?;
-        let annotations = AssetAnnotations {
-            environment: row.environment.clone(),
-            owner: row.owner.clone(),
-            criticality,
-            unset: Vec::new(),
-            add_tags: row.tags.clone(),
-            remove_tags: Vec::new(),
-        };
-        store.annotate_asset(&id, annotations).await?;
+        asset_observations.push(Observation::Asset(Asset {
+            id: id.clone(),
+            ip,
+            hostname: row.hostname.clone(),
+            device_class: row.device_class.clone(),
+            os_name: row.os_name.clone(),
+            os_version: row.os_version.clone(),
+            sys_descr: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: now,
+            last_seen: now,
+        }));
+        annotation_edits.push((
+            id,
+            AssetAnnotations {
+                environment: row.environment.clone(),
+                owner: row.owner.clone(),
+                criticality,
+                unset: Vec::new(),
+                add_tags: row.tags.clone(),
+                remove_tags: Vec::new(),
+            },
+        ));
         persisted += 1;
     }
+
+    for chunk in asset_observations.chunks(IMPORT_WRITE_CHUNK) {
+        store.store_observations(chunk.to_vec()).await?;
+    }
+    store.annotate_assets(annotation_edits).await?;
 
     if !observations.is_empty() {
         store.store_observations(observations).await?;
@@ -1868,16 +2101,130 @@ async fn persist_imported_inventory(
     })
 }
 
+/// Persist a normalized cloud inventory — assets, interfaces, services,
+/// capacity and filesystems — recording a discovery job named after the
+/// provider and attaching its provenance tags to every asset.
+///
+/// Unlike a flat file import, a cloud adapter has already validated and
+/// normalized its rows, so this writes them directly. Assets are written
+/// first so interface/service/capacity references satisfy their foreign keys.
+async fn persist_cloud_inventory(store: &dyn Store, inv: &CloudInventory) -> Result<CloudCounts> {
+    let counts = inv.counts();
+
+    let job = DiscoveryJob {
+        id: uuid::Uuid::new_v4().to_string(),
+        collector: inv.provenance.provider.clone(),
+        targets: vec![inv.provenance.label()],
+        status: JobStatus::Running,
+        started_at: Utc::now(),
+        finished_at: None,
+        error: None,
+        assets_found: None,
+        services_found: None,
+        filesystems_found: None,
+        running_services_found: None,
+        connections_found: None,
+    };
+    store.create_job(job.clone()).await?;
+
+    // Assets first, in bounded chunks, then their annotations in one
+    // transaction (one commit per asset would be thousands of disk syncs).
+    let mut asset_observations = Vec::with_capacity(inv.assets.len());
+    let mut annotation_edits = Vec::with_capacity(inv.assets.len());
+    for cloud_asset in &inv.assets {
+        asset_observations.push(Observation::Asset(cloud_asset.asset.clone()));
+        let mut tags = cloud_asset.tags.clone();
+        tags.extend(inv.provenance.tags());
+        annotation_edits.push((
+            cloud_asset.asset.id.clone(),
+            AssetAnnotations {
+                environment: cloud_asset.environment.clone(),
+                owner: cloud_asset.owner.clone(),
+                criticality: cloud_asset.criticality,
+                unset: Vec::new(),
+                add_tags: tags,
+                remove_tags: Vec::new(),
+            },
+        ));
+    }
+    for chunk in asset_observations.chunks(IMPORT_WRITE_CHUNK) {
+        store.store_observations(chunk.to_vec()).await?;
+    }
+    if !annotation_edits.is_empty() {
+        store.annotate_assets(annotation_edits).await?;
+    }
+
+    let mut observations: Vec<Observation> = Vec::new();
+    observations.extend(inv.interfaces.iter().cloned().map(Observation::Interface));
+    observations.extend(inv.services.iter().cloned().map(Observation::Service));
+    observations.extend(inv.capacities.iter().cloned().map(Observation::Capacity));
+    observations.extend(inv.filesystems.iter().cloned().map(Observation::Filesystem));
+    if !observations.is_empty() {
+        store.store_observations(observations).await?;
+    }
+
+    store
+        .finish_job(
+            &job.id,
+            JobStatus::Succeeded,
+            None,
+            Some(JobOutcome {
+                assets_found: counts.assets as u32,
+                services_found: counts.services as u32,
+                filesystems_found: counts.filesystems as u32,
+                running_services_found: 0,
+                connections_found: 0,
+            }),
+        )
+        .await?;
+
+    Ok(counts)
+}
+
+/// Print the operator-facing summary of a cloud import.
+fn print_cloud_import(provider: &str, inv: &CloudInventory) {
+    let counts = inv.counts();
+    let mut parts = vec![format!("{} assets", counts.assets)];
+    if counts.interfaces > 0 {
+        parts.push(format!("{} interfaces", counts.interfaces));
+    }
+    if counts.capacities > 0 {
+        parts.push(format!("{} capacity rows", counts.capacities));
+    }
+    if counts.filesystems > 0 {
+        parts.push(format!("{} filesystems", counts.filesystems));
+    }
+    eprintln!(
+        "Imported {} from {provider} ({}).",
+        parts.join(", "),
+        inv.provenance.label()
+    );
+    for note in &inv.skipped {
+        tracing::warn!(note, "skipped a cloud resource");
+    }
+    if !inv.skipped.is_empty() {
+        eprintln!(
+            "Skipped {} resource(s) that could not be represented.",
+            inv.skipped.len()
+        );
+    }
+}
+
+/// Read import input from a file or stdin, bounded by
+/// [`orbyn::import::MAX_IMPORT_INPUT_BYTES`] (audit OY-19): a redirected file
+/// or a hostile producer must not be able to make Orbyn buffer an unbounded
+/// input.
 fn read_input(file: Option<&PathBuf>) -> Result<String> {
     match file {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| format!("reading import file {}", path.display())),
+        Some(path) => {
+            let mut handle = std::fs::File::open(path)
+                .with_context(|| format!("reading import file {}", path.display()))?;
+            orbyn::import::read_capped(&mut handle, &format!("import file {}", path.display()))
+        }
         None => {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .context("reading import from stdin")?;
-            Ok(buf)
+            let stdin = std::io::stdin();
+            let mut handle = stdin.lock();
+            orbyn::import::read_capped(&mut handle, "import from stdin")
         }
     }
 }
@@ -2009,6 +2356,10 @@ mod tests {
         std::env::set_var("ORBYN_NETBOX_TOKEN", "help-leak-canary");
         std::env::set_var("ORBYN_WINRM_PASSWORD", "help-leak-canary");
         std::env::set_var("ORBYN_PROMETHEUS_TOKEN", "help-leak-canary");
+        std::env::set_var("ORBYN_PROXMOX_TOKEN", "help-leak-canary");
+        std::env::set_var("AWS_ACCESS_KEY_ID", "help-leak-canary");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "help-leak-canary");
+        std::env::set_var("AWS_SESSION_TOKEN", "help-leak-canary");
         let mut cmd = Cli::command();
         let discover_help = cmd
             .find_subcommand_mut("discover")
@@ -2038,11 +2389,31 @@ mod tests {
             .expect("zabbix import subcommand")
             .render_help()
             .to_string();
+        let mut cmd = Cli::command();
+        let proxmox_import_help = cmd
+            .find_subcommand_mut("proxmox")
+            .expect("proxmox subcommand")
+            .find_subcommand_mut("import")
+            .expect("proxmox import subcommand")
+            .render_help()
+            .to_string();
+        let mut cmd = Cli::command();
+        let aws_import_help = cmd
+            .find_subcommand_mut("aws")
+            .expect("aws subcommand")
+            .find_subcommand_mut("import")
+            .expect("aws import subcommand")
+            .render_help()
+            .to_string();
         std::env::remove_var("ORBYN_SNMP_COMMUNITY");
         std::env::remove_var("ORBYN_NETBOX_TOKEN");
         std::env::remove_var("ORBYN_WINRM_PASSWORD");
         std::env::remove_var("ORBYN_PROMETHEUS_TOKEN");
         std::env::remove_var("ORBYN_ZABBIX_TOKEN");
+        std::env::remove_var("ORBYN_PROXMOX_TOKEN");
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        std::env::remove_var("AWS_SESSION_TOKEN");
 
         // The variable name stays documented, its current value never leaks.
         assert!(
@@ -2080,6 +2451,23 @@ mod tests {
         assert!(
             !zabbix_import_help.contains("help-leak-canary"),
             "token env value leaked into help: {zabbix_import_help}"
+        );
+        assert!(
+            proxmox_import_help.contains("ORBYN_PROXMOX_TOKEN"),
+            "env var name stays documented: {proxmox_import_help}"
+        );
+        assert!(
+            !proxmox_import_help.contains("help-leak-canary"),
+            "token env value leaked into help: {proxmox_import_help}"
+        );
+        assert!(
+            aws_import_help.contains("AWS_ACCESS_KEY_ID")
+                && aws_import_help.contains("AWS_SECRET_ACCESS_KEY"),
+            "env var names stay documented: {aws_import_help}"
+        );
+        assert!(
+            !aws_import_help.contains("help-leak-canary"),
+            "credential env value leaked into help: {aws_import_help}"
         );
     }
 
@@ -2129,6 +2517,8 @@ mod tests {
             "netbox",
             "prometheus",
             "zabbix",
+            "proxmox",
+            "aws",
             "graph",
             "assess",
             "completions",

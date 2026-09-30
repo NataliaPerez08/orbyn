@@ -30,6 +30,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use tokio::process::Command;
 
+use crate::http::{excerpt, split_http_status};
 use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES, MAX_STDOUT_CAPTURE_BYTES};
 
 use super::credentials::CredentialProfile;
@@ -253,8 +254,8 @@ impl WinRmTransport {
             bail!("malformed curl response from {url}: no HTTP status trailer");
         };
         match status {
-            "200" => Ok(body.to_string()),
-            "401" => Err(anyhow!(
+            200 => Ok(body.to_string()),
+            401 => Err(anyhow!(
                 "WinRM authentication failed for {} against {url} (HTTP 401)",
                 self.profile.username
             )),
@@ -293,18 +294,6 @@ fn curl_config(username: &str, password: &str) -> String {
 /// Escape a value for curl's double-quoted config syntax (`\\` and `\"`).
 fn escape_config_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Split curl stdout into `(body, status)` using the 3-digit `-w` trailer.
-fn split_http_status(out: &str) -> Option<(&str, &str)> {
-    if out.len() < 3 {
-        return None;
-    }
-    let (body, status) = out.split_at(out.len() - 3);
-    if !status.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some((body, status))
 }
 
 /// Encode a PowerShell script for `-EncodedCommand`: base64 of UTF-16LE.
@@ -616,16 +605,6 @@ pub fn parse_soap_fault(xml: &str) -> Option<SoapFault> {
     }
 }
 
-/// A one-line excerpt of an unexpected response body for error messages.
-fn excerpt(body: &str) -> String {
-    let collapsed: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.len() > 200 {
-        format!("{}...", &collapsed[..200])
-    } else {
-        collapsed
-    }
-}
-
 /// Append the SOAP fault to an error message when the body carries one.
 fn fault_suffix(body: &str) -> String {
     match parse_soap_fault(body) {
@@ -695,15 +674,6 @@ mod tests {
             curl_config("ad\\min", "pa\"ss\\word"),
             "user = \"ad\\\\min:pa\\\"ss\\\\word\"\n"
         );
-    }
-
-    #[test]
-    fn split_http_status_separates_body_and_trailer() {
-        assert_eq!(split_http_status("body200"), Some(("body", "200")));
-        assert_eq!(split_http_status("200"), Some(("", "200")));
-        assert_eq!(split_http_status(""), None);
-        assert_eq!(split_http_status("20"), None);
-        assert_eq!(split_http_status("body2x0"), None);
     }
 
     #[test]
@@ -851,13 +821,6 @@ mod tests {
     fn no_fault_in_success_responses() {
         assert_eq!(parse_soap_fault(CREATE_RESPONSE), None);
         assert_eq!(parse_soap_fault(""), None);
-    }
-
-    #[test]
-    fn excerpt_collapses_and_truncates() {
-        assert_eq!(excerpt("  a\n\tb  c "), "a b c");
-        let long = "x".repeat(300);
-        assert_eq!(excerpt(&long).len(), 203);
     }
 
     #[test]

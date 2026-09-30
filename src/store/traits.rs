@@ -120,6 +120,20 @@ pub trait Store: Send + Sync {
     /// Apply inventory annotation edits (environment/owner/criticality/tags).
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()>;
 
+    /// Apply annotation edits to several assets.
+    ///
+    /// Bulk imports use this instead of looping [`Store::annotate_asset`]: one
+    /// commit per asset turns a large import into thousands of disk syncs.
+    /// The default implementation loops so a backend only has to override it
+    /// to get the batching; the built-in backends do, in a single
+    /// transaction.
+    async fn annotate_assets(&self, edits: Vec<(String, AssetAnnotations)>) -> Result<()> {
+        for (id, annotations) in edits {
+            self.annotate_asset(&id, annotations).await?;
+        }
+        Ok(())
+    }
+
     async fn create_job(&self, job: DiscoveryJob) -> Result<()>;
     async fn get_job(&self, id: &str) -> Result<Option<DiscoveryJob>>;
     async fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<DiscoveryJob>>;

@@ -302,6 +302,9 @@ resource usage for representative large inventories.
 
 ### Phase 5 — Cloud and platform adapters
 
+**Status:** partially implemented (common adapter contract; Proxmox VE and AWS
+shipped). OpenStack, GCP and Azure are pending.
+
 **Goal:** bring private infrastructure and public clouds into Orbyn's common
 normalized model.
 
@@ -312,6 +315,30 @@ normalized model.
 3. OpenStack.
 4. GCP.
 5. Azure.
+
+Shipped in this phase:
+
+- `src/integrations/cloud/mod.rs` defines the common `CloudAdapter` contract,
+  `CloudProvenance` (provider, account, region, observation time), and a shared
+  `CurlClient` that streams request headers (including credentials) to `curl`
+  on stdin, caps requests/response size/timeouts, and replays only transient
+  failures.
+- `orbyn proxmox import` reads nodes, QEMU VMs and LXC containers from a
+  Proxmox VE cluster (`/cluster/status`, `/cluster/resources`, `/nodes`). Guest
+  interfaces and addresses come from the QEMU guest agent or the container API;
+  capacity (CPU cores, RAM) comes from the cluster resource list. A guest
+  without a reachable IP is skipped with a note. Authentication uses a Proxmox
+  API token, streamed to `curl` on stdin.
+- `orbyn aws import` reads EC2 instances and their elastic network interfaces
+  from the EC2 query API, signed with SigV4 implemented from the specification
+  (no SDK). The AWS account id is resolved from STS when permitted. Credentials
+  come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` (or
+  flags); the session token and signature travel to `curl` on stdin.
+- Both adapters attach provenance tags (`cloud:<provider>`,
+  `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset,
+  record a provider-named discovery job and an audit event, and never persist a
+  credential. Imported rows feed the same assessment, graph and export
+  pipelines as any other source.
 
 #### Common adapter contract
 

@@ -410,6 +410,95 @@ async fn annotates_and_unsets_fields() {
     assert_eq!(updated.tags, vec!["api".to_string()]);
 }
 
+/// The bulk annotation path must behave exactly like the single-asset one:
+/// this is what a large import uses, one transaction instead of one per asset.
+#[tokio::test]
+async fn bulk_annotation_applies_every_edit() {
+    let Some((_guard, store)) = locked_store().await else {
+        eprintln!("skipping: ORBYN_PG_TEST_URL is not set");
+        return;
+    };
+    let db_id = unique_id("pg-bulk-db");
+    let web_id = unique_id("pg-bulk-web");
+    store
+        .store_observations(vec![
+            Observation::Asset(asset(&db_id, "10.216.0.1", None)),
+            Observation::Asset(asset(&web_id, "10.216.0.2", None)),
+        ])
+        .await
+        .unwrap();
+
+    store
+        .annotate_assets(vec![
+            (
+                db_id.clone(),
+                AssetAnnotations {
+                    environment: Some("prod".into()),
+                    owner: Some("platform".into()),
+                    criticality: Some(Criticality::Critical),
+                    add_tags: vec!["core".into()],
+                    remove_tags: Vec::new(),
+                    unset: Vec::new(),
+                },
+            ),
+            (
+                web_id.clone(),
+                AssetAnnotations {
+                    environment: Some("staging".into()),
+                    owner: None,
+                    criticality: Some(Criticality::Low),
+                    add_tags: vec!["edge".into(), "core".into()],
+                    remove_tags: Vec::new(),
+                    unset: Vec::new(),
+                },
+            ),
+        ])
+        .await
+        .unwrap();
+
+    let db = store.get_asset(&db_id).await.unwrap().unwrap();
+    assert_eq!(db.environment.as_deref(), Some("prod"));
+    assert_eq!(db.owner.as_deref(), Some("platform"));
+    assert_eq!(db.tags, vec!["core".to_string()]);
+
+    let web = store.get_asset(&web_id).await.unwrap().unwrap();
+    assert_eq!(web.environment.as_deref(), Some("staging"));
+    assert_eq!(web.criticality, Some(Criticality::Low));
+    assert_eq!(web.tags, vec!["edge".to_string(), "core".into()]);
+
+    // A later edit merges over the bulk write, exactly as it would after a
+    // single-asset annotation.
+    store
+        .annotate_assets(vec![(
+            web_id.clone(),
+            AssetAnnotations {
+                environment: None,
+                owner: Some("web-team".into()),
+                criticality: None,
+                add_tags: Vec::new(),
+                remove_tags: vec!["core".into()],
+                unset: Vec::new(),
+            },
+        )])
+        .await
+        .unwrap();
+    let web = store.get_asset(&web_id).await.unwrap().unwrap();
+    assert_eq!(web.tags, vec!["edge".to_string()]);
+    assert_eq!(web.owner.as_deref(), Some("web-team"));
+    assert_eq!(web.environment.as_deref(), Some("staging"), "kept");
+    assert_eq!(web.criticality, Some(Criticality::Low), "kept");
+
+    // An unknown asset fails the whole batch instead of silently skipping.
+    let err = store
+        .annotate_assets(vec![(
+            unique_id("pg-bulk-missing"),
+            AssetAnnotations::default(),
+        )])
+        .await
+        .expect_err("unknown asset");
+    assert!(err.to_string().contains("no asset matches"), "{err}");
+}
+
 #[tokio::test]
 async fn jobs_and_audit_events_round_trip() {
     let Some((_guard, store)) = locked_store().await else {

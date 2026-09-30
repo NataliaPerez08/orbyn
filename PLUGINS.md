@@ -60,3 +60,15 @@ with the rest of Orbyn.
 Add a variant to `DiscoveryCollector` in `src/main.rs` and construct your type
 in the `match collector { ... }` of the `discover` command. Bulk sources (like
 NetBox) get their own subcommand instead of a `--collector` flag.
+
+## Cloud and platform adapters
+
+Cloud providers do not use the `Collector` trait (whose `scan` is per-target).
+They implement the separate, read-only `orbyn::integrations::cloud::CloudAdapter`
+contract: `fetch()` returns a `CloudInventory` (normalized assets, interfaces,
+services, capacity, filesystems plus `CloudProvenance`). Proxmox VE
+(`orbyn proxmox import`) and AWS (`orbyn aws import`) are the first adapters.
+The shared `CurlClient` handles the curl boundary, timeouts, response caps and
+retries; request headers (including credentials) are streamed on stdin. New
+providers follow the Proxmox adapter and add a subcommand that calls
+`fetch_inventory()` and persists through the CLI's `persist_cloud_inventory`.

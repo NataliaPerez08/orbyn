@@ -19,8 +19,12 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::process::Command;
 
+use crate::http::{
+    excerpt, is_retryable_curl_exit, is_retryable_status, split_http_status, with_retries, Attempt,
+    CallFailure, RetryPolicy,
+};
 use crate::import::{ImportedAsset, ImportedInterface, ImportedInventory};
-use crate::process::{run_captured, MAX_STDERR_CAPTURE_BYTES};
+use crate::process::{is_timeout, run_captured, MAX_STDERR_CAPTURE_BYTES};
 
 /// Paginated NetBox envelope.
 #[derive(Debug, Deserialize)]
@@ -450,6 +454,7 @@ pub struct NetBoxClient {
     token: Option<String>,
     insecure: bool,
     binary: String,
+    retry: RetryPolicy,
 }
 
 impl NetBoxClient {
@@ -470,6 +475,7 @@ impl NetBoxClient {
             token,
             insecure,
             binary: std::env::var("ORBYN_CURL_BIN").unwrap_or_else(|_| "curl".to_string()),
+            retry: RetryPolicy::default(),
         })
     }
 
@@ -535,9 +541,25 @@ impl NetBoxClient {
         ))
     }
 
+    /// GET one URL, replaying only the failures a later attempt could fix
+    /// (timeouts, dropped connections, 429, 5xx).
     async fn get_url(&self, url: &str) -> Result<String> {
+        with_retries(&self.retry, &format!("NetBox request to {url}"), |_| {
+            self.get_once(url)
+        })
+        .await
+    }
+
+    /// One NetBox HTTP request: the response body, or a failure classified for
+    /// retry.
+    async fn get_once(&self, url: &str) -> Attempt<String> {
         let mut cmd = Command::new(&self.binary);
-        cmd.arg("-sS");
+        cmd.arg("-sS")
+            // The HTTP status is appended to stdout (3 digits) so a rate limit
+            // or a server error is distinguishable from a good response
+            // without -f, which would discard the body an operator needs.
+            .arg("-w")
+            .arg("%{http_code}");
         if self.insecure {
             cmd.arg("--insecure");
         }
@@ -561,12 +583,17 @@ impl NetBoxClient {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let child = cmd
-            .spawn()
-            .context("failed to start curl; is it installed?")?;
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Err(CallFailure::permanent(format!(
+                    "failed to start curl; is it installed? {e}"
+                )))
+            }
+        };
 
         let stdin_payload = self.token.as_deref().map(token_header_line);
-        let captured = run_captured(
+        let captured = match run_captured(
             child,
             stdin_payload.as_deref(),
             NETBOX_MAX_RESPONSE_BYTES,
@@ -574,22 +601,43 @@ impl NetBoxClient {
             NETBOX_REQUEST_TIMEOUT,
             format!("curl timed out against {url}"),
         )
-        .await?;
+        .await
+        {
+            Ok(captured) => captured,
+            Err(e) if is_timeout(&e) => return Err(CallFailure::transient(format!("{e:#}"))),
+            Err(e) => return Err(e.into()),
+        };
 
         if captured.stdout.len() as u64 > NETBOX_MAX_RESPONSE_BYTES {
-            return Err(anyhow!(
-                "NetBox response exceeds the {} byte limit",
-                NETBOX_MAX_RESPONSE_BYTES
-            ));
+            return Err(CallFailure::permanent(format!(
+                "NetBox response exceeds the {NETBOX_MAX_RESPONSE_BYTES} byte limit"
+            )));
         }
         if !captured.status.success() {
-            return Err(anyhow!(
-                "curl exited with {}: {}",
+            let message = format!(
+                "curl exited with {} against {url}: {}",
                 captured.status,
                 captured.stderr.trim()
-            ));
+            );
+            return Err(match captured.status.code() {
+                Some(code) if is_retryable_curl_exit(code) => CallFailure::transient(message),
+                _ => CallFailure::permanent(message),
+            });
         }
-        Ok(captured.stdout)
+        let Some((body, status)) = split_http_status(&captured.stdout) else {
+            return Err(CallFailure::permanent(format!(
+                "malformed curl response from {url}: no HTTP status trailer"
+            )));
+        };
+        if !(200..300).contains(&status) {
+            let message = format!("NetBox returned HTTP {status} for {url}: {}", excerpt(body));
+            return Err(if is_retryable_status(status) {
+                CallFailure::transient(message)
+            } else {
+                CallFailure::permanent(message)
+            });
+        }
+        Ok(body.to_string())
     }
 }
 

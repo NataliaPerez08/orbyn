@@ -38,15 +38,19 @@ elif [[ "$url" == *node_memory_SwapTotal* ]]; then
   if [[ -z "${ORBYN_PROM_SWAP_VALUES:-}" ]]; then
     # No swap series configured: behave like an exporter without swap.
     printf '{"status":"success","data":{"resultType":"matrix","result":[]}}'
+    printf '200'
     exit 0
   fi
   values="${ORBYN_PROM_SWAP_VALUES}"
   instance="${ORBYN_PROM_RAM_INSTANCE:-10.0.0.2:9100}"
 else
   printf '{"status":"error","errorType":"bad_data","error":"unknown query"}'
+  printf '400'
   exit 0
 fi
+# The status curl appends with -w: Orbyn reads it before parsing the body.
 printf '{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"%s","job":"node"},"values":[%s]}]}}' "$instance" "$values"
+printf '200'
 "#;
 
 /// A fake `ssh` emitting a Linux host probe without the `###metric`
@@ -222,6 +226,58 @@ fn prometheus_reimport_is_idempotent() {
 
     let metrics = run_ok(orbyn(&dir).args(["metrics", "10.0.0.2"]));
     assert!(metrics.contains("24 samples over"), "{metrics}");
+}
+
+/// A fake `curl` that rate-limits the first `ORBYN_RETRY_FAILURES` calls with
+/// a 429 before serving the usual fixtures, counting invocations in
+/// `$ORBYN_RETRY_COUNTER`.
+#[cfg(unix)]
+const RETRY_THEN_OK_PROM_SCRIPT: &str = r#"#!/usr/bin/env bash
+counter="${ORBYN_RETRY_COUNTER}"
+n=0
+if [[ -f "$counter" ]]; then n="$(cat "$counter")"; fi
+n=$((n + 1))
+printf '%s' "$n" > "$counter"
+if [[ "$n" -le "${ORBYN_RETRY_FAILURES:-1}" ]]; then
+  printf 'queries per second exceeded'
+  printf '429'
+  exit 0
+fi
+exec "$(dirname "$0")/curl-fixture" "$@"
+"#;
+
+#[cfg(unix)]
+#[test]
+fn prometheus_retries_a_rate_limited_query() {
+    let dir = TempDir::new("prom-retry");
+    // The retrying fake delegates to the plain fixture fake once the rate
+    // limit is gone.
+    fake_bin(&dir, "curl-fixture", FAKE_PROM_CURL_SCRIPT);
+    let curl = fake_bin(&dir, "curl", RETRY_THEN_OK_PROM_SCRIPT);
+    let counter = dir.path().join("curl-calls");
+    import_json(&dir, INVENTORY_JSON);
+
+    let (cpu, ram) = week_of_low_utilization();
+    let out = run_ok_combined(
+        prom_env(&dir, &curl)
+            .args(["prometheus", "import", "--url", "http://prometheus:9090"])
+            .env("ORBYN_PROM_CPU_VALUES", &cpu)
+            .env("ORBYN_PROM_RAM_VALUES", &ram)
+            .env("ORBYN_RETRY_COUNTER", &counter),
+    );
+    assert!(
+        out.contains("Imported 24 metric samples from Prometheus"),
+        "the rate-limited query must be replayed: {out}"
+    );
+
+    let calls: usize = std::fs::read_to_string(&counter)
+        .expect("counter")
+        .trim()
+        .parse()
+        .expect("numeric counter");
+    // One 429, then CPU and RAM; the swap query the endpoint cannot answer is
+    // a warning, not a failure.
+    assert_eq!(calls, 1 + 2 + 1, "the 429 must be replayed once: {calls}");
 }
 
 #[cfg(unix)]

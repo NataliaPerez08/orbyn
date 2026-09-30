@@ -42,10 +42,13 @@ case "$method" in
     ;;
   *)
     printf '{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found","data":"%s"},"id":1}' "$method"
+    printf '200'
     exit 0
     ;;
 esac
+# The status curl appends with -w: Orbyn reads it before parsing the envelope.
 printf '{"jsonrpc":"2.0","result":%s,"id":1}' "$result"
+printf '200'
 "#;
 
 /// A fake `ssh` emitting a Linux host probe without the `###metric`
@@ -287,6 +290,7 @@ fn zabbix_api_errors_are_surfaced_without_the_token() {
         r#"#!/usr/bin/env bash
 cat > /dev/null
 printf '{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params.","data":"not authorised"},"id":1}'
+printf '200'
 "#,
     );
     import_json(&dir, INVENTORY_JSON);

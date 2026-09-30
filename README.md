@@ -228,6 +228,16 @@ The repository currently provides:
   * Ansible inventory exporter (`orbyn export --format ansible`).
   * Terraform-friendly export (`orbyn export --format terraform`).
   * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
+* Cloud and platform adapters (Phase 5, read-only):
+  * Proxmox VE importer (`orbyn proxmox import`): nodes, QEMU VMs and LXC
+    containers with per-guest interfaces (guest agent / container API) and
+    CPU/RAM capacity.
+  * AWS importer (`orbyn aws import`): EC2 instances and their elastic
+    network interfaces via the signed EC2 query API (SigV4, no SDK), with
+    the account id resolved from STS when permitted.
+  * Both attach provider provenance (`cloud:<provider>`,
+    `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset
+    and record an audit event; credentials are never persisted.
 * Architecture documentation, roadmap and backlog.
 
 The v1.0 CLI surface, completions, audit trail and release packaging are
@@ -242,8 +252,8 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
-* `curl` for the NetBox, Prometheus and Zabbix importers and the native WinRM
-  transport
+* `curl` for the NetBox, Prometheus, Zabbix, Proxmox VE and AWS importers and
+  the native WinRM transport
 
 Host-level collection uses key-based authentication (ssh-agent or
 `--identity-file`); passwords are never passed through the CLI or stored.
@@ -350,6 +360,11 @@ orbyn prometheus import --url <url> [--token <t>|--token -] [--lookback-hours 16
                                                    Import historical CPU/RAM/swap utilization
 orbyn zabbix import --url <url> [--token <t>|--token -] [--lookback-hours 168] [--no-verify]
                                                    Import historical CPU/RAM/swap utilization
+orbyn proxmox import --url <url> [--token <t>|--token -] [--node <name>] [--no-verify]
+                                                   Import nodes/VMs/containers from Proxmox VE
+orbyn aws import --region <r> [--access-key <k>] [--secret-key <s>|--secret-key -] \
+    [--session-token <t>|--session-token -] [--endpoint-url <url>] [--no-verify]
+                                                   Import EC2 instances from AWS
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 ```
 
@@ -381,6 +396,12 @@ orbyn prometheus import --url http://prometheus:9090
 orbyn zabbix import --url https://zabbix.example.com/zabbix/api_jsonrpc.php \
     --token - < ~/.zabbix-token
 orbyn metrics 10.0.0.10          # span, percentiles, right-sizing readiness
+
+# bring a Proxmox VE cluster into the same inventory (read-only; API token)
+orbyn proxmox import --url https://pve.example.com:8006 \
+    --token - < ~/.proxmox-token
+# ... or an AWS account (read-only; SigV4, credentials from the environment)
+orbyn aws import --region eu-west-1
 
 # inspect what was found
 orbyn assets
@@ -436,10 +457,16 @@ clean for piping.
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | SNMP v1/v2c community string (or `--community`, `--community -` for stdin) |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
-| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox REST client, WinRM transport) |
+| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox/Prometheus/Zabbix/Proxmox/AWS clients, WinRM transport) |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
 | `ORBYN_PROMETHEUS_TOKEN` | _(unset)_ | Prometheus bearer token (or `--token`, `--token -` for stdin) |
 | `ORBYN_ZABBIX_TOKEN` | _(unset)_ | Zabbix API token (or `--token`, `--token -` for stdin) |
+| `ORBYN_PROXMOX_TOKEN` | _(unset)_ | Proxmox API token `user@realm!id=secret` (or `--token`, `--token -` for stdin) |
+| `AWS_ACCESS_KEY_ID` | _(unset)_ | AWS access key id (or `--access-key`) |
+| `AWS_SECRET_ACCESS_KEY` | _(unset)_ | AWS secret access key (or `--secret-key`, `--secret-key -` for stdin) |
+| `AWS_SESSION_TOKEN` | _(unset)_ | AWS session token for temporary credentials (or `--session-token`) |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | _(unset)_ | AWS region (or `--region`) |
+| `AWS_ENDPOINT_URL` | _(unset)_ | Override the AWS EC2 endpoint (or `--endpoint-url`) |
 | `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the
@@ -474,7 +501,8 @@ orbyn/
 │   │   └── dns.rs               # DNS relationship evidence
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
-│   ├── integrations/            # NetBox importer + Ansible/Terraform exporters
+│   ├── integrations/            # NetBox/monitoring importers, cloud adapters, exporters
+│   │   └── cloud/               # Proxmox VE + AWS read-only adapters
 │   ├── metrics/                 # capacity/utilization processing
 │   ├── output/                  # table/json/csv rendering
 │   └── store/                   # Store trait + SQLite and PostgreSQL backends
@@ -572,6 +600,8 @@ The underlying asset and dependency model should remain portable.
 | NetBox     | Source-of-truth import (devices/VMs)  | v1.1   |
 | Prometheus | Historical utilization                | v1.2+  |
 | Zabbix     | Historical utilization                | v1.2+  |
+| Proxmox VE | Nodes, VMs, containers, interfaces    | Phase 5 |
+| AWS        | EC2 instances and network interfaces  | Phase 5 |
 | eBPF       | Runtime dependency observations       | Later  |
 
 ## Orbyn Graph

@@ -171,17 +171,23 @@ must be read-only by default, preserve provider provenance, avoid credential
 storage, support pagination/rate limiting/timeouts, and include offline
 fixtures plus end-to-end tests.
 
-- [ ] **P1** Define the common cloud-provider adapter contract.
-- [ ] **P1** Implement Proxmox VE adapter: nodes, pools, VMs, containers, disks,
-  interfaces and storage.
-- [ ] **P1** Implement AWS adapter: accounts, regions, EC2, EBS, VPC, subnets,
-  interfaces and tags.
+- [x] **P1** Define the common cloud-provider adapter contract
+  (`integrations::cloud::CloudAdapter` + `CloudProvenance` + shared
+  `CurlClient`).
+- [x] **P1** Implement Proxmox VE adapter: nodes, QEMU VMs, LXC containers,
+  interfaces (guest agent / container API) and CPU/RAM capacity.
+  (`orbyn proxmox import`; storage/pools are not yet mapped.)
+- [x] **P1** Implement AWS adapter: EC2 instances, elastic network interfaces,
+  tags and STS account provenance. (`orbyn aws import`; EBS/VPC/subnet
+  resources are not yet separate assets.)
 - [ ] **P2** Implement OpenStack adapter: projects, regions, instances, flavors,
   networks, ports, volumes and images.
 - [ ] **P2** Implement GCP adapter: projects, regions/zones, Compute Engine,
   disks, networks, subnets and labels.
 - [ ] **P2** Implement Azure adapter: tenants/subscriptions, resource groups,
   regions, VMs, managed disks, VNets, subnets and tags.
-- [ ] **P2** Add provider provenance to assets and discovery jobs.
-- [ ] **P2** Add cloud adapter audit events and secret-redaction coverage.
-- [ ] **P2** Keep vCenter deferred until transport and scope are defined.
+- [x] **P2** Add provider provenance to assets and discovery jobs.
+  (Provider/account/region tags on assets, a provider-named job; a dedicated
+  provenance column remains a possible follow-up.)
+- [x] **P2** Add cloud adapter audit events and secret-redaction coverage.
+- [x] **P2** Keep vCenter deferred until transport and scope are defined.
