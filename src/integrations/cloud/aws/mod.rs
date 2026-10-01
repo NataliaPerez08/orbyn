@@ -1,9 +1,9 @@
 //! AWS adapter (Phase 5).
 //!
-//! Reads EC2 instances (and their elastic network interfaces) from the AWS
-//! EC2 query API and normalizes them into Orbyn assets and interfaces.
-//! Read-only: only `DescribeInstances` and a best-effort `GetCallerIdentity`
-//! are issued.
+//! Reads EC2 instances (and their elastic network interfaces), EBS volumes,
+//! VPCs and subnets from the AWS EC2 query API and normalizes them into Orbyn
+//! assets, interfaces and filesystems. Read-only: only the `Describe*` actions
+//! and a best-effort `GetCallerIdentity` are issued.
 //!
 //! Requests are signed with SigV4 ([`sigv4`]) from credentials supplied by the
 //! standard environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
@@ -11,20 +11,23 @@
 //! and the session token travel to curl on stdin, never in process arguments.
 //!
 //! An EC2 instance is imported when it has a private or public IP address.
-//! Instances without one are skipped with a note.
+//! Instances without one are skipped with a note. EBS volumes become
+//! filesystem rows on the instance they are attached to (an unattached volume
+//! has no host and is skipped with a note). VPCs and subnets become assets
+//! keyed by the network address of their CIDR, tagged with their provider id.
 
 pub mod sigv4;
 
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::domain::Interface;
+use crate::domain::{Filesystem, Interface};
 use crate::integrations::cloud::{
-    cloud_asset, parse_ip_cidr, CloudAdapter, CloudAsset, CloudInventory, CurlClient,
+    cloud_asset, network_address, network_asset_ip, parse_ip_cidr, CloudAsset, CloudInventory,
+    CurlClient,
 };
 use crate::integrations::netbox::{url_origin, UrlOrigin};
 use sigv4::sign_get;
@@ -37,6 +40,12 @@ const STS_VERSION: &str = "2011-06-15";
 const MAX_PAGES: usize = 100;
 /// Maximum instances imported in one run.
 const MAX_INSTANCES: usize = 100_000;
+/// Maximum EBS volumes imported in one run.
+const MAX_VOLUMES: usize = 100_000;
+/// Maximum VPCs imported in one run.
+const MAX_VPCS: usize = 10_000;
+/// Maximum subnets imported in one run.
+const MAX_SUBNETS: usize = 100_000;
 
 /// AWS credentials for signing requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,15 +127,18 @@ impl AwsClient {
         })
     }
 
-    /// Fetch EC2 instances and normalize them into a [`CloudInventory`].
+    /// Fetch EC2 instances, EBS volumes, VPCs and subnets and normalize them
+    /// into a [`CloudInventory`].
     pub async fn fetch_inventory(&self) -> Result<CloudInventory> {
         let observed_at = Utc::now();
         let account = self.caller_identity().await;
         let mut inventory = CloudInventory::new("aws", account, Some(self.region.clone()));
+        let mut instance_assets: HashMap<String, String> = HashMap::new();
 
         let mut next_token: Option<String> = None;
+        let mut pages = 0usize;
         let mut instances_seen = 0usize;
-        for _page in 0..self.max_pages {
+        loop {
             let mut params = vec![
                 ("Action".to_string(), "DescribeInstances".to_string()),
                 ("Version".to_string(), EC2_VERSION.to_string()),
@@ -143,23 +155,39 @@ impl AwsClient {
                 if instances_seen > MAX_INSTANCES {
                     bail!("AWS DescribeInstances exceeded the {MAX_INSTANCES} instance limit");
                 }
-                self.import_instance(&instance, observed_at, &mut inventory);
+                self.import_instance(&instance, observed_at, &mut instance_assets, &mut inventory);
             }
 
             match page.next_token {
-                Some(token) => next_token = Some(token),
-                None => return Ok(inventory),
+                Some(token) => {
+                    next_token = Some(token);
+                    pages += 1;
+                    if pages >= self.max_pages {
+                        bail!(
+                            "AWS DescribeInstances exceeded the {} page limit",
+                            self.max_pages
+                        );
+                    }
+                }
+                None => break,
             }
         }
-        bail!("AWS DescribeInstances exceeded the {MAX_PAGES} page limit")
+
+        self.import_volumes(&instance_assets, observed_at, &mut inventory)
+            .await?;
+        self.import_vpcs(observed_at, &mut inventory).await?;
+        self.import_subnets(observed_at, &mut inventory).await?;
+        Ok(inventory)
     }
 
     /// Normalize one instance into the inventory, or record why it was
-    /// skipped.
+    /// skipped. On success the instance id is recorded so volumes can be
+    /// attached to it.
     fn import_instance(
         &self,
         instance: &AwsInstance,
         observed_at: DateTime<Utc>,
+        instance_assets: &mut HashMap<String, String>,
         inventory: &mut CloudInventory,
     ) {
         let instance_id = instance.instance_id.as_deref().unwrap_or("(unknown)");
@@ -197,6 +225,7 @@ impl AwsClient {
         }
 
         let asset_id = asset.id.clone();
+        instance_assets.insert(instance_id.to_string(), asset_id.clone());
         let mut tags = vec![format!("aws-instance:{instance_id}")];
         if let Some(kind) = &instance.instance_type {
             tags.push(format!("aws-type:{kind}"));
@@ -237,6 +266,236 @@ impl AwsClient {
         }
     }
 
+    /// Run a paginated EC2 `Describe*` action, returning every item.
+    async fn describe_all<T>(
+        &self,
+        action: &str,
+        parse: impl Fn(&str) -> Result<(Vec<T>, Option<String>)>,
+    ) -> Result<Vec<T>> {
+        let mut items = Vec::new();
+        let mut next_token: Option<String> = None;
+        let mut pages = 0usize;
+        loop {
+            let mut params = vec![
+                ("Action".to_string(), action.to_string()),
+                ("Version".to_string(), EC2_VERSION.to_string()),
+            ];
+            if let Some(token) = &next_token {
+                params.push(("NextToken".to_string(), token.clone()));
+            }
+            let (url, headers) = self.sign(&self.endpoint, &self.host, "ec2", &params);
+            let xml = self.http.get(&url, &headers).await?;
+            let (page_items, token) = parse(&xml)?;
+            items.extend(page_items);
+            match token {
+                Some(token) => {
+                    next_token = Some(token);
+                    pages += 1;
+                    if pages >= self.max_pages {
+                        bail!("AWS {action} exceeded the {} page limit", self.max_pages);
+                    }
+                }
+                None => return Ok(items),
+            }
+        }
+    }
+
+    /// Normalize EBS volumes into filesystems on their attached instance.
+    async fn import_volumes(
+        &self,
+        instance_assets: &HashMap<String, String>,
+        _observed_at: DateTime<Utc>,
+        inventory: &mut CloudInventory,
+    ) -> Result<()> {
+        let volumes = self
+            .describe_all("DescribeVolumes", parse_describe_volumes)
+            .await?;
+        if volumes.len() > MAX_VOLUMES {
+            bail!("AWS DescribeVolumes exceeded the {MAX_VOLUMES} volume limit");
+        }
+        for volume in &volumes {
+            let volume_id = volume.volume_id.as_deref().unwrap_or("(unknown)");
+            let Some(attachment) = volume.attachments().first() else {
+                inventory
+                    .skipped
+                    .push(format!("volume {volume_id} is not attached to an instance"));
+                continue;
+            };
+            let Some(instance_id) = attachment.instance_id.as_deref() else {
+                inventory
+                    .skipped
+                    .push(format!("volume {volume_id} has no instance attachment"));
+                continue;
+            };
+            let Some(asset_id) = instance_assets.get(instance_id) else {
+                inventory.skipped.push(format!(
+                    "volume {volume_id} is attached to unknown instance {instance_id}"
+                ));
+                continue;
+            };
+            let mount = attachment
+                .device
+                .clone()
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| volume_id.to_string());
+            inventory.filesystems.push(Filesystem {
+                asset_id: asset_id.clone(),
+                device: Some(volume_id.to_string()),
+                mount,
+                fs_type: volume.volume_type.clone(),
+                size_kb: volume.size_gib.unwrap_or(0) * 1024 * 1024,
+                used_kb: None,
+                available_kb: None,
+                used_pct: None,
+            });
+            if let Some(asset) = inventory
+                .assets
+                .iter_mut()
+                .find(|a| &a.asset.id == asset_id)
+            {
+                asset.tags.push(format!("aws-volume:{volume_id}"));
+                if let Some(kind) = &volume.volume_type {
+                    asset.tags.push(format!("aws-volume-type:{kind}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Normalize VPCs into assets keyed by the network address of their CIDR.
+    async fn import_vpcs(
+        &self,
+        observed_at: DateTime<Utc>,
+        inventory: &mut CloudInventory,
+    ) -> Result<()> {
+        let vpcs = self
+            .describe_all("DescribeVpcs", parse_describe_vpcs)
+            .await?;
+        if vpcs.len() > MAX_VPCS {
+            bail!("AWS DescribeVpcs exceeded the {MAX_VPCS} VPC limit");
+        }
+        let mut seen: HashSet<String> = inventory
+            .assets
+            .iter()
+            .map(|a| a.asset.id.clone())
+            .collect();
+        for vpc in &vpcs {
+            let vpc_id = vpc.vpc_id.as_deref().unwrap_or("(unknown)");
+            let Some(cidr) = vpc.cidr_block.as_deref().filter(|c| !c.is_empty()) else {
+                inventory
+                    .skipped
+                    .push(format!("VPC {vpc_id} has no CIDR block"));
+                continue;
+            };
+            let Some(network) = network_address(cidr) else {
+                inventory
+                    .skipped
+                    .push(format!("VPC {vpc_id} has an invalid CIDR block '{cidr}'"));
+                continue;
+            };
+            let Some(address) = network_asset_ip(cidr, &seen) else {
+                inventory.skipped.push(format!(
+                    "VPC {vpc_id} has no free address in '{cidr}' to represent it"
+                ));
+                continue;
+            };
+            seen.insert(crate::domain::asset_id(address));
+            let hostname = vpc.tag_value("Name").or_else(|| Some(vpc_id.to_string()));
+            let asset = cloud_asset(address, hostname, "vpc", observed_at);
+            let mut tags = vec![format!("aws-vpc:{vpc_id}"), format!("aws-cidr:{cidr}")];
+            if address != network {
+                tags.push(format!("aws-netaddr:{network}"));
+            }
+            if vpc.is_default {
+                tags.push("aws-default-vpc".to_string());
+            }
+            tags.extend(tag_set_entries(&vpc.tag_set));
+            inventory.assets.push(CloudAsset {
+                asset,
+                environment: None,
+                owner: None,
+                criticality: None,
+                tags,
+            });
+        }
+        Ok(())
+    }
+
+    /// Normalize subnets into assets keyed by the network address of their
+    /// CIDR.
+    async fn import_subnets(
+        &self,
+        observed_at: DateTime<Utc>,
+        inventory: &mut CloudInventory,
+    ) -> Result<()> {
+        let subnets = self
+            .describe_all("DescribeSubnets", parse_describe_subnets)
+            .await?;
+        if subnets.len() > MAX_SUBNETS {
+            bail!("AWS DescribeSubnets exceeded the {MAX_SUBNETS} subnet limit");
+        }
+        let mut seen: HashSet<String> = inventory
+            .assets
+            .iter()
+            .map(|a| a.asset.id.clone())
+            .collect();
+        for subnet in &subnets {
+            let subnet_id = subnet.subnet_id.as_deref().unwrap_or("(unknown)");
+            let Some(cidr) = subnet.cidr_block.as_deref().filter(|c| !c.is_empty()) else {
+                inventory
+                    .skipped
+                    .push(format!("subnet {subnet_id} has no CIDR block"));
+                continue;
+            };
+            let Some(network) = network_address(cidr) else {
+                inventory.skipped.push(format!(
+                    "subnet {subnet_id} has an invalid CIDR block '{cidr}'"
+                ));
+                continue;
+            };
+            let Some(address) = network_asset_ip(cidr, &seen) else {
+                inventory.skipped.push(format!(
+                    "subnet {subnet_id} has no free address in '{cidr}' to represent it"
+                ));
+                continue;
+            };
+            seen.insert(crate::domain::asset_id(address));
+            let hostname = subnet
+                .tag_value("Name")
+                .or_else(|| Some(subnet_id.to_string()));
+            let asset = cloud_asset(address, hostname, "subnet", observed_at);
+            let mut tags = vec![
+                format!("aws-subnet:{subnet_id}"),
+                format!("aws-cidr:{cidr}"),
+            ];
+            if address != network {
+                tags.push(format!("aws-netaddr:{network}"));
+            }
+            if let Some(vpc_id) = &subnet.vpc_id {
+                tags.push(format!("aws-vpc:{vpc_id}"));
+            }
+            if let Some(az) = subnet
+                .availability_zone
+                .as_deref()
+                .filter(|az| !az.is_empty())
+            {
+                tags.push(format!("aws-az:{az}"));
+            }
+            if let Some(free) = subnet.available_ip_address_count {
+                tags.push(format!("aws-free-ips:{free}"));
+            }
+            tags.extend(tag_set_entries(&subnet.tag_set));
+            inventory.assets.push(CloudAsset {
+                asset,
+                environment: None,
+                owner: None,
+                criticality: None,
+                tags,
+            });
+        }
+        Ok(())
+    }
+
     /// Resolve the AWS account id via STS, best effort: provenance is useful
     /// but a missing or denied call must not fail the inventory import.
     async fn caller_identity(&self) -> Option<String> {
@@ -273,17 +532,6 @@ impl AwsClient {
         );
         let url = format!("{endpoint}/?{}", signed.query);
         (url, signed.headers)
-    }
-}
-
-#[async_trait]
-impl CloudAdapter for AwsClient {
-    fn provider(&self) -> &'static str {
-        "aws"
-    }
-
-    async fn fetch(&self) -> Result<CloudInventory> {
-        self.fetch_inventory().await
     }
 }
 
@@ -380,9 +628,6 @@ impl AwsInstance {
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 struct InstanceState {
-    #[serde(rename = "code", default)]
-    #[allow(dead_code)]
-    code: Option<String>,
     #[serde(rename = "name", default)]
     name: Option<String>,
 }
@@ -470,8 +715,175 @@ fn parse_caller_identity(xml: &str) -> Option<String> {
         .filter(|a| !a.is_empty())
 }
 
-/// The default request timeout, re-exported for documentation.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// The `key=value` renderings of a tag set, skipping empty keys.
+fn tag_set_entries(tag_set: &TagSet) -> Vec<String> {
+    tag_set
+        .items
+        .iter()
+        .filter_map(|tag| {
+            let key = tag.key.as_deref().filter(|k| !k.is_empty())?;
+            Some(format!("{key}={}", tag.value.as_deref().unwrap_or("")))
+        })
+        .collect()
+}
+
+impl TagSet {
+    /// The value of the first tag with the given key.
+    fn value(&self, key: &str) -> Option<String> {
+        self.items
+            .iter()
+            .find(|tag| tag.key.as_deref() == Some(key))
+            .and_then(|tag| tag.value.clone())
+            .filter(|v| !v.is_empty())
+    }
+}
+
+fn clean_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+// --- EBS volumes ----------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename = "DescribeVolumesResponse")]
+struct DescribeVolumesDoc {
+    #[serde(rename = "volumeSet", default)]
+    volume_set: VolumeSet,
+    #[serde(rename = "nextToken", default)]
+    next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct VolumeSet {
+    #[serde(rename = "item", default)]
+    items: Vec<AwsVolume>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct AwsVolume {
+    #[serde(rename = "volumeId", default)]
+    volume_id: Option<String>,
+    #[serde(rename = "size", default)]
+    size_gib: Option<u64>,
+    #[serde(rename = "volumeType", default)]
+    volume_type: Option<String>,
+    #[serde(rename = "attachmentSet", default)]
+    attachment_set: VolumeAttachmentSet,
+}
+
+impl AwsVolume {
+    fn attachments(&self) -> &[VolumeAttachment] {
+        &self.attachment_set.items
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct VolumeAttachmentSet {
+    #[serde(rename = "item", default)]
+    items: Vec<VolumeAttachment>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct VolumeAttachment {
+    #[serde(rename = "instanceId", default)]
+    instance_id: Option<String>,
+    #[serde(rename = "device", default)]
+    device: Option<String>,
+}
+
+fn parse_describe_volumes(xml: &str) -> Result<(Vec<AwsVolume>, Option<String>)> {
+    let doc: DescribeVolumesDoc =
+        quick_xml::de::from_str(xml).context("parsing AWS DescribeVolumes response")?;
+    Ok((doc.volume_set.items, clean_token(doc.next_token)))
+}
+
+// --- VPCs -----------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename = "DescribeVpcsResponse")]
+struct DescribeVpcsDoc {
+    #[serde(rename = "vpcSet", default)]
+    vpc_set: VpcSet,
+    #[serde(rename = "nextToken", default)]
+    next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct VpcSet {
+    #[serde(rename = "item", default)]
+    items: Vec<AwsVpc>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct AwsVpc {
+    #[serde(rename = "vpcId", default)]
+    vpc_id: Option<String>,
+    #[serde(rename = "cidrBlock", default)]
+    cidr_block: Option<String>,
+    #[serde(rename = "isDefault", default)]
+    is_default: bool,
+    #[serde(rename = "tagSet", default)]
+    tag_set: TagSet,
+}
+
+impl AwsVpc {
+    fn tag_value(&self, key: &str) -> Option<String> {
+        self.tag_set.value(key)
+    }
+}
+
+fn parse_describe_vpcs(xml: &str) -> Result<(Vec<AwsVpc>, Option<String>)> {
+    let doc: DescribeVpcsDoc =
+        quick_xml::de::from_str(xml).context("parsing AWS DescribeVpcs response")?;
+    Ok((doc.vpc_set.items, clean_token(doc.next_token)))
+}
+
+// --- Subnets --------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename = "DescribeSubnetsResponse")]
+struct DescribeSubnetsDoc {
+    #[serde(rename = "subnetSet", default)]
+    subnet_set: SubnetSet,
+    #[serde(rename = "nextToken", default)]
+    next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SubnetSet {
+    #[serde(rename = "item", default)]
+    items: Vec<AwsSubnet>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct AwsSubnet {
+    #[serde(rename = "subnetId", default)]
+    subnet_id: Option<String>,
+    #[serde(rename = "vpcId", default)]
+    vpc_id: Option<String>,
+    #[serde(rename = "cidrBlock", default)]
+    cidr_block: Option<String>,
+    #[serde(rename = "availabilityZone", default)]
+    availability_zone: Option<String>,
+    #[serde(rename = "availableIpAddressCount", default)]
+    available_ip_address_count: Option<u64>,
+    #[serde(rename = "tagSet", default)]
+    tag_set: TagSet,
+}
+
+impl AwsSubnet {
+    fn tag_value(&self, key: &str) -> Option<String> {
+        self.tag_set.value(key)
+    }
+}
+
+fn parse_describe_subnets(xml: &str) -> Result<(Vec<AwsSubnet>, Option<String>)> {
+    let doc: DescribeSubnetsDoc =
+        quick_xml::de::from_str(xml).context("parsing AWS DescribeSubnets response")?;
+    Ok((doc.subnet_set.items, clean_token(doc.next_token)))
+}
 
 #[cfg(test)]
 mod tests {
@@ -613,15 +1025,68 @@ mod tests {
         let instance = AwsInstance {
             instance_id: Some("i-noip".into()),
             instance_state: InstanceState {
-                code: Some("80".into()),
                 name: Some("stopped".into()),
             },
             ..Default::default()
         };
         let mut inventory = CloudInventory::new("aws", None, Some("us-east-1".into()));
-        client.import_instance(&instance, Utc::now(), &mut inventory);
+        let mut instance_assets = HashMap::new();
+        client.import_instance(&instance, Utc::now(), &mut instance_assets, &mut inventory);
         assert!(inventory.assets.is_empty());
         assert_eq!(inventory.skipped.len(), 1);
         assert!(inventory.skipped[0].contains("i-noip"));
+    }
+
+    #[test]
+    fn parses_volumes_vpcs_and_subnets() {
+        let volumes = r#"<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+          <volumeSet>
+            <item>
+              <volumeId>vol-111</volumeId>
+              <size>100</size>
+              <volumeType>gp3</volumeType>
+              <attachmentSet>
+                <item><volumeId>vol-111</volumeId><instanceId>i-111</instanceId><device>/dev/xvdf</device><state>attached</state></item>
+              </attachmentSet>
+            </item>
+            <item>
+              <volumeId>vol-detached</volumeId>
+              <size>8</size>
+              <volumeType>gp2</volumeType>
+              <attachmentSet/>
+            </item>
+          </volumeSet>
+          <nextToken>vol-page-2</nextToken>
+        </DescribeVolumesResponse>"#;
+        let (items, token) = parse_describe_volumes(volumes).expect("parse volumes");
+        assert_eq!(items.len(), 2);
+        assert_eq!(token.as_deref(), Some("vol-page-2"));
+        assert_eq!(items[0].volume_id.as_deref(), Some("vol-111"));
+        assert_eq!(items[0].size_gib, Some(100));
+        assert_eq!(items[0].attachments().len(), 1);
+        assert_eq!(
+            items[0].attachments()[0].device.as_deref(),
+            Some("/dev/xvdf")
+        );
+        assert!(items[1].attachments().is_empty());
+
+        let vpcs = r#"<DescribeVpcsResponse>
+          <vpcSet><item><vpcId>vpc-1</vpcId><cidrBlock>10.10.0.0/16</cidrBlock><isDefault>true</isDefault>
+            <tagSet><item><key>Name</key><value>main</value></item></tagSet></item></vpcSet>
+        </DescribeVpcsResponse>"#;
+        let (items, token) = parse_describe_vpcs(vpcs).expect("parse vpcs");
+        assert_eq!(items.len(), 1);
+        assert_eq!(token, None);
+        assert!(items[0].is_default);
+        assert_eq!(items[0].tag_value("Name").as_deref(), Some("main"));
+
+        let subnets = r#"<DescribeSubnetsResponse>
+          <subnetSet><item><subnetId>subnet-1</subnetId><vpcId>vpc-1</vpcId>
+            <cidrBlock>10.10.1.0/24</cidrBlock><availabilityZone>eu-west-1a</availabilityZone>
+            <availableIpAddressCount>250</availableIpAddressCount></item></subnetSet>
+        </DescribeSubnetsResponse>"#;
+        let (items, _) = parse_describe_subnets(subnets).expect("parse subnets");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].available_ip_address_count, Some(250));
     }
 }

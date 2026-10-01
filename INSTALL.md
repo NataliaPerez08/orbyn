@@ -17,6 +17,9 @@ by the collectors you plan to use:
 | NetBox import | `curl` |
 | Prometheus utilization import | `curl` |
 | Zabbix utilization import | `curl` |
+| Proxmox VE import | `curl` |
+| AWS import | `curl` |
+| Huawei Cloud import | `curl` |
 | DNS relationship evidence (CNAME chains, PTR) | `dig` (optional; without it only forward IP matching via the system resolver) |
 
 SSH host discovery uses key-based authentication through `ssh-agent` or an

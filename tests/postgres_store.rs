@@ -69,8 +69,6 @@ async fn round_trips_every_observation_kind() {
         eprintln!("skipping: ORBYN_PG_TEST_URL is not set");
         return;
     };
-    assert_eq!(store.database_type(), "postgres");
-
     let api_id = unique_id("pg-api");
     let db_id = unique_id("pg-db");
     let api = asset(&api_id, "10.211.0.1", Some("pg-api-01"));

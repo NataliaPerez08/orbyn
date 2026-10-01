@@ -129,6 +129,13 @@ orbyn prometheus import --url http://prometheus:9090
 # then by name; read-only)
 orbyn zabbix import --url https://zabbix.example.com/zabbix/api_jsonrpc.php \
     --token - < ~/.zabbix-token
+
+# read-only cloud inventory imports (credentials from env vars or stdin; see README)
+orbyn proxmox import --url https://pve.example.com:8006 \
+    --token - < ~/.proxmox-token
+orbyn aws import --region eu-west-1
+orbyn huawei import --region cn-north-4
+
 orbyn metrics 10.0.0.10        # span, percentiles, right-sizing readiness
 ```
 

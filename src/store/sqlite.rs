@@ -196,10 +196,6 @@ const RECONCILE_DEPENDENCIES_SQL: &str = "
 
 #[async_trait::async_trait]
 impl crate::store::traits::Store for SqliteStore {
-    fn database_type(&self) -> &'static str {
-        "sqlite"
-    }
-
     async fn store_observations(&self, observations: Vec<Observation>) -> Result<()> {
         let mut tx = self.pool.begin().await.context("beginning transaction")?;
 

@@ -12,28 +12,20 @@
 //! secret never appears in process arguments: it is streamed to curl on stdin
 //! through `-H @-`.
 //!
-//! ## The adapter contract
-//!
-//! Implement [`CloudAdapter`]. A provider adapter must:
-//!
-//! - be read-only (GET requests only);
-//! - source credentials from the environment or a flag, never persist them;
-//! - bound pagination, request count, response size and timeouts;
-//! - return normalized observations plus [`CloudProvenance`];
-//! - record provider provenance on every imported asset (as tags) so
-//!   downstream assessment/export can tell where a row came from.
-//!
-//! Proxmox VE is the first adapter ([`proxmox`]); AWS follows.
+//! Proxmox VE is the first adapter ([`proxmox`]); AWS follows, then
+//! Huawei Cloud ([`huawei`]).
 
 pub mod aws;
+pub mod huawei;
 pub mod proxmox;
 
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::process::Command;
 
@@ -58,7 +50,7 @@ pub const MAX_REQUESTS: usize = 20_000;
 
 /// Environment variables holding secrets that must never leak into a child
 /// `curl` process (a hijacked binary must not be able to read them).
-const SCRUBBED_ENV: [&str; 9] = [
+const SCRUBBED_ENV: [&str; 10] = [
     "ORBYN_SNMP_COMMUNITY",
     "ORBYN_NETBOX_TOKEN",
     "ORBYN_WINRM_PASSWORD",
@@ -68,6 +60,7 @@ const SCRUBBED_ENV: [&str; 9] = [
     "ORBYN_DB",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
+    "HUAWEICLOUD_SDK_SK",
 ];
 
 /// Provider provenance attached to a cloud import.
@@ -174,16 +167,6 @@ pub struct CloudCounts {
     pub filesystems: usize,
 }
 
-/// A read-only provider adapter.
-#[async_trait]
-pub trait CloudAdapter: Send + Sync {
-    /// Provider identifier (`proxmox`, `aws`, ...).
-    fn provider(&self) -> &'static str;
-
-    /// Fetch and normalize the provider inventory.
-    async fn fetch(&self) -> Result<CloudInventory>;
-}
-
 /// A minimal HTTP client over the `curl` binary, shared by the cloud
 /// adapters.
 ///
@@ -250,12 +233,6 @@ impl CurlClient {
         if count >= self.max_requests {
             return None;
         }
-        self.get_once_no_retry(url, headers).await.ok()
-    }
-
-    /// One attempt that is not replayed: `get_once` with a single-attempt
-    /// policy.
-    async fn get_once_no_retry(&self, url: &str, headers: &[String]) -> Result<String> {
         let policy = RetryPolicy {
             max_attempts: 1,
             ..self.retry
@@ -264,6 +241,7 @@ impl CurlClient {
             self.get_once(url, headers)
         })
         .await
+        .ok()
     }
 
     /// One provider HTTP GET: the response body, or a failure classified for
@@ -384,6 +362,105 @@ pub(crate) fn parse_ip_cidr(raw: &str) -> Option<std::net::IpAddr> {
     raw.split('/').next()?.trim().parse().ok()
 }
 
+/// The network address of a CIDR block (`10.0.1.5/24` -> `10.0.1.0`,
+/// `2001:db8::1/64` -> `2001:db8::`). Cloud adapters use it as the synthetic
+/// identity of a VPC or subnet, which are not addressable hosts.
+pub(crate) fn network_address(raw: &str) -> Option<std::net::IpAddr> {
+    let (address, prefix) = raw.split_once('/')?;
+    let ip: std::net::IpAddr = address.trim().parse().ok()?;
+    let prefix: u8 = prefix.trim().parse().ok()?;
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if prefix > 32 {
+                return None;
+            }
+            let mask: u32 = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            Some(std::net::IpAddr::V4((u32::from(v4) & mask).into()))
+        }
+        std::net::IpAddr::V6(v6) => {
+            if prefix > 128 {
+                return None;
+            }
+            let mask: u128 = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            Some(std::net::IpAddr::V6((u128::from(v6) & mask).into()))
+        }
+    }
+}
+
+/// The maximum number of addresses probed when the CIDR's network address is
+/// already taken.
+const NETWORK_IP_PROBE_LIMIT: u64 = 4096;
+
+/// Choose a synthetic IP for a network resource (VPC or subnet) that is not
+/// already represented in `taken`.
+///
+/// The CIDR's network address is preferred. When it is already taken — a VPC
+/// and one of its subnets can share a network address, e.g. `10.1.1.0/24` and
+/// `10.1.1.0/25` — the next free address inside the block is used, so the two
+/// resources coexist instead of one being dropped. Returns `None` for an
+/// invalid CIDR or when the block has no free address within
+/// [`NETWORK_IP_PROBE_LIMIT`].
+pub(crate) fn network_asset_ip(cidr: &str, taken: &HashSet<String>) -> Option<IpAddr> {
+    let network = network_address(cidr)?;
+    let prefix: u8 = cidr
+        .split_once('/')
+        .and_then(|(_, prefix)| prefix.trim().parse().ok())?;
+    match network {
+        IpAddr::V4(v4) => {
+            let mask: u32 = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            let network = u32::from(v4) & mask;
+            let broadcast = network | !mask;
+            let mut candidate = network;
+            let mut probe = 0u64;
+            loop {
+                let address = IpAddr::V4(candidate.into());
+                if !taken.contains(&crate::domain::asset_id(address)) {
+                    return Some(address);
+                }
+                if candidate == broadcast || probe >= NETWORK_IP_PROBE_LIMIT {
+                    return None;
+                }
+                candidate += 1;
+                probe += 1;
+            }
+        }
+        IpAddr::V6(v6) => {
+            let mask: u128 = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            let network = u128::from(v6) & mask;
+            let broadcast = network | !mask;
+            let mut candidate = network;
+            let mut probe = 0u64;
+            loop {
+                let address = IpAddr::V6(candidate.into());
+                if !taken.contains(&crate::domain::asset_id(address)) {
+                    return Some(address);
+                }
+                if candidate == broadcast || probe >= NETWORK_IP_PROBE_LIMIT {
+                    return None;
+                }
+                candidate = candidate.wrapping_add(1);
+                probe += 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +510,53 @@ mod tests {
         );
         assert_eq!(parse_ip_cidr("10.0.0.5"), Some("10.0.0.5".parse().unwrap()));
         assert_eq!(parse_ip_cidr("not-an-ip"), None);
+    }
+
+    #[test]
+    fn network_address_normalizes_cidrs() {
+        assert_eq!(
+            network_address("10.0.1.5/24"),
+            Some("10.0.1.0".parse().unwrap())
+        );
+        assert_eq!(
+            network_address("10.0.0.0/16"),
+            Some("10.0.0.0".parse().unwrap())
+        );
+        assert_eq!(
+            network_address("192.168.1.130/25"),
+            Some("192.168.1.128".parse().unwrap())
+        );
+        assert_eq!(
+            network_address("2001:db8:12::5/64"),
+            Some("2001:db8:12::".parse().unwrap())
+        );
+        assert_eq!(network_address("10.0.0.5"), None);
+        assert_eq!(network_address("10.0.0.5/33"), None);
+        assert_eq!(network_address("not-a-cidr"), None);
+    }
+
+    #[test]
+    fn network_asset_ip_disambiguates_shared_network_addresses() {
+        let mut taken = HashSet::new();
+        // The VPC takes the network address first.
+        let vpc = network_asset_ip("10.1.1.0/24", &taken).unwrap();
+        assert_eq!(vpc, "10.1.1.0".parse::<IpAddr>().unwrap());
+        taken.insert(crate::domain::asset_id(vpc));
+
+        // A subnet that shares the network address gets the next free address
+        // inside its own block instead of being dropped.
+        let subnet = network_asset_ip("10.1.1.0/25", &taken).unwrap();
+        assert_eq!(subnet, "10.1.1.1".parse::<IpAddr>().unwrap());
+        taken.insert(crate::domain::asset_id(subnet));
+
+        // A subnet with a distinct network address still uses it.
+        assert_eq!(
+            network_asset_ip("10.1.1.128/25", &taken).unwrap(),
+            "10.1.1.128".parse::<IpAddr>().unwrap()
+        );
+
+        // An invalid CIDR has no address.
+        assert_eq!(network_asset_ip("not-a-cidr", &taken), None);
     }
 
     #[test]

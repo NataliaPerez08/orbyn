@@ -233,9 +233,17 @@ The repository currently provides:
     VMs and LXC containers with per-guest interfaces (guest agent / container
     API / config fallback), OS identity, filesystems and CPU/RAM capacity.
   * AWS importer (`orbyn aws import`): EC2 instances and their elastic
-    network interfaces via the signed EC2 query API (SigV4, no SDK), with
-    the account id resolved from STS when permitted.
-  * Both attach provider provenance (`cloud:<provider>`,
+    network interfaces, EBS volumes (as filesystems on their attached
+    instance) and VPC/subnet resources (as assets keyed by their CIDR network
+    address) via the signed EC2 query API (SigV4, no SDK), with the account id
+    resolved from STS when permitted.
+  * Huawei Cloud importer (`orbyn huawei import`): ECS instances and their
+    network interfaces, EVS volumes (as filesystems on their attached server)
+    and VPC/subnet resources (as assets keyed by their CIDR network address)
+    via the signed ECS/EVS/VPC APIs (AK/SK `SDK-HMAC-SHA256`, no SDK), with
+    CPU/RAM capacity from the flavor catalogue and the project id resolved
+    from IAM when omitted.
+  * All attach provider provenance (`cloud:<provider>`,
     `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset
     and record an audit event; credentials are never persisted.
 * Architecture documentation, roadmap and backlog.
@@ -252,8 +260,8 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
-* `curl` for the NetBox, Prometheus, Zabbix, Proxmox VE and AWS importers and
-  the native WinRM transport
+* `curl` for the NetBox, Prometheus, Zabbix, Proxmox VE, AWS and Huawei Cloud
+  importers and the native WinRM transport
 
 Host-level collection uses key-based authentication (ssh-agent or
 `--identity-file`); passwords are never passed through the CLI or stored.
@@ -365,6 +373,9 @@ orbyn proxmox import --url <url> [--token <t>|--token -] [--node <name>] [--no-v
 orbyn aws import --region <r> [--access-key <k>] [--secret-key <s>|--secret-key -] \
     [--session-token <t>|--session-token -] [--endpoint-url <url>] [--no-verify]
                                                    Import EC2 instances from AWS
+orbyn huawei import --region <r> [--access-key <k>] [--secret-key <s>|--secret-key -] \
+    [--project-id <id>] [--endpoint-url <url>] [--no-verify]
+                                                   Import ECS instances from Huawei Cloud
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 ```
 
@@ -402,6 +413,8 @@ orbyn proxmox import --url https://pve.example.com:8006 \
     --token - < ~/.proxmox-token
 # ... or an AWS account (read-only; SigV4, credentials from the environment)
 orbyn aws import --region eu-west-1
+# ... or a Huawei Cloud account (read-only; AK/SK, credentials from the environment)
+orbyn huawei import --region cn-north-4
 
 # inspect what was found
 orbyn assets
@@ -457,7 +470,7 @@ clean for piping.
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | SNMP v1/v2c community string (or `--community`, `--community -` for stdin) |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
-| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox/Prometheus/Zabbix/Proxmox/AWS clients, WinRM transport) |
+| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox/Prometheus/Zabbix/Proxmox/AWS/Huawei clients, WinRM transport) |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
 | `ORBYN_PROMETHEUS_TOKEN` | _(unset)_ | Prometheus bearer token (or `--token`, `--token -` for stdin) |
 | `ORBYN_ZABBIX_TOKEN` | _(unset)_ | Zabbix API token (or `--token`, `--token -` for stdin) |
@@ -467,12 +480,16 @@ clean for piping.
 | `AWS_SESSION_TOKEN` | _(unset)_ | AWS session token for temporary credentials (or `--session-token`) |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | _(unset)_ | AWS region (or `--region`) |
 | `AWS_ENDPOINT_URL` | _(unset)_ | Override the AWS EC2 endpoint (or `--endpoint-url`) |
+| `HUAWEICLOUD_SDK_AK` | _(unset)_ | Huawei Cloud access key (AK) (or `--access-key`) |
+| `HUAWEICLOUD_SDK_SK` | _(unset)_ | Huawei Cloud secret key (SK) (or `--secret-key`, `--secret-key -` for stdin) |
+| `HUAWEICLOUD_REGION` | _(unset)_ | Huawei Cloud region (or `--region`) |
+| `HUAWEICLOUD_PROJECT_ID` | _(unset)_ | Huawei Cloud project id (or `--project-id`; resolved from IAM when omitted) |
 | `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the
-environment: `--token -`, `--community -` and `--winrm-password -` read one
-line from stdin (e.g. `orbyn netbox import --url <url> --token - <
-token.txt`).
+environment: `--token -`, `--community -`, `--secret-key -` and
+`--winrm-password -` read one line from stdin (e.g. `orbyn netbox import
+--url <url> --token - < token.txt`).
 
 A `.env` file in the current working directory is loaded at startup
 (existing environment variables win; parent directories are never
@@ -502,7 +519,7 @@ orbyn/
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
 │   ├── integrations/            # NetBox/monitoring importers, cloud adapters, exporters
-│   │   └── cloud/               # Proxmox VE + AWS read-only adapters
+│   │   └── cloud/               # Proxmox VE + AWS + Huawei Cloud read-only adapters
 │   ├── metrics/                 # capacity/utilization processing
 │   ├── output/                  # table/json/csv rendering
 │   └── store/                   # Store trait + SQLite and PostgreSQL backends
@@ -601,7 +618,8 @@ The underlying asset and dependency model should remain portable.
 | Prometheus | Historical utilization                | v1.2+  |
 | Zabbix     | Historical utilization                | v1.2+  |
 | Proxmox VE | Nodes, storage, VMs, containers, disks, interfaces | Phase 5 |
-| AWS        | EC2 instances and network interfaces  | Phase 5 |
+| AWS        | EC2, EBS, VPC/subnets and network interfaces | Phase 5 |
+| Huawei Cloud | ECS, EVS, VPC/subnets, interfaces and flavor capacity | Phase 5 |
 | eBPF       | Runtime dependency observations       | Later  |
 
 ## Orbyn Graph

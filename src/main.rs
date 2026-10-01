@@ -24,6 +24,7 @@ use orbyn::domain::{
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
 use orbyn::integrations::cloud::aws::{AwsClient, AwsCredentials};
+use orbyn::integrations::cloud::huawei::{HuaweiClient, HuaweiCredentials};
 use orbyn::integrations::cloud::proxmox::ProxmoxClient;
 use orbyn::integrations::cloud::{CloudCounts, CloudInventory};
 use orbyn::integrations::netbox::NetBoxClient;
@@ -335,6 +336,12 @@ enum Command {
         action: AwsAction,
     },
 
+    /// Pull ECS instances from Huawei Cloud (read-only).
+    Huawei {
+        #[command(subcommand)]
+        action: HuaweiAction,
+    },
+
     /// Pull historical CPU/RAM utilization from Prometheus into metric
     /// samples (one week by default).
     Prometheus {
@@ -490,6 +497,34 @@ enum AwsAction {
         /// Override the EC2 endpoint (from AWS_ENDPOINT_URL), for private
         /// endpoints or tests.
         #[arg(long, env = "AWS_ENDPOINT_URL", hide_env_values = true)]
+        endpoint_url: Option<String>,
+        /// Skip TLS certificate verification (for a self-signed endpoint).
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+/// Sub-actions of `orbyn huawei`.
+#[derive(Debug, Subcommand)]
+enum HuaweiAction {
+    /// Import ECS instances and their network interfaces.
+    Import {
+        /// Huawei Cloud region, e.g. cn-north-4 (from HUAWEICLOUD_REGION).
+        #[arg(long)]
+        region: Option<String>,
+        /// Huawei Cloud access key (AK) (from HUAWEICLOUD_SDK_AK).
+        #[arg(long, env = "HUAWEICLOUD_SDK_AK", hide_env_values = true)]
+        access_key: Option<String>,
+        /// Huawei Cloud secret key (SK) (from HUAWEICLOUD_SDK_SK), or `-` to
+        /// read one line from stdin so it never lands in argv.
+        #[arg(long, env = "HUAWEICLOUD_SDK_SK", hide_env_values = true)]
+        secret_key: Option<String>,
+        /// Project id to scope the ECS query (from HUAWEICLOUD_PROJECT_ID);
+        /// resolved from IAM when omitted.
+        #[arg(long, env = "HUAWEICLOUD_PROJECT_ID", hide_env_values = true)]
+        project_id: Option<String>,
+        /// Override the ECS endpoint, for private endpoints or tests.
+        #[arg(long)]
         endpoint_url: Option<String>,
         /// Skip TLS certificate verification (for a self-signed endpoint).
         #[arg(long)]
@@ -1025,6 +1060,99 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
                 print_cloud_import("AWS", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Huawei {
+            action:
+                HuaweiAction::Import {
+                    region,
+                    access_key,
+                    secret_key,
+                    project_id,
+                    endpoint_url,
+                    no_verify,
+                },
+        } => {
+            let region = region
+                .or_else(|| std::env::var("HUAWEICLOUD_REGION").ok())
+                .filter(|r| !r.is_empty())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "a Huawei Cloud region is required: pass --region or set \
+                         HUAWEICLOUD_REGION"
+                    )
+                })?;
+            let access_key = access_key.filter(|k| !k.is_empty()).ok_or_else(|| {
+                anyhow!(
+                    "a Huawei Cloud access key is required: pass --access-key or set \
+                     HUAWEICLOUD_SDK_AK"
+                )
+            })?;
+            let secret_key = resolve_secret(secret_key, "--secret-key", "HUAWEICLOUD_SDK_SK")?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "a Huawei Cloud secret key is required: pass --secret-key, set \
+                         HUAWEICLOUD_SDK_SK, or use --secret-key - to read it from stdin"
+                    )
+                })?;
+            if no_verify {
+                tracing::warn!(
+                    "--no-verify disables TLS certificate verification for Huawei Cloud"
+                );
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification.\n\
+                     Only use this against a trusted self-signed endpoint; connections \
+                     can be silently intercepted."
+                );
+            }
+            if let Some(endpoint) = &endpoint_url {
+                if is_plain_http(endpoint) {
+                    eprintln!(
+                        "WARNING: --endpoint-url uses plain HTTP; Huawei Cloud credentials \
+                         and the signed request will travel unencrypted (audit OY-12)."
+                    );
+                }
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&secret_key);
+            let audit = begin_audit(
+                store.as_ref(),
+                "huawei.import",
+                "cloud",
+                Some(&format!(
+                    "region={region}{}",
+                    endpoint_url
+                        .as_deref()
+                        .map(|e| format!(", endpoint={e}"))
+                        .unwrap_or_default()
+                )),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let credentials = HuaweiCredentials {
+                    access_key,
+                    secret_key,
+                };
+                let client = HuaweiClient::new(
+                    credentials,
+                    &region,
+                    project_id,
+                    endpoint_url.as_deref(),
+                    no_verify,
+                )
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("Huawei Cloud", &inventory);
                 Ok(())
             }
             .await;
@@ -2360,6 +2488,8 @@ mod tests {
         std::env::set_var("AWS_ACCESS_KEY_ID", "help-leak-canary");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "help-leak-canary");
         std::env::set_var("AWS_SESSION_TOKEN", "help-leak-canary");
+        std::env::set_var("HUAWEICLOUD_SDK_AK", "help-leak-canary");
+        std::env::set_var("HUAWEICLOUD_SDK_SK", "help-leak-canary");
         let mut cmd = Cli::command();
         let discover_help = cmd
             .find_subcommand_mut("discover")
@@ -2405,6 +2535,14 @@ mod tests {
             .expect("aws import subcommand")
             .render_help()
             .to_string();
+        let mut cmd = Cli::command();
+        let huawei_import_help = cmd
+            .find_subcommand_mut("huawei")
+            .expect("huawei subcommand")
+            .find_subcommand_mut("import")
+            .expect("huawei import subcommand")
+            .render_help()
+            .to_string();
         std::env::remove_var("ORBYN_SNMP_COMMUNITY");
         std::env::remove_var("ORBYN_NETBOX_TOKEN");
         std::env::remove_var("ORBYN_WINRM_PASSWORD");
@@ -2414,6 +2552,8 @@ mod tests {
         std::env::remove_var("AWS_ACCESS_KEY_ID");
         std::env::remove_var("AWS_SECRET_ACCESS_KEY");
         std::env::remove_var("AWS_SESSION_TOKEN");
+        std::env::remove_var("HUAWEICLOUD_SDK_AK");
+        std::env::remove_var("HUAWEICLOUD_SDK_SK");
 
         // The variable name stays documented, its current value never leaks.
         assert!(
@@ -2469,6 +2609,15 @@ mod tests {
             !aws_import_help.contains("help-leak-canary"),
             "credential env value leaked into help: {aws_import_help}"
         );
+        assert!(
+            huawei_import_help.contains("HUAWEICLOUD_SDK_AK")
+                && huawei_import_help.contains("HUAWEICLOUD_SDK_SK"),
+            "env var names stay documented: {huawei_import_help}"
+        );
+        assert!(
+            !huawei_import_help.contains("help-leak-canary"),
+            "credential env value leaked into help: {huawei_import_help}"
+        );
     }
 
     #[test]
@@ -2519,6 +2668,7 @@ mod tests {
             "zabbix",
             "proxmox",
             "aws",
+            "huawei",
             "graph",
             "assess",
             "completions",

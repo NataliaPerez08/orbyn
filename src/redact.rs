@@ -52,6 +52,7 @@ impl Redactor {
             std::env::var("ORBYN_PROXMOX_TOKEN").unwrap_or_default(),
             std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default(),
             std::env::var("AWS_SESSION_TOKEN").unwrap_or_default(),
+            std::env::var("HUAWEICLOUD_SDK_SK").unwrap_or_default(),
         ]);
         redactor
     }

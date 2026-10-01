@@ -20,10 +20,12 @@ or authorization service and must not be used as one.
   through a shell.
 - Credentials are never exposed through CLI or API output and are never
   logged.
-- Secret flags (`--token`, `--community`, `--winrm-password`) can be kept off
-  the command line: all fall back to environment variables
-  (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`,
-  `ORBYN_PROMETHEUS_TOKEN`) and accept the literal `-` to read one line from
+- Secret flags (`--token`, `--community`, `--winrm-password`, `--secret-key`,
+  `--session-token`) can be kept off the command line: all fall back to
+  environment variables (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`,
+  `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`, `ORBYN_ZABBIX_TOKEN`,
+  `ORBYN_PROXMOX_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+  `HUAWEICLOUD_SDK_SK`) and accept the literal `-` to read one line from
   stdin. Values supplied explicitly on the command line trigger a runtime
   warning (they are visible in `ps` and shell history) and are registered
   with the redactor so they cannot leak into errors, logs or job records.
@@ -40,9 +42,11 @@ or authorization service and must not be used as one.
   Basic credentials never travel in cleartext.
 - Collectors run with minimum privileges.
 - Discovery jobs produce audit records for reuse or review.
-- API tokens (NetBox, Prometheus) are streamed to `curl` through stdin
-  (`-H @-`), never written to a temporary file or exposed through process
-  arguments, logs, or CLI output. Prometheus responses are additionally
+- API tokens (NetBox, Prometheus, Zabbix, Proxmox) and cloud provider
+  credentials (AWS SigV4, Huawei AK/SK signatures) are streamed to `curl`
+  through stdin (as headers or a stdin config), never written to a temporary
+  file or exposed through process arguments, logs, or CLI output. Prometheus
+  responses are additionally
   bounded: 16 MiB per response, 60 s per request and a 50k-point cap per
   query, so a hostile endpoint cannot exhaust memory with an endless
   matrix.
@@ -68,8 +72,10 @@ or authorization service and must not be used as one.
   a partial payload.
 - Child processes never inherit Orbyn's secret-bearing environment
   variables (`ORBYN_SNMP_COMMUNITY`, `ORBYN_NETBOX_TOKEN`,
-  `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`, `ORBYN_DB`): a hijacked
-  collector binary cannot read them from its own environment.
+  `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`, `ORBYN_ZABBIX_TOKEN`,
+  `ORBYN_PROXMOX_TOKEN`, `ORBYN_DB`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `HUAWEICLOUD_SDK_SK`): a hijacked collector binary
+  cannot read them from its own environment.
 
 ## Reporting a vulnerability
 

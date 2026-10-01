@@ -36,11 +36,6 @@ pub struct AssetAnnotations {
 /// collectors.
 #[async_trait]
 pub trait Store: Send + Sync {
-    /// Fully-qualified database backend name, useful for diagnostics.
-    fn database_type(&self) -> &'static str {
-        "unknown"
-    }
-
     /// Persist a batch of normalized observations, reconciling assets.
     async fn store_observations(&self, observations: Vec<Observation>) -> Result<()>;
 

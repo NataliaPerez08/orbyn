@@ -302,8 +302,8 @@ resource usage for representative large inventories.
 
 ### Phase 5 — Cloud and platform adapters
 
-**Status:** partially implemented (common adapter contract; Proxmox VE and AWS
-shipped). OpenStack, GCP and Azure are pending.
+**Status:** partially implemented (common adapter contract; Proxmox VE, AWS
+and Huawei Cloud shipped). OpenStack, GCP and Azure are pending.
 
 **Goal:** bring private infrastructure and public clouds into Orbyn's common
 normalized model.
@@ -312,13 +312,14 @@ normalized model.
 
 1. Proxmox VE.
 2. AWS.
-3. OpenStack.
-4. GCP.
-5. Azure.
+3. Huawei Cloud.
+4. OpenStack.
+5. GCP.
+6. Azure.
 
 Shipped in this phase:
 
-- `src/integrations/cloud/mod.rs` defines the common `CloudAdapter` contract,
+- `src/integrations/cloud/mod.rs` defines shared cloud inventory types,
   `CloudProvenance` (provider, account, region, observation time), and a shared
   `CurlClient` that streams request headers (including credentials) to `curl`
   on stdin, caps requests/response size/timeouts, and replays only transient
@@ -335,12 +336,21 @@ Shipped in this phase:
   pools become the asset owner. Templates are skipped, and a guest with no
   address anywhere is skipped with a note. Authentication uses a Proxmox API
   token, streamed to `curl` on stdin.
-- `orbyn aws import` reads EC2 instances and their elastic network interfaces
-  from the EC2 query API, signed with SigV4 implemented from the specification
-  (no SDK). The AWS account id is resolved from STS when permitted. Credentials
-  come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` (or
-  flags); the session token and signature travel to `curl` on stdin.
-- Both adapters attach provenance tags (`cloud:<provider>`,
+- `orbyn aws import` reads EC2 instances, their elastic network interfaces, EBS
+  volumes (as filesystems on their attached instance) and VPC/subnet resources
+  (as assets keyed by their CIDR network address) from the EC2 query API, signed
+  with SigV4 implemented from the specification (no SDK). The AWS account id is
+  resolved from STS when permitted. Credentials come from
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` (or flags); the
+  session token and signature travel to `curl` on stdin.
+- `orbyn huawei import` reads ECS instances and their network interfaces from
+  the Huawei Cloud ECS API, signed with the AK/SK `SDK-HMAC-SHA256` scheme
+  implemented from the specification (no SDK). CPU/RAM capacity comes from the
+  `flavors/detail` catalogue, and the project id is resolved from IAM
+  (`v3/projects`, preferring the project named after the region) when
+  `--project-id` is not given. Credentials come from `HUAWEICLOUD_SDK_AK`/
+  `HUAWEICLOUD_SDK_SK` (or flags); the signature travels to `curl` on stdin.
+- All adapters attach provenance tags (`cloud:<provider>`,
   `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset,
   record a provider-named discovery job and an audit event, and never persist a
   credential. Imported rows feed the same assessment, graph and export
@@ -363,6 +373,8 @@ Shipped in this phase:
 
 - Proxmox VE: nodes, pools, VMs, containers, disks, interfaces and storage.
 - AWS: accounts, regions, EC2, EBS, VPC, subnets, interfaces and tags.
+- Huawei Cloud: projects, regions, ECS instances, flavors, EVS volumes, VPCs,
+  subnets, interfaces and tags.
 - OpenStack: projects, regions, instances, flavors, networks, ports, volumes
   and images.
 - GCP: organizations/projects, regions/zones, Compute Engine, disks, networks,

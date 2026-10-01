@@ -16,7 +16,6 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 comfy-table = "7"
 dotenvy = "0.15"
-hex = "0.4"
 hmac = "0.12"
 quick-xml = { version = "0.41", features = ["serialize"] }
 sha2 = "0.10"

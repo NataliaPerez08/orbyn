@@ -39,13 +39,12 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 
 use crate::domain::{asset_id, normalize_mac, Capacity, Filesystem, Interface};
 use crate::integrations::cloud::{
-    cloud_asset, parse_ip_cidr, CloudAdapter, CloudAsset, CloudInventory, CurlClient,
+    cloud_asset, parse_ip_cidr, CloudAsset, CloudInventory, CurlClient,
 };
 use crate::integrations::netbox::url_origin;
 
@@ -1066,17 +1065,6 @@ impl ProxmoxClient {
             .await
             .and_then(|json| parse_node_storage(&json).ok())
             .unwrap_or_default()
-    }
-}
-
-#[async_trait]
-impl CloudAdapter for ProxmoxClient {
-    fn provider(&self) -> &'static str {
-        "proxmox"
-    }
-
-    async fn fetch(&self) -> Result<CloudInventory> {
-        self.fetch_inventory().await
     }
 }
 

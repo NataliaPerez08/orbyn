@@ -47,7 +47,7 @@ Assets that matter:
 
 | Asset | Where it lives |
 |---|---|
-| Discovery/import credentials (NetBox token, SNMP community, WinRM password) | process memory; env & `.env`; temporary restricted config during SNMP execution; stdin config streamed to curl for WinRM |
+| Discovery/import credentials (NetBox/Prometheus/Zabbix tokens, SNMP community, WinRM password, Proxmox token, AWS access/secret/session keys, Huawei AK/SK) | process memory; env & `.env`; temporary restricted config during SNMP execution; signed headers or stdin config streamed to curl |
 | SSH identity (path only, never key bytes) | `CredentialProfile.identity_file` |
 | Inventory truth (assets, services, deps, annotations) | SQLite db + stdout exports |
 | Audit history (jobs, mutating operations, failures, reasons) | SQLite db |
@@ -66,7 +66,7 @@ Assets that matter:
 | A-3 A malicious import CSV/JSON injects fields (hostnames, tags) that break queries or exports | Tampering/DoS | CSV/JSON parsing never concatenates SQL; store uses parameterized `sqlx` queries. | Present: parameterized SQL everywhere in `store/sqlite.rs`. |
 | A-4 Secrets in env leak into error messages / job audit rows | Information disclosure | NetBox token and SNMP community are registered into `Redactor` (`src/redact.rs`) and scrubbed before logging or persisting job failures; discovery also registers CLI/stdin-supplied values so no sourcing path is left unredacted. | Present but **value-based**: any secret not pre-registered is not redacted. Keep the redactor fed from the same env vars and flags the collectors consume. |
 | A-5 `.env` file stored with secrets ends up world-readable in a repo backup | Information disclosure | `.env` is git-ignored (`.gitignore`). | Present. **Residual**: file-mode hardening of `.env` is left to the OS/operator. |
-| A-6 Secrets passed as `--token`/`--community`/`--winrm-password` are visible in Orbyn's own argv (process inspection, shell history) | Information disclosure | All these flags fall back to env vars (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`) and accept `-` to read one line from stdin, so credentials can be kept off the command line entirely; explicitly supplied CLI values are registered with the redactor. The WinRM password reaches `curl` through a stdin config file (`-K -`), never through argv. | Resolved in Phase 6; E2E coverage verifies stdin-sourced secrets reach the collectors and never appear in output or child argv (including the WinRM and Prometheus flows). |
+| A-6 Secrets passed as `--token`/`--community`/`--winrm-password`/`--secret-key`/`--session-token` are visible in Orbyn's own argv (process inspection, shell history) | Information disclosure | All these flags fall back to env vars (`ORBYN_NETBOX_TOKEN`, `ORBYN_SNMP_COMMUNITY`, `ORBYN_WINRM_PASSWORD`, `ORBYN_PROMETHEUS_TOKEN`, `ORBYN_ZABBIX_TOKEN`, `ORBYN_PROXMOX_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `HUAWEICLOUD_SDK_SK`) and accept `-` to read one line from stdin, so credentials can be kept off the command line entirely; explicitly supplied CLI values are registered with the redactor. The WinRM password reaches `curl` through a stdin config file (`-K -`); AWS/Huawei signatures and the other tokens/headers travel to `curl` on stdin, never through argv. | Resolved in Phase 6; E2E coverage verifies stdin-sourced secrets reach the collectors and never appear in output or child argv (including the WinRM, Prometheus, AWS and Huawei flows). |
 
 ### B — External tools and remotes (lowest trust)
 
@@ -149,6 +149,7 @@ or `src/redact.rs`, confirm:
 - [ ] Any new subprocess runs through `process::run_captured` (concurrent pipes, lifecycle timeout, kill on expiry).
 - [ ] No new binary is invoked without documenting why and its trust posture.
 - [ ] A new secret source is registered in `Redactor::from_env`.
+- [ ] Cloud provider signatures/tokens (AWS SigV4, Huawei AK/SK) reach `curl` on stdin, never argv.
 - [ ] No credential is written to the db, a temp header file, an export, or a log.
 - [ ] Output redaction covers the new error path (job audit + stderr).
 - [ ] Any new HTTP surface verifies TLS by default and warns loudly otherwise.

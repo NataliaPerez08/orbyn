@@ -51,7 +51,7 @@ src/
 │   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
 │   └── rows.rs           # row decoding shared by both backends
 ├── integrations/         # importers, cloud adapters, Ansible/Terraform exporters
-│   └── cloud/            # read-only provider adapters (Proxmox VE, AWS) + SigV4
+│   └── cloud/            # read-only provider adapters (Proxmox VE, AWS, Huawei Cloud)
 ├── metrics/              # capacity/utilization processing (windows, right-sizing readiness)
 ├── assessment/           # migration assessment engine
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
@@ -77,6 +77,7 @@ Examples:
 - Zabbix (read-only historical utilization importer, Phase 3).
 - Proxmox VE (read-only cloud adapter, Phase 5).
 - AWS EC2 (read-only cloud adapter, Phase 5).
+- Huawei Cloud ECS (read-only cloud adapter, Phase 5).
 - vCenter (deferred/planned).
 - Flow telemetry or eBPF (planned).
 
@@ -208,18 +209,29 @@ stdin), while Ansible (INI inventory) and Terraform (HCL `locals`) are
 pure exporters over the normalized domain. A collector/plugin SDK is documented
 in PLUGINS.md with a runnable `examples/custom_collector.rs`.
 
-Cloud adapters (Phase 5) live in `src/integrations/cloud/`. They implement the
-`CloudAdapter` contract (`src/integrations/cloud/mod.rs`): a read-only provider
-client that fetches a provider inventory, normalizes it into
+Cloud adapters (Phase 5) live in `src/integrations/cloud/`. Each provider client
+fetches a read-only inventory, normalizes it into
 `CloudAsset`/`Interface`/`Service`/`Capacity`/`Filesystem` rows, and attaches
 `CloudProvenance` (provider, account, region, observation time). The `ProxmoxClient`
 adapter reads nodes, node storage/datastores, QEMU VMs and LXC containers over
 the Proxmox REST API with an API token, including guest interfaces (live or from
 the config), OS identity (`agent/get-osinfo` / `ostype`), filesystems
 (`agent/get-fsinfo` / LXC `rootfs`) and CPU/RAM allocation, with pools mapped to
-the asset owner; the `AwsClient` adapter reads EC2 instances and elastic network
-interfaces over the EC2 query API, signing each request with SigV4
-(`src/integrations/cloud/aws/sigv4.rs`) from environment credentials. Both use
+the asset owner; the `AwsClient` adapter reads EC2 instances, elastic network
+interfaces, EBS volumes (filesystems on their attached instance) and VPC/subnet
+resources (assets keyed by their CIDR network address) over the EC2 query API,
+signing each request with SigV4 (`src/integrations/cloud/aws/sigv4.rs`) from
+environment credentials; the `HuaweiClient` adapter reads ECS instances, their
+network interfaces, the flavor CPU/RAM catalogue, EVS volumes (filesystems on
+their attached server) and VPC/subnet resources (assets keyed by their CIDR
+network address) over the Huawei Cloud ECS/EVS/VPC APIs, signing each request
+with the AK/SK `SDK-HMAC-SHA256` scheme
+(`src/integrations/cloud/huawei/sign.rs`) and resolving the project id from IAM
+when it is not supplied. Because a VPC and one of its subnets can share a
+network address (e.g. `10.1.1.0/24` and `10.1.1.0/25`), a network asset takes
+the CIDR's network address when free and otherwise the next free address in the
+block, recording the true network in a `<provider>-netaddr:` tag so both
+resources coexist instead of one being dropped. All use
 the shared `CurlClient`, which streams headers (including credentials) to
 `curl` on stdin, bounds requests/response size/timeouts, and replays only
 transient failures. Provenance is preserved without a schema change as tags

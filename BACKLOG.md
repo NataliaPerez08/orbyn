@@ -49,7 +49,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Import/export hooks (`orbyn import`).
 - [x] **P1** SSH Linux collector.
 - [x] **P1** WinRM Windows collector (native WS-Man transport over HTTPS via curl; Basic auth with the password streamed to curl through stdin).
-- [ ] **P2** Virtualization metadata.
+- [x] **P2** Virtualization metadata.
 - [x] **P2** Disk/filesystem inventory.
 
 ## Integrations (v1.1)
@@ -171,17 +171,21 @@ must be read-only by default, preserve provider provenance, avoid credential
 storage, support pagination/rate limiting/timeouts, and include offline
 fixtures plus end-to-end tests.
 
-- [x] **P1** Define the common cloud-provider adapter contract
-  (`integrations::cloud::CloudAdapter` + `CloudProvenance` + shared
-  `CurlClient`).
+- [x] **P1** Define shared cloud-provider inventory types
+  (`CloudProvenance` + `CloudInventory` + shared `CurlClient`).
 - [x] **P1** Implement Proxmox VE adapter: nodes, node storage/datastores, QEMU
   VMs, LXC containers, interfaces (guest agent / container API / config
   fallback), guest OS identity, filesystems (agent `get-fsinfo` + LXC `rootfs`)
   and CPU/RAM capacity, with pools mapped to the asset owner and templates
   skipped. (`orbyn proxmox import`.)
 - [x] **P1** Implement AWS adapter: EC2 instances, elastic network interfaces,
-  tags and STS account provenance. (`orbyn aws import`; EBS/VPC/subnet
-  resources are not yet separate assets.)
+  EBS volumes (as filesystems on their attached instance), VPCs and subnets
+  (as assets keyed by their CIDR network address), tags and STS account
+  provenance. (`orbyn aws import`.)
+- [x] **P1** Implement Huawei Cloud adapter: ECS instances, network interfaces,
+  flavor CPU/RAM capacity, EVS volumes (as filesystems on their attached
+  server), VPC/subnet resources (as assets keyed by their CIDR network
+  address) and IAM project provenance. (`orbyn huawei import`.)
 - [ ] **P2** Implement OpenStack adapter: projects, regions, instances, flavors,
   networks, ports, volumes and images.
 - [ ] **P2** Implement GCP adapter: projects, regions/zones, Compute Engine,

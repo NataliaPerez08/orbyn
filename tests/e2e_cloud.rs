@@ -239,6 +239,58 @@ case "$url" in
 </GetCallerIdentityResponse>
 XML
     ;;
+  *Action=DescribeVolumes*)
+    cat <<'XML'
+<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <volumeSet>
+    <item>
+      <volumeId>vol-111</volumeId>
+      <size>100</size>
+      <volumeType>gp3</volumeType>
+      <attachmentSet>
+        <item><volumeId>vol-111</volumeId><instanceId>i-111</instanceId><device>/dev/xvdf</device><state>attached</state></item>
+      </attachmentSet>
+    </item>
+    <item>
+      <volumeId>vol-orphan</volumeId>
+      <size>8</size>
+      <volumeType>gp2</volumeType>
+      <attachmentSet/>
+    </item>
+  </volumeSet>
+</DescribeVolumesResponse>
+XML
+    ;;
+  *Action=DescribeVpcs*)
+    cat <<'XML'
+<DescribeVpcsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <vpcSet>
+    <item>
+      <vpcId>vpc-111</vpcId>
+      <cidrBlock>10.0.0.0/16</cidrBlock>
+      <isDefault>true</isDefault>
+      <tagSet><item><key>Name</key><value>main-vpc</value></item></tagSet>
+    </item>
+  </vpcSet>
+</DescribeVpcsResponse>
+XML
+    ;;
+  *Action=DescribeSubnets*)
+    cat <<'XML'
+<DescribeSubnetsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <subnetSet>
+    <item>
+      <subnetId>subnet-111</subnetId>
+      <vpcId>vpc-111</vpcId>
+      <cidrBlock>10.0.1.0/24</cidrBlock>
+      <availabilityZone>eu-west-1a</availabilityZone>
+      <availableIpAddressCount>251</availableIpAddressCount>
+      <tagSet><item><key>Name</key><value>app-subnet</value></item></tagSet>
+    </item>
+  </subnetSet>
+</DescribeSubnetsResponse>
+XML
+    ;;
   *NextToken=page-2*)
     cat <<'XML'
 <DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
@@ -317,10 +369,14 @@ fn aws_import_pulls_instances_and_paginates() {
             .env("ORBYN_CURL_BIN", &curl),
     );
     assert!(
-        out.contains("Imported 2 assets, 2 interfaces from AWS"),
+        out.contains("Imported 4 assets, 2 interfaces, 1 filesystems from AWS"),
         "{out}"
     );
     assert!(out.contains("aws:123456789012:eu-west-1"), "{out}");
+    assert!(
+        out.contains("Skipped 1 resource(s)"),
+        "the detached volume is reported: {out}"
+    );
     assert!(
         !out.contains("supersecretkey123"),
         "the secret key must never be printed: {out}"
@@ -332,6 +388,24 @@ fn aws_import_pulls_instances_and_paginates() {
         assets.contains("db-01"),
         "the second page is followed: {assets}"
     );
+    assert!(
+        assets.contains("main-vpc") && assets.contains("app-subnet"),
+        "VPCs and subnets become assets: {assets}"
+    );
+
+    // EBS volumes become filesystems on their attached instance.
+    let vols = run_ok(orbyn(&dir).args(["disks", "web-01", "--format", "csv"]));
+    assert!(vols.contains("vol-111"), "{vols}");
+    assert!(vols.contains("/dev/xvdf"), "{vols}");
+
+    let vpc = run_ok(orbyn(&dir).args(["asset", "main-vpc"]));
+    assert!(vpc.contains("aws-vpc:vpc-111"), "{vpc}");
+    assert!(vpc.contains("aws-cidr:10.0.0.0/16"), "{vpc}");
+
+    let subnet = run_ok(orbyn(&dir).args(["asset", "app-subnet"]));
+    assert!(subnet.contains("aws-subnet:subnet-111"), "{subnet}");
+    assert!(subnet.contains("aws-cidr:10.0.1.0/24"), "{subnet}");
+    assert!(subnet.contains("aws-az:eu-west-1a"), "{subnet}");
 
     let ifaces = run_ok(orbyn(&dir).args(["interfaces", "web-01", "--format", "csv"]));
     assert!(ifaces.contains("eni-aaa"), "{ifaces}");
@@ -428,4 +502,223 @@ fn proxmox_import_requires_a_token() {
             .env_remove("ORBYN_PROXMOX_TOKEN"),
     );
     assert!(out.contains("Proxmox API token is required"), "{out}");
+}
+
+/// A fake `curl` serving the Huawei Cloud ECS and IAM APIs the adapter calls.
+/// The requests are signed by the adapter; this fake ignores the signature but
+/// logs stdin so a test can assert the AK/SK reached curl on stdin.
+#[cfg(unix)]
+const FAKE_HUAWEI_CURL_SCRIPT: &str = r#"#!/usr/bin/env bash
+if [[ -n "$ORBYN_CURL_STDIN_LOG" ]]; then
+  cat >> "$ORBYN_CURL_STDIN_LOG"
+fi
+url="${@: -1}"
+if [[ "$url" == *"/v2.1/proj-1/flavors/detail"* ]]; then
+    cat <<'JSON'
+{"flavors":[
+  {"id":"s3.small.1","name":"s3.small.1","vcpus":1,"ram":2048},
+  {"id":"s3.medium.2","name":"s3.medium.2","vcpus":2,"ram":4096}
+]}
+JSON
+elif [[ "$url" == *"/v2/proj-1/cloudvolumes/detail"* ]]; then
+    cat <<'JSON'
+{"volumes":[
+  {"id":"vol-a","size":40,"volume_type":"SSD","attachments":[
+    {"server_id":"srv-a","device":"/dev/vdb","id":"vol-a"}]},
+  {"id":"vol-orphan","size":8,"volume_type":"SATA","attachments":[]}
+],
+"volumes_links":[]}
+JSON
+elif [[ "$url" == *"/v1/proj-1/vpcs"* ]]; then
+    cat <<'JSON'
+{"vpcs":[
+  {"id":"vpc-a","name":"vpc-main","cidr":"192.168.0.0/16","status":"ACTIVE"}
+]}
+JSON
+elif [[ "$url" == *"/v1/proj-1/subnets"* ]]; then
+    cat <<'JSON'
+{"subnets":[
+  {"id":"subnet-a","name":"sub-main","cidr":"192.168.1.0/24",
+   "vpc_id":"vpc-a","availability_zone":"cn-north-4a","status":"ACTIVE"},
+  {"id":"subnet-b","name":"sub-overlap","cidr":"192.168.0.0/24",
+   "vpc_id":"vpc-a","availability_zone":"cn-north-4a","status":"ACTIVE"}
+]}
+JSON
+elif [[ "$url" == *"offset=100"* ]]; then
+    cat <<'JSON'
+{"servers":[
+  {"id":"srv-c","name":"cache-01","status":"SHUTOFF","flavor":{"id":"s3.small.1","name":"s3.small.1"},"addresses":{}}
+]}
+JSON
+elif [[ "$url" == *"/v2.1/proj-1/servers/detail"* ]]; then
+    cat <<'JSON'
+{"servers":[
+  {"id":"srv-a","name":"web-01","status":"ACTIVE","flavor":{"id":"s3.small.1","name":"s3.small.1"},
+   "metadata":{"os_type":"Linux"},"OS-EXT-AZ:availability_zone":"cn-north-4a",
+   "addresses":{"vpc-a":[
+     {"addr":"192.168.0.5","OS-EXT-IPS:type":"fixed","OS-EXT-IPS-MAC:mac_addr":"fa:16:3e:aa:bb:01","OS-EXT-IPS:port_id":"port-aaa"},
+     {"addr":"203.0.113.5","OS-EXT-IPS:type":"floating"}
+   ]}},
+  {"id":"srv-b","name":"db-01","status":"ACTIVE","flavor":{"id":"s3.medium.2","name":"s3.medium.2"},
+   "addresses":{"vpc-a":[
+     {"addr":"192.168.0.6","OS-EXT-IPS:type":"fixed","OS-EXT-IPS-MAC:mac_addr":"fa:16:3e:aa:bb:02","OS-EXT-IPS:port_id":"port-bbb"}
+   ]}}
+],
+"servers_links":[{"rel":"next","href":"https://ecs.test.local/v2.1/proj-1/servers/detail?limit=100&offset=100"}]}
+JSON
+else
+    printf 'unexpected request: %s' "$url" >&2
+    exit 22
+fi
+printf '200'
+"#;
+
+#[cfg(unix)]
+#[test]
+fn huawei_import_pulls_instances_and_paginates() {
+    let dir = TempDir::new("huawei");
+    let curl = fake_bin(&dir, "curl", FAKE_HUAWEI_CURL_SCRIPT);
+
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["huawei", "import", "--region", "cn-north-4"])
+            .args(["--access-key", "AKTEST"])
+            .args(["--secret-key", "supersecretkey123"])
+            .args(["--project-id", "proj-1"])
+            .args(["--endpoint-url", "https://ecs.test.local"])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(
+        out.contains(
+            "Imported 5 assets, 3 interfaces, 2 capacity rows, 1 filesystems from Huawei Cloud \
+             (huawei:proj-1:cn-north-4)"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("Skipped 2 resource(s)"),
+        "a detached volume is reported: {out}"
+    );
+    assert!(
+        !out.contains("supersecretkey123"),
+        "the secret key must never be printed: {out}"
+    );
+
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(assets.contains("web-01"), "{assets}");
+    assert!(
+        assets.contains("db-01"),
+        "the second page is followed: {assets}"
+    );
+    assert!(
+        !assets.contains("cache-01"),
+        "a server without an IP is skipped: {assets}"
+    );
+    assert!(
+        assets.contains("vpc-main") && assets.contains("sub-main"),
+        "VPCs and subnets become assets: {assets}"
+    );
+    // A subnet that shares the VPC's network address coexists on the next
+    // free address instead of being dropped.
+    let overlap = run_ok(orbyn(&dir).args(["asset", "sub-overlap"]));
+    assert!(overlap.contains("192.168.0.1"), "{overlap}");
+    assert!(overlap.contains("huawei-netaddr:192.168.0.0"), "{overlap}");
+
+    // EVS volumes become filesystems on their attached server.
+    let vols = run_ok(orbyn(&dir).args(["disks", "web-01", "--format", "csv"]));
+    assert!(vols.contains("vol-a"), "{vols}");
+    assert!(vols.contains("/dev/vdb"), "{vols}");
+
+    let vpc = run_ok(orbyn(&dir).args(["asset", "vpc-main"]));
+    assert!(vpc.contains("huawei-vpc:vpc-a"), "{vpc}");
+    assert!(vpc.contains("huawei-cidr:192.168.0.0/16"), "{vpc}");
+
+    let subnet = run_ok(orbyn(&dir).args(["asset", "sub-main"]));
+    assert!(subnet.contains("huawei-subnet:subnet-a"), "{subnet}");
+    assert!(subnet.contains("huawei-cidr:192.168.1.0/24"), "{subnet}");
+    assert!(subnet.contains("huawei-az:cn-north-4a"), "{subnet}");
+
+    // Interface detail from the address list.
+    let ifaces = run_ok(orbyn(&dir).args(["interfaces", "web-01", "--format", "csv"]));
+    assert!(ifaces.contains("port-aaa"), "{ifaces}");
+    assert!(ifaces.contains("fa:16:3e:aa:bb:01"), "{ifaces}");
+    assert!(ifaces.contains("192.168.0.5"), "{ifaces}");
+
+    // CPU/RAM capacity from the flavor catalogue.
+    let capacity = run_ok(orbyn(&dir).args(["capacity", "web-01", "--format", "csv"]));
+    assert!(capacity.contains("2048"), "{capacity}");
+
+    // Provenance tags from the provider, project and region.
+    let web = run_ok(orbyn(&dir).args(["asset", "web-01"]));
+    assert!(web.contains("cloud:huawei"), "{web}");
+    assert!(web.contains("cloud-account:proj-1"), "{web}");
+    assert!(web.contains("cloud-region:cn-north-4"), "{web}");
+    assert!(web.contains("huawei-server:srv-a"), "{web}");
+    assert!(web.contains("Linux"), "{web}");
+
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(jobs.contains("huawei,succeeded"), "{jobs}");
+
+    let audit = run_ok(orbyn(&dir).args(["audit", "--format", "csv"]));
+    assert!(audit.contains("huawei.import"), "{audit}");
+}
+
+#[cfg(unix)]
+#[test]
+fn huawei_secret_key_from_stdin_reaches_curl_signed() {
+    let dir = TempDir::new("huawei-stdin");
+    let curl = fake_bin(&dir, "curl", FAKE_HUAWEI_CURL_SCRIPT);
+    let stdin_log = dir.path().join("curl-stdin.log");
+
+    let output = run_with_stdin(
+        orbyn(&dir)
+            .args(["huawei", "import", "--region", "cn-north-4"])
+            .args(["--access-key", "AKTEST"])
+            .args(["--secret-key", "-"])
+            .args(["--project-id", "proj-1"])
+            .args(["--endpoint-url", "https://ecs.test.local"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env("ORBYN_CURL_STDIN_LOG", &stdin_log),
+        "supersecretkey123\n",
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("supersecretkey123"),
+        "the secret key must never be printed: {combined}"
+    );
+
+    let payload = std::fs::read_to_string(&stdin_log).expect("curl stdin log");
+    assert!(
+        payload.contains(
+            "Authorization: SDK-HMAC-SHA256 Access=AKTEST, SignedHeaders=host;x-sdk-date"
+        ),
+        "an SDK-HMAC-SHA256 Authorization header must reach curl's stdin: {payload}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn huawei_import_requires_credentials() {
+    let dir = TempDir::new("huawei-no-creds");
+    let curl = fake_bin(&dir, "curl", FAKE_HUAWEI_CURL_SCRIPT);
+
+    let out = run_fail(
+        orbyn(&dir)
+            .args(["huawei", "import", "--region", "cn-north-4"])
+            .args(["--endpoint-url", "https://ecs.test.local"])
+            .env("ORBYN_CURL_BIN", &curl)
+            .env_remove("HUAWEICLOUD_SDK_AK")
+            .env_remove("HUAWEICLOUD_SDK_SK"),
+    );
+    assert!(out.contains("Huawei Cloud access key is required"), "{out}");
 }
