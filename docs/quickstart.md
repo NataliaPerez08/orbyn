@@ -177,4 +177,4 @@ orbyn assess --rules            # the rule catalog and its version
 | no activity on a command      | `-vv` for verbose logs; stdout is clean, logs go to stderr        |
 
 Full reference and configuration (env vars, collectors, formats) live in
-[README.md](README.md).
+[README.md](../README.md).

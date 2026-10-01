@@ -129,7 +129,7 @@ Orbyn follows a collector-based architecture in Rust: `tokio` for async runtime,
          CLI output (table/json/csv)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed architecture.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed architecture.
 
 ## Current bootstrap
 
@@ -227,7 +227,7 @@ The repository currently provides:
   * Zabbix historical utilization importer (`orbyn zabbix import`).
   * Ansible inventory exporter (`orbyn export --format ansible`).
   * Terraform-friendly export (`orbyn export --format terraform`).
-  * Plugin/collector SDK (PLUGINS.md + `examples/custom_collector.rs`).
+  * Plugin/collector SDK (docs/PLUGINS.md + `examples/custom_collector.rs`).
 * Cloud and platform adapters (Phase 5, read-only):
   * Proxmox VE importer (`orbyn proxmox import`): nodes, node datastores, QEMU
     VMs and LXC containers with per-guest interfaces (guest agent / container
@@ -275,7 +275,7 @@ enabled. The WinRM password is sourced from `ORBYN_WINRM_PASSWORD` or stdin
 ## Install & run locally
 
 For installing a released binary without Rust or Cargo, see
-[INSTALL.md](INSTALL.md).
+[INSTALL.md](docs/INSTALL.md).
 
 ```bash
 git clone https://github.com/NataliaPerez08/orbyn.git
@@ -549,8 +549,10 @@ orbyn/
 ├── Makefile
 ├── .env.example
 ├── .gitignore
-├── CONTRIBUTING.md
-├── SECURITY.md
+├── docs/
+│   ├── CONTRIBUTING.md
+│   ├── SECURITY.md
+│   └── ...
 ├── LICENSE
 └── README.md
 ```
@@ -758,7 +760,7 @@ Orbyn therefore:
 
 Users are responsible for ensuring they have authorization to scan and inspect target infrastructure.
 
-See [SECURITY.md](SECURITY.md).
+See [SECURITY.md](docs/SECURITY.md).
 
 ## Roadmap
 
@@ -784,7 +786,7 @@ v1.2    Historical metrics + right-sizing
 A web/HTTP interface for `orbyn` is a possible later add-on, not a goal for the
 core tool.
 
-See [ROADMAP.md](ROADMAP.md) and [BACKLOG.md](BACKLOG.md).
+See [ROADMAP.md](docs/ROADMAP.md) and [BACKLOG.md](docs/BACKLOG.md).
 
 ## Contributing
 
@@ -792,7 +794,7 @@ Orbyn is intended to be community-driven.
 
 Contributions around collectors, infrastructure platforms, dependency detection, assessment rules, documentation and testing are welcome.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## License
 
