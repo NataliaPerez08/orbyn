@@ -281,10 +281,7 @@ Shipped in this phase:
 
 ### Phase 4 — Scale and operations
 
-**Status:** partially implemented (bulk reads, batch queries, bounded
-concurrent discovery with rate limiting, per-job metrics, capped collector
-output). Controlled retries and performance tests with representative
-inventories are pending.
+**Status:** complete.
 
 **Goal:** support large inventories and long-running discovery operations.
 
@@ -299,6 +296,17 @@ inventories are pending.
 
 **Exit criterion:** assessment, export and import have predictable time and
 resource usage for representative large inventories.
+
+Shipped in this phase:
+
+- Discovery persists each completed target batch before accepting more work,
+  bounding retained observations by the worker pool and one collector result.
+- `tests/e2e_scale.rs` covers representative large inventories, bulk
+  assessment/export reads, import round-trips, utilization history and
+  bounded concurrent discovery.
+- External API retries use bounded attempts and exponential backoff; response,
+  subprocess output and import input are capped.
+- Operational limits and partial-failure behavior are documented in the README.
 
 ### Phase 5 — Cloud and platform adapters
 

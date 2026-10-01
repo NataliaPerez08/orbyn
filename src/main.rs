@@ -1588,7 +1588,14 @@ async fn discover(
     );
 
     let mut running: VecDeque<JoinHandle<anyhow::Result<Vec<Observation>>>> = VecDeque::new();
-    let mut results: Vec<anyhow::Result<Vec<Observation>>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut outcome = JobOutcome {
+        assets_found: 0,
+        services_found: 0,
+        filesystems_found: 0,
+        running_services_found: 0,
+        connections_found: 0,
+    };
     let first_launch = Instant::now();
 
     for (index, scan_target) in scan_targets.iter().enumerate() {
@@ -1603,7 +1610,7 @@ async fn discover(
         }
         while running.len() >= concurrency {
             let handle = running.pop_front().expect("pool is at capacity");
-            collect_scan_result(handle, &mut results).await;
+            persist_scan_result(handle, store, redactor, &mut outcome, &mut failures).await?;
         }
         let collector = Arc::clone(&collector);
         let scan_target = scan_target.clone();
@@ -1612,48 +1619,14 @@ async fn discover(
         ));
     }
     while let Some(handle) = running.pop_front() {
-        collect_scan_result(handle, &mut results).await;
+        persist_scan_result(handle, store, redactor, &mut outcome, &mut failures).await?;
     }
 
-    let mut observations = Vec::new();
-    let mut failures: Vec<String> = Vec::new();
-    for result in results {
-        match result {
-            Ok(obs) => observations.extend(obs),
-            Err(e) => failures.push(redactor.redact(&format!("{e:#}"))),
-        }
-    }
-
-    let assets = observations
-        .iter()
-        .filter(|o| matches!(o, Observation::Asset(_)))
-        .count();
-    let services = observations
-        .iter()
-        .filter(|o| matches!(o, Observation::Service(_)))
-        .count();
-    let filesystems = observations
-        .iter()
-        .filter(|o| matches!(o, Observation::Filesystem(_)))
-        .count();
-    let running_services = observations
-        .iter()
-        .filter(|o| matches!(o, Observation::RunningService(_)))
-        .count();
-    let connections = observations
-        .iter()
-        .filter(|o| matches!(o, Observation::Connection(_)))
-        .count();
-
-    store.store_observations(observations).await?;
-
-    let outcome = JobOutcome {
-        assets_found: assets as u32,
-        services_found: services as u32,
-        filesystems_found: filesystems as u32,
-        running_services_found: running_services as u32,
-        connections_found: connections as u32,
-    };
+    let assets = outcome.assets_found;
+    let services = outcome.services_found;
+    let filesystems = outcome.filesystems_found;
+    let running_services = outcome.running_services_found;
+    let connections = outcome.connections_found;
 
     if failures.is_empty() {
         store
@@ -1684,15 +1657,36 @@ async fn discover(
     }
 }
 
-/// Await one worker task, flattening a join failure into an error result.
-async fn collect_scan_result(
+/// Await one worker task and persist its observations before accepting more
+/// work, keeping memory bounded by the worker pool and one result batch.
+async fn persist_scan_result(
     handle: JoinHandle<anyhow::Result<Vec<Observation>>>,
-    results: &mut Vec<anyhow::Result<Vec<Observation>>>,
-) {
-    match handle.await {
-        Ok(result) => results.push(result),
-        Err(e) => results.push(Err(anyhow!("collector task failed: {e}"))),
+    store: &dyn Store,
+    redactor: &orbyn::redact::Redactor,
+    outcome: &mut JobOutcome,
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    let result = match handle.await {
+        Ok(result) => result,
+        Err(e) => Err(anyhow!("collector task failed: {e}")),
+    };
+    match result {
+        Ok(observations) => {
+            for observation in &observations {
+                match observation {
+                    Observation::Asset(_) => outcome.assets_found += 1,
+                    Observation::Service(_) => outcome.services_found += 1,
+                    Observation::Filesystem(_) => outcome.filesystems_found += 1,
+                    Observation::RunningService(_) => outcome.running_services_found += 1,
+                    Observation::Connection(_) => outcome.connections_found += 1,
+                    _ => {}
+                }
+            }
+            store.store_observations(observations).await?;
+        }
+        Err(e) => failures.push(redactor.redact(&format!("{e:#}"))),
     }
+    Ok(())
 }
 
 fn target_label(target: &ScanTarget) -> String {

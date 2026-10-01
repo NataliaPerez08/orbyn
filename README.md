@@ -379,6 +379,24 @@ orbyn huawei import --region <r> [--access-key <k>] [--secret-key <s>|--secret-k
 orbyn completions bash|zsh|fish                      Generate a shell completion script
 ```
 
+## Operational limits and partial failures
+
+Discovery uses a bounded worker pool. `--concurrency` limits scans running at
+once, while `--rate-limit` caps launches per second. Completed target batches
+are persisted incrementally, so successful targets remain available when
+another target fails and retained discovery memory is bounded by the worker
+pool and one result batch.
+
+External subprocesses are subject to a 60-second lifecycle timeout, a 16 MiB
+stdout/response cap and a 1 MiB stderr cap. Inventory imports are capped at 64
+MiB. NetBox, Prometheus, Zabbix and cloud API calls retry only transient
+timeouts, transport failures, rate limits and 5xx responses, with at most three
+attempts and bounded exponential backoff.
+
+Large estates should be split into smaller import or discovery runs. A failed
+target marks the discovery job failed, but observations already persisted from
+successful targets are retained and shown in the job outcome.
+
 Example session:
 
 ```bash

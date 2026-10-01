@@ -156,13 +156,13 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P1** Add batch queries to the store.
 - [x] **P2** Add bounded concurrent discovery and rate limiting
   (`--concurrency`, `--rate-limit`).
-- [ ] **P2** Add response and memory limits for large inventories — partially
-  done (NetBox 16 MB cap; collector output capped at 16 MiB/1 MiB per run,
-  audit OY-08); `orbyn import` input remains uncapped (audit OY-19).
+- [x] **P2** Add response and memory limits for large inventories (NetBox and
+  collector response caps, capped import input, incremental discovery
+  persistence; audit OY-08/OY-19).
 - [x] **P2** Persist complete discovery-job metrics (filesystems, running
   services, connections per job).
-- [ ] **P2** Add controlled retries for external APIs.
-- [ ] **P2** Add performance tests with representative inventories.
+- [x] **P2** Add controlled retries for external APIs.
+- [x] **P2** Add performance tests with representative inventories.
 
 ### Phase 5 — Cloud and platform adapters
 
