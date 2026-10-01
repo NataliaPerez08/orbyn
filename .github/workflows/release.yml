@@ -49,25 +49,45 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          bin="target/${{ matrix.target }}/release/orbyn${{ matrix.ext }}"
-          asset="orbyn-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.ext }}"
-          cp "$bin" "$asset"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a "$asset.zip" "$asset" >/dev/null
-            sha256sum "$asset.zip" > "$asset.zip.sha256"
-          else
-            tar -czf "$asset.tar.gz" "$asset"
-            sha256sum "$asset.tar.gz" > "$asset.tar.gz.sha256"
-          fi
+           bin="target/${{ matrix.target }}/release/orbyn${{ matrix.ext }}"
+           asset="orbyn-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.ext }}"
+           staging="$RUNNER_TEMP/orbyn-package"
+           rm -rf "$staging"
+           mkdir -p "$staging"
+           cp "$bin" "$staging/$asset"
+           cp LICENSE THIRD_PARTY_NOTICES.md "$staging/"
+           if [ "${{ matrix.os }}" = "windows-latest" ]; then
+             (
+               cd "$staging"
+               7z a "$GITHUB_WORKSPACE/$asset.zip" "$asset" LICENSE THIRD_PARTY_NOTICES.md >/dev/null
+             )
+             sha256sum "$asset.zip" > "$asset.zip.sha256"
+           else
+             tar -czf "$asset.tar.gz" -C "$staging" "$asset" LICENSE THIRD_PARTY_NOTICES.md
+             sha256sum "$asset.tar.gz" > "$asset.tar.gz.sha256"
+           fi
 
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            sha256sum -c "$asset.zip.sha256"
-            test -s "$asset.zip"
-          else
-            sha256sum -c "$asset.tar.gz.sha256"
-            test -s "$asset.tar.gz"
-          fi
-          rm "$asset"
+           if [ "${{ matrix.os }}" = "windows-latest" ]; then
+             inspect="$RUNNER_TEMP/orbyn-inspect"
+             rm -rf "$inspect"
+             mkdir -p "$inspect"
+             7z x "$asset.zip" "-o$inspect" >/dev/null
+             test -f "$inspect/$asset"
+             test -f "$inspect/LICENSE"
+             test -f "$inspect/THIRD_PARTY_NOTICES.md"
+             sha256sum -c "$asset.zip.sha256"
+             test -s "$asset.zip"
+           else
+             inspect="$RUNNER_TEMP/orbyn-inspect"
+             rm -rf "$inspect"
+             mkdir -p "$inspect"
+             tar -xzf "$asset.tar.gz" -C "$inspect"
+             test -f "$inspect/$asset"
+             test -f "$inspect/LICENSE"
+             test -f "$inspect/THIRD_PARTY_NOTICES.md"
+             sha256sum -c "$asset.tar.gz.sha256"
+             test -s "$asset.tar.gz"
+           fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

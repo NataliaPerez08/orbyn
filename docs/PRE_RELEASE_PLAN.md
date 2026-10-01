@@ -1,15 +1,16 @@
-# Orbyn — Pre-Release Plan
+# Orbyn — Release Verification Plan
 
-> **Target:** First public open-source release  
+> **Target:** `v1.0.3` patch release
 > **License:** Apache-2.0  
-> **Status:** Pre-release  
-> **Primary goal:** Prepare the existing Orbyn repository for a safe, reproducible, documented public release without expanding product scope.
+> **Status:** Follow-up in progress
+> **Primary goal:** Ship the minimum compliance and packaging fixes for the next patch release without expanding product scope.
 
 ---
 
 ## 1. Mission
 
-Prepare the current Orbyn codebase for its first public open-source release.
+The existing public release is `v1.0.2`. This plan tracks the `v1.0.3`
+patch release and does not rewrite or move the existing tag.
 
 This is primarily a **stabilization, compliance, documentation, testing, and packaging task**.
 
@@ -167,19 +168,19 @@ Inspect repository state for:
 
 Inspect `Cargo.toml`.
 
-The current repository has historically contained a version inconsistent with the maturity described by the project documentation.
+The next release candidate's canonical version is `1.0.3`; `v1.0.2` remains
+the existing published tag.
 
-Determine the intended first public release version.
-
-Unless repository history provides a strong reason otherwise, use:
+The release candidate uses:
 
 ```toml
-version = "0.1.0"
+version = "1.0.3"
 ```
 
 Update references throughout the repository so documentation, CLI version output, Cargo metadata, release workflow, and release notes agree.
 
-Do not create the Git tag yet.
+Do not rewrite or move the existing `v1.0.2` tag. Future fixes should use a
+new patch version and tag.
 
 ### Acceptance criteria
 
@@ -239,11 +240,11 @@ Keep vulnerability auditing separate from license auditing.
 
 ### Acceptance criteria
 
-- [ ] `cargo deny check licenses` passes.
-- [ ] `cargo deny check sources` passes.
-- [ ] Dependency license policy is committed.
-- [ ] Any license exception is documented.
-- [ ] No dependency with an unidentified license is silently accepted.
+- [x] `cargo deny check licenses` passes.
+- [x] `cargo deny check sources` passes.
+- [x] Dependency license policy is committed.
+- [x] Any license exception is documented.
+- [x] No dependency with an unidentified license is silently accepted.
 
 ---
 
@@ -302,8 +303,8 @@ Do not bundle these programs unless a future release explicitly performs a separ
 - [ ] No Npcap binaries are distributed.
 - [ ] No OpenSSH binaries are distributed.
 - [ ] No Net-SNMP binaries are distributed.
-- [ ] Documentation clearly calls them external dependencies.
-- [ ] Missing external binaries produce understandable errors.
+- [x] Documentation clearly calls them external dependencies.
+- [x] Missing external binaries produce understandable errors.
 
 ---
 
@@ -356,10 +357,10 @@ Do not imply that Apache-2.0 applies to these external programs.
 
 ### Acceptance criteria
 
-- [ ] `THIRD_PARTY_NOTICES.md` exists.
-- [ ] Incorporated dependencies and external tools are distinguished.
-- [ ] Nmap is explicitly identified as external.
-- [ ] Project license claims only cover Orbyn code where applicable.
+- [x] `THIRD_PARTY_NOTICES.md` exists.
+- [x] Incorporated dependencies and external tools are distinguished.
+- [x] Nmap is explicitly identified as external.
+- [x] Project license claims only cover Orbyn code where applicable.
 
 ---
 
@@ -641,13 +642,13 @@ unless explicitly justified and documented.
 
 ### Acceptance criteria
 
-- [ ] Formatting is enforced.
-- [ ] Clippy is enforced.
-- [ ] Tests are enforced.
-- [ ] Release build is tested.
-- [ ] Vulnerability auditing runs.
-- [ ] License auditing runs.
-- [ ] Source auditing runs.
+- [x] Formatting is enforced.
+- [x] Clippy is enforced.
+- [x] Tests are enforced.
+- [x] Release build is tested.
+- [x] Vulnerability auditing runs.
+- [x] License auditing runs.
+- [x] Source auditing runs.
 
 ---
 
@@ -686,6 +687,10 @@ Verify license/documentation files are included where appropriate.
 - [ ] No external executable bundled accidentally.
 - [ ] Correct Orbyn license included.
 - [ ] Version is correct.
+
+The `v1.0.2` published assets could not be retrieved in the current
+environment. The release workflow now packages and inspects the binary,
+`LICENSE`, and `THIRD_PARTY_NOTICES.md` before upload for future releases.
 
 ---
 

@@ -254,8 +254,13 @@ The repository currently provides:
     and record an audit event; credentials are never persisted.
 * Architecture documentation, roadmap and backlog.
 
+Third-party dependency and external-tool licensing details are documented in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Release details are documented in
+[`docs/RELEASE_NOTES_v1.0.3.md`](docs/RELEASE_NOTES_v1.0.3.md).
+
 The v1.0 CLI surface, completions, audit trail and release packaging are
-implemented and published. The current release is `v1.0.2`.
+implemented. The current release candidate is `v1.0.3`.
 
 ## Requirements
 
