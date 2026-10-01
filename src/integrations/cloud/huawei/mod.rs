@@ -28,8 +28,8 @@ use serde::Deserialize;
 
 use crate::domain::{Capacity, Filesystem, Interface};
 use crate::integrations::cloud::{
-    cloud_asset, network_address, network_asset_ip, parse_ip_cidr, CloudAsset, CloudInventory,
-    CurlClient,
+    cloud_asset, host_header, network_address, network_asset_ip, parse_ip_cidr, CloudAsset,
+    CloudInventory, CurlClient,
 };
 use crate::integrations::netbox::{url_origin, UrlOrigin};
 use sign::sign_request;
@@ -38,38 +38,16 @@ use sign::sign_request;
 const MAX_PAGES: usize = 200;
 /// Servers requested per page.
 const PAGE_SIZE: usize = 100;
-/// Maximum instances imported in one run.
-const MAX_SERVERS: usize = 100_000;
 /// Maximum flavors materialized from `ListFlavorsDetails`.
 const MAX_FLAVORS: usize = 10_000;
-/// Maximum EVS volumes imported in one run.
-const MAX_VOLUMES: usize = 100_000;
 /// Maximum VPCs imported in one run.
 const MAX_VPCS: usize = 10_000;
-/// Maximum subnets imported in one run.
-const MAX_SUBNETS: usize = 100_000;
 
 /// Huawei Cloud credentials (Access Key / Secret Key) for signing requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HuaweiCredentials {
     pub access_key: String,
     pub secret_key: String,
-}
-
-impl HuaweiCredentials {
-    /// Resolve credentials from the standard Huawei Cloud SDK environment
-    /// variables.
-    pub fn from_env() -> Option<Self> {
-        let access_key = std::env::var("HUAWEICLOUD_SDK_AK").ok()?;
-        let secret_key = std::env::var("HUAWEICLOUD_SDK_SK").ok()?;
-        if access_key.is_empty() || secret_key.is_empty() {
-            return None;
-        }
-        Some(Self {
-            access_key,
-            secret_key,
-        })
-    }
 }
 
 /// A parsed `ListServersDetails` page.
@@ -154,7 +132,6 @@ impl HuaweiClient {
         let flavors = self.fetch_flavors(&project_id).await;
 
         let mut offset = 0usize;
-        let mut servers_seen = 0usize;
         let mut instance_assets: HashMap<String, String> = HashMap::new();
         let mut servers_done = false;
         for _page in 0..MAX_PAGES {
@@ -167,14 +144,7 @@ impl HuaweiClient {
                 self.signed_get(&self.ecs_endpoint, &self.ecs_host, &path, &params);
             let body = self.http.get(&url, &headers).await?;
             let page = parse_servers(&body)?;
-
             for server in &page.servers {
-                servers_seen += 1;
-                if servers_seen > MAX_SERVERS {
-                    bail!(
-                        "Huawei Cloud ListServersDetails exceeded the {MAX_SERVERS} server limit"
-                    );
-                }
                 self.import_server(
                     server,
                     &flavors,
@@ -183,7 +153,6 @@ impl HuaweiClient {
                     &mut inventory,
                 );
             }
-
             if !page.has_next || page.servers.is_empty() {
                 servers_done = true;
                 break;
@@ -293,7 +262,7 @@ impl HuaweiClient {
                     cpu_sockets: None,
                     cpu_cores: flavor.vcpus,
                     cpu_threads: None,
-                    ram_total_mb: flavor.ram_mb(),
+                    ram_total_mb: flavor.ram,
                     hypervisor: None,
                     collected_at: observed_at,
                 });
@@ -346,9 +315,6 @@ impl HuaweiClient {
         let volumes = self
             .list_all(&self.evs_endpoint, &self.evs_host, &path, parse_volumes)
             .await?;
-        if volumes.len() > MAX_VOLUMES {
-            bail!("Huawei Cloud ListVolumesDetails exceeded the {MAX_VOLUMES} volume limit");
-        }
         for volume in &volumes {
             let volume_id = volume.id.as_deref().unwrap_or("(unknown)");
             let Some(attachment) = volume.attachments.first() else {
@@ -477,9 +443,6 @@ impl HuaweiClient {
         let subnets = self
             .list_all(&self.vpc_endpoint, &self.vpc_host, &path, parse_subnets)
             .await?;
-        if subnets.len() > MAX_SUBNETS {
-            bail!("Huawei Cloud ListSubnets exceeded the {MAX_SUBNETS} subnet limit");
-        }
         let mut seen: HashSet<String> = inventory
             .assets
             .iter()
@@ -623,20 +586,6 @@ fn origin(endpoint: &str, what: &str) -> Result<UrlOrigin> {
     })
 }
 
-/// The `Host` header for an origin, including a non-default port and
-/// bracketing an IPv6 literal.
-fn host_header(origin: &UrlOrigin) -> String {
-    let default_port = (origin.scheme == "https" && origin.port == 443)
-        || (origin.scheme == "http" && origin.port == 80);
-    if default_port {
-        origin.host.clone()
-    } else if origin.host.contains(':') {
-        format!("[{}]:{}", origin.host, origin.port)
-    } else {
-        format!("{}:{}", origin.host, origin.port)
-    }
-}
-
 /// The best IP for a server: a private/fixed address first, then a floating
 /// one.
 fn server_ip(server: &HuaweiServer) -> Option<IpAddr> {
@@ -745,13 +694,6 @@ struct Flavor {
     vcpus: Option<u32>,
     #[serde(default)]
     ram: Option<u64>,
-}
-
-impl Flavor {
-    /// RAM in MiB (the API reports `ram` in MiB).
-    fn ram_mb(&self) -> Option<u64> {
-        self.ram
-    }
 }
 
 /// Parse a `ListServersDetails` response.
@@ -977,7 +919,7 @@ mod tests {
         assert_eq!(flavors.len(), 2);
         let small = flavors.get("s3.small.1").unwrap();
         assert_eq!(small.vcpus, Some(1));
-        assert_eq!(small.ram_mb(), Some(2048));
+        assert_eq!(small.ram, Some(2048));
     }
 
     #[test]

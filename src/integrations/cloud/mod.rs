@@ -362,13 +362,25 @@ pub(crate) fn parse_ip_cidr(raw: &str) -> Option<std::net::IpAddr> {
     raw.split('/').next()?.trim().parse().ok()
 }
 
+/// The `Host` header for an origin, including a non-default port and
+/// bracketing an IPv6 literal.
+pub(crate) fn host_header(origin: &crate::integrations::netbox::UrlOrigin) -> String {
+    let default_port = (origin.scheme == "https" && origin.port == 443)
+        || (origin.scheme == "http" && origin.port == 80);
+    if default_port {
+        origin.host.clone()
+    } else if origin.host.contains(':') {
+        format!("[{}]:{}", origin.host, origin.port)
+    } else {
+        format!("{}:{}", origin.host, origin.port)
+    }
+}
+
 /// The network address of a CIDR block (`10.0.1.5/24` -> `10.0.1.0`,
 /// `2001:db8::1/64` -> `2001:db8::`). Cloud adapters use it as the synthetic
 /// identity of a VPC or subnet, which are not addressable hosts.
 pub(crate) fn network_address(raw: &str) -> Option<std::net::IpAddr> {
-    let (address, prefix) = raw.split_once('/')?;
-    let ip: std::net::IpAddr = address.trim().parse().ok()?;
-    let prefix: u8 = prefix.trim().parse().ok()?;
+    let (ip, prefix) = cidr_parts(raw)?;
     match ip {
         std::net::IpAddr::V4(v4) => {
             if prefix > 32 {
@@ -409,11 +421,8 @@ const NETWORK_IP_PROBE_LIMIT: u64 = 4096;
 /// invalid CIDR or when the block has no free address within
 /// [`NETWORK_IP_PROBE_LIMIT`].
 pub(crate) fn network_asset_ip(cidr: &str, taken: &HashSet<String>) -> Option<IpAddr> {
-    let network = network_address(cidr)?;
-    let prefix: u8 = cidr
-        .split_once('/')
-        .and_then(|(_, prefix)| prefix.trim().parse().ok())?;
-    match network {
+    let (ip, prefix) = cidr_parts(cidr)?;
+    match ip {
         IpAddr::V4(v4) => {
             let mask: u32 = if prefix == 0 {
                 0
@@ -458,6 +467,17 @@ pub(crate) fn network_asset_ip(cidr: &str, taken: &HashSet<String>) -> Option<Ip
                 probe += 1;
             }
         }
+    }
+}
+
+fn cidr_parts(raw: &str) -> Option<(IpAddr, u8)> {
+    let (address, prefix) = raw.split_once('/')?;
+    let ip = address.trim().parse().ok()?;
+    let prefix = prefix.trim().parse().ok()?;
+    match ip {
+        IpAddr::V4(_) if prefix <= 32 => Some((ip, prefix)),
+        IpAddr::V6(_) if prefix <= 128 => Some((ip, prefix)),
+        _ => None,
     }
 }
 

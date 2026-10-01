@@ -26,10 +26,10 @@ use serde::Deserialize;
 
 use crate::domain::{Filesystem, Interface};
 use crate::integrations::cloud::{
-    cloud_asset, network_address, network_asset_ip, parse_ip_cidr, CloudAsset, CloudInventory,
-    CurlClient,
+    cloud_asset, host_header, network_address, network_asset_ip, parse_ip_cidr, CloudAsset,
+    CloudInventory, CurlClient,
 };
-use crate::integrations::netbox::{url_origin, UrlOrigin};
+use crate::integrations::netbox::url_origin;
 use sigv4::sign_get;
 
 /// EC2 API version.
@@ -315,7 +315,7 @@ impl AwsClient {
         }
         for volume in &volumes {
             let volume_id = volume.volume_id.as_deref().unwrap_or("(unknown)");
-            let Some(attachment) = volume.attachments().first() else {
+            let Some(attachment) = volume.attachment_set.items.first() else {
                 inventory
                     .skipped
                     .push(format!("volume {volume_id} is not attached to an instance"));
@@ -400,7 +400,10 @@ impl AwsClient {
                 continue;
             };
             seen.insert(crate::domain::asset_id(address));
-            let hostname = vpc.tag_value("Name").or_else(|| Some(vpc_id.to_string()));
+            let hostname = vpc
+                .tag_set
+                .value("Name")
+                .or_else(|| Some(vpc_id.to_string()));
             let asset = cloud_asset(address, hostname, "vpc", observed_at);
             let mut tags = vec![format!("aws-vpc:{vpc_id}"), format!("aws-cidr:{cidr}")];
             if address != network {
@@ -461,7 +464,8 @@ impl AwsClient {
             };
             seen.insert(crate::domain::asset_id(address));
             let hostname = subnet
-                .tag_value("Name")
+                .tag_set
+                .value("Name")
                 .or_else(|| Some(subnet_id.to_string()));
             let asset = cloud_asset(address, hostname, "subnet", observed_at);
             let mut tags = vec![
@@ -532,20 +536,6 @@ impl AwsClient {
         );
         let url = format!("{endpoint}/?{}", signed.query);
         (url, signed.headers)
-    }
-}
-
-/// The `Host` header for an origin, including a non-default port and
-/// bracketing an IPv6 literal.
-fn host_header(origin: &UrlOrigin) -> String {
-    let default_port = (origin.scheme == "https" && origin.port == 443)
-        || (origin.scheme == "http" && origin.port == 80);
-    if default_port {
-        origin.host.clone()
-    } else if origin.host.contains(':') {
-        format!("[{}]:{}", origin.host, origin.port)
-    } else {
-        format!("{}:{}", origin.host, origin.port)
     }
 }
 
@@ -773,12 +763,6 @@ struct AwsVolume {
     attachment_set: VolumeAttachmentSet,
 }
 
-impl AwsVolume {
-    fn attachments(&self) -> &[VolumeAttachment] {
-        &self.attachment_set.items
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 struct VolumeAttachmentSet {
     #[serde(rename = "item", default)]
@@ -828,12 +812,6 @@ struct AwsVpc {
     tag_set: TagSet,
 }
 
-impl AwsVpc {
-    fn tag_value(&self, key: &str) -> Option<String> {
-        self.tag_set.value(key)
-    }
-}
-
 fn parse_describe_vpcs(xml: &str) -> Result<(Vec<AwsVpc>, Option<String>)> {
     let doc: DescribeVpcsDoc =
         quick_xml::de::from_str(xml).context("parsing AWS DescribeVpcs response")?;
@@ -871,12 +849,6 @@ struct AwsSubnet {
     available_ip_address_count: Option<u64>,
     #[serde(rename = "tagSet", default)]
     tag_set: TagSet,
-}
-
-impl AwsSubnet {
-    fn tag_value(&self, key: &str) -> Option<String> {
-        self.tag_set.value(key)
-    }
 }
 
 fn parse_describe_subnets(xml: &str) -> Result<(Vec<AwsSubnet>, Option<String>)> {
@@ -1063,12 +1035,12 @@ mod tests {
         assert_eq!(token.as_deref(), Some("vol-page-2"));
         assert_eq!(items[0].volume_id.as_deref(), Some("vol-111"));
         assert_eq!(items[0].size_gib, Some(100));
-        assert_eq!(items[0].attachments().len(), 1);
+        assert_eq!(items[0].attachment_set.items.len(), 1);
         assert_eq!(
-            items[0].attachments()[0].device.as_deref(),
+            items[0].attachment_set.items[0].device.as_deref(),
             Some("/dev/xvdf")
         );
-        assert!(items[1].attachments().is_empty());
+        assert!(items[1].attachment_set.items.is_empty());
 
         let vpcs = r#"<DescribeVpcsResponse>
           <vpcSet><item><vpcId>vpc-1</vpcId><cidrBlock>10.10.0.0/16</cidrBlock><isDefault>true</isDefault>
@@ -1078,7 +1050,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(token, None);
         assert!(items[0].is_default);
-        assert_eq!(items[0].tag_value("Name").as_deref(), Some("main"));
+        assert_eq!(items[0].tag_set.value("Name").as_deref(), Some("main"));
 
         let subnets = r#"<DescribeSubnetsResponse>
           <subnetSet><item><subnetId>subnet-1</subnetId><vpcId>vpc-1</vpcId>
