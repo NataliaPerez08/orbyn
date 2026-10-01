@@ -24,7 +24,10 @@ use orbyn::domain::{
 use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
 use orbyn::integrations::ansible::{render_ansible_inventory, render_ansible_yaml, GroupBy};
 use orbyn::integrations::cloud::aws::{AwsClient, AwsCredentials};
+use orbyn::integrations::cloud::azure::{AzureClient, AzureCredentials};
+use orbyn::integrations::cloud::gcp::GcpClient;
 use orbyn::integrations::cloud::huawei::{HuaweiClient, HuaweiCredentials};
+use orbyn::integrations::cloud::openstack::OpenStackClient;
 use orbyn::integrations::cloud::proxmox::ProxmoxClient;
 use orbyn::integrations::cloud::{CloudCounts, CloudInventory};
 use orbyn::integrations::netbox::NetBoxClient;
@@ -342,6 +345,24 @@ enum Command {
         action: HuaweiAction,
     },
 
+    /// Pull instances and networks from OpenStack (read-only).
+    Openstack {
+        #[command(subcommand)]
+        action: OpenstackAction,
+    },
+
+    /// Pull Compute Engine inventory from Google Cloud (read-only).
+    Gcp {
+        #[command(subcommand)]
+        action: GcpAction,
+    },
+
+    /// Pull virtual machine inventory from Azure Resource Manager (read-only).
+    Azure {
+        #[command(subcommand)]
+        action: AzureAction,
+    },
+
     /// Pull historical CPU/RAM utilization from Prometheus into metric
     /// samples (one week by default).
     Prometheus {
@@ -527,6 +548,57 @@ enum HuaweiAction {
         #[arg(long)]
         endpoint_url: Option<String>,
         /// Skip TLS certificate verification (for a self-signed endpoint).
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum OpenstackAction {
+    /// Import an OpenStack project inventory.
+    Import {
+        /// Nova endpoint, e.g. https://cloud.example/v2.1/project-id.
+        #[arg(long)]
+        url: String,
+        /// Scoped Keystone token.
+        #[arg(long, env = "ORBYN_OPENSTACK_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        #[arg(long, env = "OS_PROJECT_ID")]
+        project: Option<String>,
+        #[arg(long, env = "OS_REGION_NAME")]
+        region: Option<String>,
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GcpAction {
+    /// Import Compute Engine instances and disks.
+    Import {
+        #[arg(long, env = "GOOGLE_CLOUD_PROJECT")]
+        project: String,
+        /// OAuth bearer token, from ORBYN_GCP_TOKEN or stdin with `-`.
+        #[arg(long, env = "ORBYN_GCP_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        #[arg(long)]
+        endpoint_url: Option<String>,
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AzureAction {
+    /// Import Azure VMs, disks, NICs and virtual networks.
+    Import {
+        #[arg(long, env = "AZURE_SUBSCRIPTION_ID")]
+        subscription_id: String,
+        /// Azure AD bearer token, from ORBYN_AZURE_TOKEN or stdin with `-`.
+        #[arg(long, env = "ORBYN_AZURE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        #[arg(long)]
+        endpoint_url: Option<String>,
         #[arg(long)]
         no_verify: bool,
     },
@@ -1153,6 +1225,136 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
                 print_cloud_import("Huawei Cloud", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Openstack {
+            action:
+                OpenstackAction::Import {
+                    url,
+                    token,
+                    project,
+                    region,
+                    no_verify,
+                },
+        } => {
+            let token = resolve_secret(token, "--token", "ORBYN_OPENSTACK_TOKEN")?
+                .ok_or_else(|| anyhow!("an OpenStack token is required: pass --token, set ORBYN_OPENSTACK_TOKEN, or use --token -"))?;
+            if no_verify {
+                eprintln!(
+                    "WARNING: --no-verify disables TLS certificate verification for OpenStack."
+                );
+            }
+            if is_plain_http(&url) {
+                eprintln!(
+                    "WARNING: --url uses plain HTTP; the OpenStack token will travel unencrypted."
+                );
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&token);
+            let audit =
+                begin_audit(store.as_ref(), "openstack.import", "cloud", Some(&url)).await?;
+            let result: Result<()> = async {
+                let client = OpenStackClient::new(&url, token, project, region, no_verify)
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("OpenStack", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Gcp {
+            action:
+                GcpAction::Import {
+                    project,
+                    token,
+                    endpoint_url,
+                    no_verify,
+                },
+        } => {
+            let token = resolve_secret(token, "--token", "ORBYN_GCP_TOKEN")?
+                .ok_or_else(|| anyhow!("a GCP bearer token is required: pass --token, set ORBYN_GCP_TOKEN, or use --token -"))?;
+            if no_verify {
+                eprintln!("WARNING: --no-verify disables TLS certificate verification for GCP.");
+            }
+            if endpoint_url.as_deref().is_some_and(is_plain_http) {
+                eprintln!("WARNING: --endpoint-url uses plain HTTP; the GCP token will travel unencrypted.");
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&token);
+            let audit = begin_audit(store.as_ref(), "gcp.import", "cloud", Some(&project)).await?;
+            let result: Result<()> = async {
+                let client = GcpClient::new(token, &project, endpoint_url.as_deref(), no_verify)
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("GCP", &inventory);
+                Ok(())
+            }
+            .await;
+            finish_audit_result(store.as_ref(), audit, result).await?;
+        }
+        Command::Azure {
+            action:
+                AzureAction::Import {
+                    subscription_id,
+                    token,
+                    endpoint_url,
+                    no_verify,
+                },
+        } => {
+            let token = resolve_secret(token, "--token", "ORBYN_AZURE_TOKEN")?
+                .ok_or_else(|| anyhow!("an Azure bearer token is required: pass --token, set ORBYN_AZURE_TOKEN, or use --token -"))?;
+            if no_verify {
+                eprintln!("WARNING: --no-verify disables TLS certificate verification for Azure.");
+            }
+            if endpoint_url.as_deref().is_some_and(is_plain_http) {
+                eprintln!("WARNING: --endpoint-url uses plain HTTP; the Azure token will travel unencrypted.");
+            }
+            let store = open_store(&config).await?;
+            let mut redactor = orbyn::redact::Redactor::from_env();
+            redactor.add_value(&token);
+            let audit = begin_audit(
+                store.as_ref(),
+                "azure.import",
+                "cloud",
+                Some(&subscription_id),
+            )
+            .await?;
+            let result: Result<()> = async {
+                let client = AzureClient::new(
+                    AzureCredentials {
+                        bearer_token: token,
+                    },
+                    &subscription_id,
+                    endpoint_url.as_deref(),
+                    no_verify,
+                )
+                .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                let inventory = client
+                    .fetch_inventory()
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                persist_cloud_inventory(store.as_ref(), &inventory)
+                    .await
+                    .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+                print_cloud_import("Azure", &inventory);
                 Ok(())
             }
             .await;

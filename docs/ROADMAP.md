@@ -310,8 +310,8 @@ Shipped in this phase:
 
 ### Phase 5 — Cloud and platform adapters
 
-**Status:** partially implemented (common adapter contract; Proxmox VE, AWS
-and Huawei Cloud shipped). OpenStack, GCP and Azure are pending.
+**Status:** complete. Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP and Azure
+use the common read-only adapter contract.
 
 **Goal:** bring private infrastructure and public clouds into Orbyn's common
 normalized model.
@@ -358,6 +358,14 @@ Shipped in this phase:
   (`v3/projects`, preferring the project named after the region) when
   `--project-id` is not given. Credentials come from `HUAWEICLOUD_SDK_AK`/
   `HUAWEICLOUD_SDK_SK` (or flags); the signature travels to `curl` on stdin.
+- `orbyn openstack import` reads scoped Nova servers and flavors, with best-effort
+  Cinder volumes, preserving server addresses, ports, metadata and availability
+  zones as normalized assets, interfaces, capacity and filesystems.
+- `orbyn gcp import` reads Compute Engine instances and persistent disks through
+  the aggregated Compute API, including NICs, labels, zones and machine-type
+  capacity.
+- `orbyn azure import` reads ARM virtual machines, NICs, managed disks and
+  virtual networks/subnets, including tags, regions and best-effort VM capacity.
 - All adapters attach provenance tags (`cloud:<provider>`,
   `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset,
   record a provider-named discovery job and an audit event, and never persist a
@@ -394,7 +402,8 @@ vCenter remains deferred until its transport and integration scope are defined.
 
 **Exit criterion:** each adapter imports a representative read-only inventory,
 preserves provider provenance and feeds the same graph, assessment and export
-pipelines as existing discovery sources.
+pipelines as existing discovery sources. Offline parser coverage is included;
+live provider credentials are not required by the test suite.
 
 ### Future assessment capabilities
 

@@ -192,7 +192,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     use std::time::Instant;
 
     #[cfg(unix)]

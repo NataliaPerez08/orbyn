@@ -16,7 +16,10 @@
 //! Huawei Cloud ([`huawei`]).
 
 pub mod aws;
+pub mod azure;
+pub mod gcp;
 pub mod huawei;
+pub mod openstack;
 pub mod proxmox;
 
 use std::collections::HashSet;
@@ -50,7 +53,7 @@ pub const MAX_REQUESTS: usize = 20_000;
 
 /// Environment variables holding secrets that must never leak into a child
 /// `curl` process (a hijacked binary must not be able to read them).
-const SCRUBBED_ENV: [&str; 10] = [
+const SCRUBBED_ENV: [&str; 13] = [
     "ORBYN_SNMP_COMMUNITY",
     "ORBYN_NETBOX_TOKEN",
     "ORBYN_WINRM_PASSWORD",
@@ -61,6 +64,9 @@ const SCRUBBED_ENV: [&str; 10] = [
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
     "HUAWEICLOUD_SDK_SK",
+    "ORBYN_OPENSTACK_TOKEN",
+    "ORBYN_GCP_TOKEN",
+    "ORBYN_AZURE_TOKEN",
 ];
 
 /// Provider provenance attached to a cloud import.

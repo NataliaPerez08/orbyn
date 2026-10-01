@@ -238,6 +238,10 @@ transient failures. Provenance is preserved without a schema change as tags
 (`cloud:<provider>`, `cloud-account:<id>`, `cloud-region:<region>`) plus a
 discovery job named after the provider and an audit event; an adapter skips
 resources it cannot address (e.g. a VM without a reachable IP) and reports them.
+OpenStack uses a scoped Keystone token for Nova and best-effort Cinder reads;
+GCP uses a caller-supplied OAuth bearer token for Compute Engine; Azure uses a
+caller-supplied ARM bearer token for subscription resources. These adapters
+preserve the same tags, jobs, audit events and normalized observations.
 
 Every edge retains its evidence source and confidence; manual confirmation
 raises confidence to 1.0. Guesses look like guesses: unconfirmed edges render

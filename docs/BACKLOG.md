@@ -186,11 +186,11 @@ fixtures plus end-to-end tests.
   flavor CPU/RAM capacity, EVS volumes (as filesystems on their attached
   server), VPC/subnet resources (as assets keyed by their CIDR network
   address) and IAM project provenance. (`orbyn huawei import`.)
-- [ ] **P2** Implement OpenStack adapter: projects, regions, instances, flavors,
+- [x] **P2** Implement OpenStack adapter: projects, regions, instances, flavors,
   networks, ports, volumes and images.
-- [ ] **P2** Implement GCP adapter: projects, regions/zones, Compute Engine,
+- [x] **P2** Implement GCP adapter: projects, regions/zones, Compute Engine,
   disks, networks, subnets and labels.
-- [ ] **P2** Implement Azure adapter: tenants/subscriptions, resource groups,
+- [x] **P2** Implement Azure adapter: tenants/subscriptions, resource groups,
   regions, VMs, managed disks, VNets, subnets and tags.
 - [x] **P2** Add provider provenance to assets and discovery jobs.
   (Provider/account/region tags on assets, a provider-named job; a dedicated

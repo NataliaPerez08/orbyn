@@ -243,6 +243,12 @@ The repository currently provides:
     via the signed ECS/EVS/VPC APIs (AK/SK `SDK-HMAC-SHA256`, no SDK), with
     CPU/RAM capacity from the flavor catalogue and the project id resolved
     from IAM when omitted.
+  * OpenStack importer (`orbyn openstack import`): Nova instances and flavors,
+    ports and attached Cinder volumes.
+  * GCP importer (`orbyn gcp import`): Compute Engine instances, NICs,
+    persistent disks, zones, machine capacity and labels.
+  * Azure importer (`orbyn azure import`): ARM VMs, NICs, managed disks,
+    VNets, subnets, regions, capacity and tags.
   * All attach provider provenance (`cloud:<provider>`,
     `cloud-account:<id>`, `cloud-region:<region>`) to every imported asset
     and record an audit event; credentials are never persisted.
@@ -260,8 +266,8 @@ Current development requirements:
 * Nmap for network discovery
 * net-snmp-utils (`snmpwalk`) for SNMP discovery
 * An OpenSSH client (`ssh`) for host-level collection
-* `curl` for the NetBox, Prometheus, Zabbix, Proxmox VE, AWS and Huawei Cloud
-  importers and the native WinRM transport
+* `curl` for the API importers (including Proxmox VE, AWS, Huawei Cloud,
+  OpenStack, GCP and Azure) and the native WinRM transport
 
 Host-level collection uses key-based authentication (ssh-agent or
 `--identity-file`); passwords are never passed through the CLI or stored.
@@ -488,7 +494,7 @@ clean for piping.
 | `ORBYN_SNMP_BIN` | `snmpwalk`   | `snmpwalk` binary path (net-snmp-utils) |
 | `ORBYN_SNMP_COMMUNITY` | `public`  | SNMP v1/v2c community string (or `--community`, `--community -` for stdin) |
 | `ORBYN_SSH_BIN` | `ssh`           | `ssh` binary path (OpenSSH client) |
-| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path (NetBox/Prometheus/Zabbix/Proxmox/AWS/Huawei clients, WinRM transport) |
+| `ORBYN_CURL_BIN` | `curl`        | `curl` binary path for API clients and WinRM transport |
 | `ORBYN_NETBOX_TOKEN` | _(unset)_  | NetBox API token (or `--token`, `--token -` for stdin) |
 | `ORBYN_PROMETHEUS_TOKEN` | _(unset)_ | Prometheus bearer token (or `--token`, `--token -` for stdin) |
 | `ORBYN_ZABBIX_TOKEN` | _(unset)_ | Zabbix API token (or `--token`, `--token -` for stdin) |
@@ -502,6 +508,12 @@ clean for piping.
 | `HUAWEICLOUD_SDK_SK` | _(unset)_ | Huawei Cloud secret key (SK) (or `--secret-key`, `--secret-key -` for stdin) |
 | `HUAWEICLOUD_REGION` | _(unset)_ | Huawei Cloud region (or `--region`) |
 | `HUAWEICLOUD_PROJECT_ID` | _(unset)_ | Huawei Cloud project id (or `--project-id`; resolved from IAM when omitted) |
+| `ORBYN_OPENSTACK_TOKEN` | _(unset)_ | Scoped OpenStack token (or `--token`, `--token -` for stdin) |
+| `OS_PROJECT_ID` / `OS_REGION_NAME` | _(unset)_ | OpenStack project and region scope |
+| `ORBYN_GCP_TOKEN` | _(unset)_ | GCP OAuth bearer token (or `--token`, `--token -` for stdin) |
+| `GOOGLE_CLOUD_PROJECT` | _(unset)_ | GCP project id (or `--project`) |
+| `ORBYN_AZURE_TOKEN` | _(unset)_ | Azure ARM bearer token (or `--token`, `--token -` for stdin) |
+| `AZURE_SUBSCRIPTION_ID` | _(unset)_ | Azure subscription id (or `--subscription-id`) |
 | `ORBYN_WINRM_PASSWORD` | _(unset)_ | WinRM Basic-auth password (or `--winrm-password`, `--winrm-password -` for stdin) |
 
 Secrets can also be piped in so they never appear in argv or the
@@ -537,7 +549,7 @@ orbyn/
 │   ├── domain/                  # normalized domain model
 │   ├── graph/                   # dependency graph
 │   ├── integrations/            # NetBox/monitoring importers, cloud adapters, exporters
-│   │   └── cloud/               # Proxmox VE + AWS + Huawei Cloud read-only adapters
+│   │   └── cloud/               # read-only Proxmox/AWS/Huawei/OpenStack/GCP/Azure adapters
 │   ├── metrics/                 # capacity/utilization processing
 │   ├── output/                  # table/json/csv rendering
 │   └── store/                   # Store trait + SQLite and PostgreSQL backends

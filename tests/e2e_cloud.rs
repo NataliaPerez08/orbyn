@@ -219,6 +219,120 @@ fn proxmox_token_from_stdin_reaches_curl() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn openstack_import_uses_normalized_cloud_pipeline() {
+    let dir = TempDir::new("openstack");
+    let curl = fake_bin(
+        &dir,
+        "curl",
+        r##"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */flavors/detail*) printf '{"flavors":[{"id":"small","vcpus":2,"ram":2048}]}' ;;
+  */servers/detail*) printf '{"servers":[{"id":"srv-1","name":"web","status":"ACTIVE","addresses":{"net":[{"addr":"10.20.0.5","OS-EXT-IPS:type":"fixed","OS-EXT-IPS-MAC:mac_addr":"aa:bb:cc:dd:ee:ff"}]},"flavor":{"id":"small"}}]}' ;;
+  */volumes/detail*) printf '{"volumes":[{"id":"vol-1","size":10,"attachments":[{"server_id":"srv-1","device":"/dev/vdb"}]}]}' ;;
+  *) printf '{"value":[]}' ;;
+esac
+printf '200'
+"##,
+    );
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args([
+                "openstack",
+                "import",
+                "--url",
+                "http://cloud.test/v2.1/project",
+            ])
+            .args(["--token", "test-token", "--project", "project-1"])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(
+        out.contains("Imported 1 assets, 1 interfaces, 1 capacity rows, 1 filesystems"),
+        "{out}"
+    );
+    assert!(!out.contains("test-token"), "token must be redacted: {out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn gcp_import_uses_compute_inventory() {
+    let dir = TempDir::new("gcp");
+    let curl = fake_bin(
+        &dir,
+        "curl",
+        r##"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */aggregated/instances*) printf '{"items":{"zones/eu":{"instances":[{"name":"web","selfLink":"instance/web","zone":"zones/eu","machineType":"machineTypes/e2","networkInterfaces":[{"name":"nic0","networkIP":"10.30.0.5","macAddress":"aa:bb:cc:dd:ee:01"}],"labels":{"env":"test"}}]}}}' ;;
+  */aggregated/disks*) printf '{"items":{"zones/eu":{"disks":[{"name":"boot","selfLink":"disk/boot","sizeGb":10,"users":["instance/web"]}]}}}' ;;
+  */machineTypes/*) printf '{"guestCpus":2,"memoryMb":4096}' ;;
+  *) printf '{}' ;;
+esac
+printf '200'
+"##,
+    );
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args([
+                "gcp",
+                "import",
+                "--project",
+                "project-1",
+                "--endpoint-url",
+                "http://gcp.test/compute/v1",
+            ])
+            .args(["--token", "test-token"])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(
+        out.contains("Imported 1 assets, 1 interfaces, 1 capacity rows, 1 filesystems"),
+        "{out}"
+    );
+    assert!(!out.contains("test-token"), "token must be redacted: {out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn azure_import_uses_arm_inventory() {
+    let dir = TempDir::new("azure");
+    let curl = fake_bin(
+        &dir,
+        "curl",
+        r##"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */virtualMachines?*) printf '{"value":[{"id":"/vm/web","name":"web","location":"east","tags":{"env":"test"},"properties":{"hardwareProfile":{"vmSize":"small"},"storageProfile":{"osDisk":{"osType":"Linux"}},"networkProfile":{"networkInterfaces":[{"id":"/nic/web"}]}}}]}' ;;
+  */networkInterfaces?*) printf '{"value":[{"id":"/nic/web","name":"eth0","properties":{"macAddress":"AA-BB-CC-DD-EE-02","ipConfigurations":[{"name":"ipconfig1","privateIPAddress":"10.40.0.5"}]}}]}' ;;
+  */disks?*) printf '{"value":[{"id":"/disk/web","managedBy":"/vm/web","properties":{"diskSizeGB":20,"osType":"Linux"},"sku":{"name":"Premium_LRS"}}]}' ;;
+  */virtualNetworks?*) printf '{"value":[{"id":"/vnet/main","name":"main","properties":{"addressSpace":{"addressPrefixes":["10.40.0.0/24"]},"subnets":[{"name":"app","properties":{"addressPrefix":"10.40.0.0/25"}}]}}]}' ;;
+  */vmSizes?*) printf '{"value":[{"name":"small","numberOfCores":2,"memoryInMB":4096}]}' ;;
+  *) printf '{"value":[]}' ;;
+esac
+printf '200'
+"##,
+    );
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args([
+                "azure",
+                "import",
+                "--subscription-id",
+                "sub-1",
+                "--endpoint-url",
+                "http://arm.test",
+            ])
+            .args(["--token", "test-token"])
+            .env("ORBYN_CURL_BIN", &curl),
+    );
+    assert!(
+        out.contains("Imported 3 assets, 1 interfaces, 1 capacity rows, 1 filesystems"),
+        "{out}"
+    );
+    assert!(!out.contains("test-token"), "token must be redacted: {out}");
+}
+
 /// A fake `curl` serving the AWS EC2 and STS query APIs. The requests are
 /// signed by the adapter; this fake ignores the signature but logs stdin so a
 /// test can assert the credential reached curl on stdin.
