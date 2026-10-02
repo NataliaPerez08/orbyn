@@ -168,11 +168,17 @@ where
 }
 
 /// Split curl stdout into `(body, status)` using the 3-digit `-w` trailer.
+///
+/// The split point is byte-based but must fall on a UTF-8 char boundary. Curl
+/// output arrives as a lossy-decoded [`String`], so a response whose tail is
+/// not ASCII (multi-byte replacement chars) would otherwise make `split_at`
+/// panic. A status that is not exactly 3 ASCII digits is not a trailer at all,
+/// so `None` is the correct answer — never a crash.
 pub fn split_http_status(out: &str) -> Option<(&str, u16)> {
     if out.len() < 3 {
         return None;
     }
-    let (body, status) = out.split_at(out.len() - 3);
+    let (body, status) = (out.get(..out.len() - 3)?, out.get(out.len() - 3..)?);
     if !status.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -219,6 +225,19 @@ mod tests {
         assert_eq!(split_http_status(""), None);
         assert_eq!(split_http_status("20"), None);
         assert_eq!(split_http_status("body2x0"), None);
+    }
+
+    #[test]
+    fn split_http_status_survives_a_lossy_multibyte_tail() {
+        // Fuzz-found crash (parsing target): the byte split fell inside a
+        // multi-byte U+FFFD replacement char and panicked in `split_at`.
+        let out = String::from_utf8_lossy(&[
+            35, 122, 35, 111, 115, 10, 76, 105, 110, 117, 120, 10, 48, 46, 49, 58, 52, 52, 205,
+            245, 221, 10,
+        ]);
+        assert_eq!(split_http_status(&out), None);
+        assert_eq!(split_http_status("ab\u{fffd}"), None);
+        assert_eq!(split_http_status("\u{fffd}00"), None);
     }
 
     #[test]

@@ -210,6 +210,24 @@ procedure for every integration.
 
 ---
 
+## Cycle 9 — Fuzz execution (Phase 7 extension)
+
+### Status — **done**
+- Installed nightly + `cargo-fuzz` and ran all 7 targets (`import`, `parsing`,
+  `sanitize`, `netbox_origin`, `device_output`, `structural`, `nmap_xml`) for
+  3,000 runs each on the libFuzzer build.
+- **Found and fixed a real crash**: `split_http_status` called `split_at(len - 3)`
+  on a lossy-decoded `&str`; a curl response whose tail was multi-byte
+  (replacement chars) panicked on a non-char-boundary split. Fixed with
+  non-panicking `get` ranges (`src/http.rs`), with the fuzz input committed to
+  the corpus and a unit regression test added.
+- All other targets and all subsequent runs are clean.
+
+**Acceptance:** fuzz harness runs in CI-adjacent fashion (locally); any crash is
+reproduced, fixed at the shared root cause, and pinned with a regression test.
+
+---
+
 ## Explicitly deferred
 
 Phases 9 (cloud SKU matching) and 10 (migration waves) are non-goals until
