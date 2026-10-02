@@ -12,6 +12,7 @@
 //! context — and should set `.kill_on_drop(true)` so an aborted Orbyn run
 //! does not leave the child running.
 
+use std::io::ErrorKind;
 use std::process::ExitStatus;
 use std::time::Duration;
 
@@ -99,9 +100,15 @@ pub async fn run_captured(
         let write_stdin = async {
             match (stdin_payload, stdin.as_mut()) {
                 (Some(payload), Some(pipe)) => {
-                    pipe.write_all(payload.as_bytes())
-                        .await
-                        .map_err(|e| anyhow!("writing to child stdin: {e}"))?;
+                    if let Err(e) = pipe.write_all(payload.as_bytes()).await {
+                        // Child closed stdin without reading (fake curl, or a
+                        // tool that never consumed `-H @-`). Not a failure.
+                        if e.kind() != ErrorKind::BrokenPipe
+                            && e.kind() != ErrorKind::ConnectionReset
+                        {
+                            return Err(anyhow!("writing to child stdin: {e}"));
+                        }
+                    }
                     let _ = pipe.shutdown().await;
                     // `shutdown` flushes but does not close a tokio child
                     // stdin pipe; drop the handle so the child sees EOF.
@@ -334,6 +341,30 @@ echo marker"#,
             "hello stdin\n",
             "payload must reach the child exactly once"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdin_write_survives_child_that_ignores_stdin() {
+        let dir = temp_dir("stdin-epipe");
+        let path = script(&dir, "ignore.sh", "echo ok; exit 0");
+        // Larger than a typical 64 KiB pipe buffer so write_all hits EPIPE
+        // after the child exits without reading.
+        let payload = "x".repeat(256 * 1024);
+
+        let captured = run_captured(
+            spawn(&path, std::process::Stdio::piped()),
+            Some(&payload),
+            MAX_STDOUT_CAPTURE_BYTES,
+            MAX_STDERR_CAPTURE_BYTES,
+            Duration::from_secs(15),
+            "child timed out".to_string(),
+        )
+        .await
+        .expect("EPIPE on unused stdin is not a failure");
+        assert!(captured.status.success());
+        assert_eq!(captured.stdout.trim(), "ok");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
