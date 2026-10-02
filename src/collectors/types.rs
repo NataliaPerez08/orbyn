@@ -247,6 +247,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zone_ids_and_leading_zero_ips() {
+        assert!(
+            validate_target("fe80::1%eth0").is_err(),
+            "zone ids are rejected"
+        );
+        assert!(
+            validate_target("010.0.0.1").is_err(),
+            "leading-zero IPv4 is rejected"
+        );
+    }
+
+    #[test]
     fn valid_targets_round_trip_ip_addr_type() {
         match validate_target("10.0.0.1").unwrap() {
             ScanTarget::Ip(IpAddr::V4(_)) => {}

@@ -2,6 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use orbyn::collectors::validate_target;
+use orbyn::http::split_http_status;
 use orbyn::parsing::{normalize_ip, parse_addr_port, split_csv_line, split_sections};
 
 fuzz_target!(|data: &[u8]| {
@@ -11,4 +12,5 @@ fuzz_target!(|data: &[u8]| {
     let _ = normalize_ip(&input);
     let _ = parse_addr_port(&input);
     let _ = validate_target(&input);
+    let _ = split_http_status(&input);
 });

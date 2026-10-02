@@ -26,6 +26,9 @@ fuzz-smoke:
 	cargo +nightly fuzz run nmap_xml -- -runs=1000 -max_len=16384
 	cargo +nightly fuzz run parsing -- -runs=1000 -max_len=4096
 	cargo +nightly fuzz run sanitize -- -runs=1000 -max_len=4096
+	cargo +nightly fuzz run netbox_origin -- -runs=1000 -max_len=4096
+	cargo +nightly fuzz run device_output -- -runs=1000 -max_len=8192
+	cargo +nightly fuzz run structural -- -runs=1000 -max_len=4096
 
 run:
 	cargo run -- --help

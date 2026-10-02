@@ -357,6 +357,17 @@ mod tests {
     }
 
     #[test]
+    fn nan_and_infinite_samples_are_invalid() {
+        let mut nan = sample(f32::NAN, 1024);
+        let stats =
+            summarize(&[nan.clone(), sample(10.0, 1024), sample(20.0, 1024)]).expect("window");
+        assert_eq!(stats.cpu_avg_percent, Some(15.0));
+        nan.cpu_usage_percent = Some(f32::INFINITY);
+        let stats = summarize(&[nan, sample(10.0, 1024), sample(20.0, 1024)]).expect("window");
+        assert_eq!(stats.cpu_avg_percent, Some(15.0));
+    }
+
+    #[test]
     fn confidence_tiers() {
         assert_eq!(confidence_for(4, 10), SampleConfidence::Low);
         assert_eq!(confidence_for(5, 10), SampleConfidence::Medium);

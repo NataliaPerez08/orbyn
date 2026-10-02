@@ -45,10 +45,10 @@ const NETBOX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Hosts are lowercased reg-names or canonical IPv6 literals and ports are
 /// normalized to the scheme default, so origins compare with `==`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UrlOrigin {
-    pub(crate) scheme: String,
-    pub(crate) host: String,
-    pub(crate) port: u16,
+pub struct UrlOrigin {
+    pub scheme: String,
+    pub host: String,
+    pub port: u16,
 }
 
 /// Parse the origin of an absolute http(s) URL under a strict grammar.
@@ -62,7 +62,7 @@ pub(crate) struct UrlOrigin {
 /// Pagination `next` URLs come from the server; a prefix check is not enough
 /// (`https://netbox.example.com.evil/` and `https://netbox.example.com@evil/`
 /// both pass one), so callers must compare parsed origins instead.
-pub(crate) fn url_origin(url: &str) -> Option<UrlOrigin> {
+pub fn url_origin(url: &str) -> Option<UrlOrigin> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {

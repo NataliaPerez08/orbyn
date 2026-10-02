@@ -94,7 +94,7 @@ pub fn assets(assets: &[Asset], format: Format) -> String {
                     Cell::new(a.last_seen.format("%Y-%m-%d %H:%M:%S").to_string()),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -132,7 +132,7 @@ pub fn services(services: &[Service], format: Format) -> String {
                     Cell::new(s.banner.clone().unwrap_or_else(|| "-".into())),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -183,7 +183,7 @@ pub fn interfaces(ifaces: &[Interface], format: Format) -> String {
                     }),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -511,7 +511,7 @@ pub fn filesystems(filesystems: &[Filesystem], format: Format) -> String {
                     ),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -545,7 +545,7 @@ pub fn running_services(services: &[RunningService], format: Format) -> String {
                     Cell::new(s.description.clone().unwrap_or_else(|| "-".into())),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -637,7 +637,7 @@ pub fn jobs(jobs: &[DiscoveryJob], format: Format) -> String {
                     ),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -686,7 +686,7 @@ pub fn audit_events(events: &[AuditEvent], format: Format) -> String {
                     Cell::new(event.error.clone().unwrap_or_else(|| "-".into())),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -772,7 +772,7 @@ pub fn asset_detail(
             out.push_str(&services(svcs, Format::Table));
             out.push('\n');
             out.push_str(&running_services(running, Format::Table));
-            out
+            terminal_safe(&out)
         }
     }
 }
@@ -829,7 +829,7 @@ pub fn dependencies(edges: &[Dependency], assets: &[Asset], format: Format) -> S
                     Cell::new(if d.confirmed { "yes" } else { "no" }),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -904,7 +904,7 @@ pub fn connections(conns: &[Connection], format: Format) -> String {
                     Cell::new(c.process.clone().unwrap_or_else(|| "-".into())),
                 ]);
             }
-            table.to_string()
+            render_table(table)
         }
     }
 }
@@ -1027,7 +1027,7 @@ pub fn report(report: &AssessmentReport, format: Format) -> String {
                         Cell::new(&f.message),
                     ]);
                 }
-                out.push_str(&t.to_string());
+                out.push_str(&render_table(t));
             }
 
             out.push_str("\nAsset complexity:\n");
@@ -1039,7 +1039,7 @@ pub fn report(report: &AssessmentReport, format: Format) -> String {
                     Cell::new(s.findings),
                 ]);
             }
-            out.push_str(&t.to_string());
+            out.push_str(&render_table(t));
 
             out.push_str("\nApplication groups:\n");
             if report.application_groups.is_empty() {
@@ -1053,7 +1053,7 @@ pub fn report(report: &AssessmentReport, format: Format) -> String {
                         Cell::new(g.edge_count),
                     ]);
                 }
-                out.push_str(&t.to_string());
+                out.push_str(&render_table(t));
             }
             out
         }
@@ -1067,7 +1067,7 @@ pub fn rules_catalog(rules: &[Rule], version: &str) -> String {
     for rule in rules {
         t.add_row(vec![Cell::new(rule.id), Cell::new(rule.description)]);
     }
-    out.push_str(&t.to_string());
+    out.push_str(&render_table(t));
     out
 }
 
@@ -1192,7 +1192,9 @@ fn human_kb(kb: u64) -> String {
 /// (SNMP `sysName`, PTR hostnames, imported tags) reach the export, and a
 /// hostile `=HYPERLINK(...)` or DDE payload must never execute.
 fn csv(field: &str) -> String {
-    let field = if field.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+    let field = if field.starts_with([
+        '=', '+', '-', '@', '\t', '\r', '\u{ff1d}', '\u{ff0b}', '\u{ff0d}',
+    ]) {
         format!("'{field}")
     } else {
         field.to_string()
@@ -1211,6 +1213,23 @@ fn table(header: &[&str]) -> Table {
         .load_preset(comfy_table::presets::UTF8_FULL)
         .set_header(header);
     table
+}
+
+/// Strip terminal control sequences (audit OY-26 family): device-controlled
+/// strings such as SNMP `sysName` or imported hostnames can carry ESC/OSC
+/// sequences (`\x1b]52;c;...` clipboard exfil, `\x1b[2J` clear screen) that
+/// would otherwise reach the operator's terminal through table output. C0/C1
+/// controls and DEL are dropped; `\n`/`\r`/`\t` are kept because they carry
+/// table layout, not terminal escapes.
+fn terminal_safe(s: &str) -> String {
+    s.chars()
+        .filter(|&c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+        .collect()
+}
+
+/// Render a comfy-table, scrubbing terminal escapes from every cell.
+fn render_table(table: Table) -> String {
+    terminal_safe(&table.to_string())
 }
 
 fn severity_str(severity: Severity) -> &'static str {
@@ -1474,6 +1493,36 @@ mod tests {
         assert_eq!(csv("10.0.0.5"), "10.0.0.5");
         assert_eq!(csv("\revil"), "'\revil");
         assert_eq!(csv("|cmd"), "|cmd", "pipe alone is not a formula prefix");
+        // Fullwidth look-alikes (some spreadsheet locales treat U+FF1D etc.
+        // as formula starters) are neutralized like the ASCII forms.
+        assert_eq!(csv("＝evil"), "'＝evil");
+        assert_eq!(csv("＋evil"), "'＋evil");
+        assert_eq!(csv("－evil"), "'－evil");
+    }
+
+    #[test]
+    fn tables_strip_terminal_escapes_from_device_strings() {
+        let hostile = asset("a", "10.0.0.1", Some("\x1b]52;c,evil\x07web-01"));
+        let out = assets(std::slice::from_ref(&hostile), Format::Table);
+        assert!(
+            !out.contains('\x1b'),
+            "ESC must not reach the terminal: {out}"
+        );
+        assert!(out.contains("web-01"), "visible text is kept: {out}");
+        // JSON keeps the raw bytes: sanitization is a render-boundary concern.
+        let json = assets(&[hostile], Format::Json);
+        assert!(json.contains("\\u001b"), "raw ESC stays in JSON: {json}");
+    }
+
+    #[test]
+    fn tags_with_commas_are_quoted_but_not_round_trippable() {
+        // ponytail: tags serialize joined by ',' so a tag containing a comma
+        // re-imports as two tags. The CSV cell is quoted (safe), but per-tag
+        // quoting is an export-format change deferred until a caller needs it.
+        let mut a = asset("a", "10.0.0.1", None);
+        a.tags = vec!["a,b".into()];
+        let out = assets(&[a], Format::Csv);
+        assert!(out.contains(",\"a,b\","), "comma in tag is quoted: {out}");
     }
 
     #[test]

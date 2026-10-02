@@ -131,19 +131,28 @@ fn host_name(asset: &Asset) -> String {
 }
 
 /// INI `key=value` host variables derived from the normalized asset.
+///
+/// Values are run through [`sanitize_name`] so a hostile environment, owner
+/// or tag cannot inject extra INI lines or sections (newline / `#` payloads).
 fn host_vars(asset: &Asset) -> String {
     let mut vars = vec![format!("ansible_host={}", asset.ip)];
     if let Some(env) = &asset.environment {
-        vars.push(format!("orbyn_environment={env}"));
+        vars.push(format!("orbyn_environment={}", sanitize_name(env)));
     }
     if let Some(owner) = &asset.owner {
-        vars.push(format!("orbyn_owner={owner}"));
+        vars.push(format!("orbyn_owner={}", sanitize_name(owner)));
     }
     if let Some(criticality) = asset.criticality {
         vars.push(format!("orbyn_criticality={criticality}"));
     }
     if !asset.tags.is_empty() {
-        vars.push(format!("orbyn_tags={}", asset.tags.join(",")));
+        let tags = asset
+            .tags
+            .iter()
+            .map(|t| sanitize_name(t))
+            .collect::<Vec<_>>()
+            .join(",");
+        vars.push(format!("orbyn_tags={tags}"));
     }
     vars.join(" ")
 }
@@ -307,6 +316,31 @@ mod tests {
         assert!(out.contains("orbyn_environment=prod"));
         assert!(out.contains("orbyn_criticality=high"));
         assert!(out.contains("orbyn_tags=core,api"));
+    }
+
+    #[test]
+    fn host_vars_sanitize_injection_payloads() {
+        let mut a = asset(
+            "a",
+            "10.0.0.1",
+            Some("web-01"),
+            None,
+            None,
+            &["core", "a b"],
+        );
+        a.environment = Some("prod\n[evil]\npayload".into());
+        a.owner = Some("x;y".into());
+        let out = render_ansible_inventory(&[a], GroupBy::DeviceClass);
+        assert!(
+            !out.contains("prod\n[evil]"),
+            "INI section injection: {out}"
+        );
+        assert!(
+            out.contains("orbyn_environment=prod--evil--payload"),
+            "{out}"
+        );
+        assert!(out.contains("orbyn_owner=x-y"), "{out}");
+        assert!(out.contains("orbyn_tags=core,a-b"), "{out}");
     }
 
     #[test]

@@ -685,6 +685,13 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_json_keys_are_rejected() {
+        let error = serde_json::from_str::<ImportedAsset>(r#"{"ip":"10.0.0.1","ip":"10.0.0.2"}"#)
+            .expect_err("duplicate fields are refused");
+        assert!(error.to_string().contains("duplicate field"), "{error}");
+    }
+
+    #[test]
     fn mixed_newlines_parse() {
         let csv = "10.0.0.1,web-01,server,prod,x,high,\r\n10.0.0.2,db-01,server,prod,x,high,\n";
         let inv = parse_import_csv(csv).expect("parse");

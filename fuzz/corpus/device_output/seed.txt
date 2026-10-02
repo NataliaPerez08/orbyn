@@ -1,0 +1,10 @@
+###os
+NAME="Ubuntu 22.04 LTS"
+###cpu
+cpu cores 4
+###mem
+MemTotal: 8000000 kB
+###conn
+tcp 10.0.0.1:22 ESTABLISHED sshd
+sysDescr: Linux host 5.15.0
+ifIndex: 1

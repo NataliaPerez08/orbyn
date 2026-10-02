@@ -454,6 +454,19 @@ mod tests {
     }
 
     #[test]
+    fn cname_cycles_are_bounded() {
+        let mut out = String::new();
+        for _ in 0..100 {
+            out.push_str("b.example.com.\na.example.com.\n");
+        }
+        let resolution = parse_dig_short(&out);
+        assert!(
+            resolution.cname_chain.len() <= MAX_CNAME_CHAIN,
+            "a hostile cycle must not grow the chain past the cap"
+        );
+    }
+
+    #[test]
     fn parse_ptr_names_strips_dots_and_dedups() {
         let out = "web-01.example.com.\nWEB-01.EXAMPLE.COM.\nother.example.com.\n\n";
         assert_eq!(

@@ -1,0 +1,4 @@
+https://netbox.example.com/api/dcim/devices/
+https://netbox.example.com@evil/api/dcim/devices/
+http://[2001:db8::1]:8080/api
+user:pass@netbox.example.com/api
