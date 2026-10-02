@@ -131,6 +131,18 @@ orbyn huawei import --region cn-north-4 --access-key <ak> --secret-key - \
     --project-id <id> --no-verify < sk.txt
 ```
 
+Get the imported assets back out:
+
+```bash
+orbyn assets --format csv            # all ECS instances, volumes and VPC/subnets
+orbyn assets --format json           # full records, including provenance tags
+orbyn asset 10.0.1.4                 # one ECS instance: capacity, disks, tags
+orbyn capacity 10.0.1.4              # CPU/RAM from the flavor catalogue
+```
+
+Every imported row carries `cloud:huawei` (plus `cloud-region:...` and
+`cloud-account:...`) in its tags, so the origin is attributable per asset.
+
 | Flag / env | Default | Purpose |
 | --- | --- | --- |
 | `--region` / `HUAWEICLOUD_REGION` | *(required unless env set)* | e.g. `cn-north-4` |
