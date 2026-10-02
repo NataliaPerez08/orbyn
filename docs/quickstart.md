@@ -176,5 +176,5 @@ orbyn assess --rules            # the rule catalog and its version
 | ssh collector hangs/times out | check the port (`--port`), firewall, and that the host is authorized |
 | no activity on a command      | `-vv` for verbose logs; stdout is clean, logs go to stderr        |
 
-Full reference and configuration (env vars, collectors, formats) live in
-[README.md](../README.md).
+Full reference and configuration (env vars, collectors, formats) live in the
+[CLI reference](cli.md) and [Configuration](configuration.md) pages.

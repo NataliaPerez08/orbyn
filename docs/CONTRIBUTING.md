@@ -75,4 +75,6 @@ Use the issue tracker. Security issues should follow the process in
 ## License
 
 By contributing you agree that your contributions are licensed under the Apache
-License 2.0 (see [LICENSE](LICENSE)).
+License 2.0 (see [LICENSE][license]).
+
+[license]: https://github.com/NataliaPerez08/orbyn/blob/main/LICENSE

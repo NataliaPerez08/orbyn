@@ -297,6 +297,23 @@ cp .env.example .env
 cargo run -- --help
 ```
 
+## Documentation
+
+The full documentation site (install, CLI reference, one section per
+collector, importers, configuration, security and third-party notices) is
+built with [MkDocs](https://www.mkdocs.org/) + Material:
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve        # http://127.0.0.1:8000
+mkdocs build --strict   # outputs to site/
+```
+
+The Markdown sources live in [`docs/`](docs); the site configuration is
+[`mkdocs.yml`](mkdocs.yml). Every push to `main` rebuilds the site and
+deploys it to GitHub Pages (`.github/workflows/docs.yml`; repository
+**Settings → Pages → Source: GitHub Actions**).
+
 ## Shell completions
 
 Generate a script for your shell and source it (bash / zsh / fish):

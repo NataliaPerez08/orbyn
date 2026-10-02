@@ -87,7 +87,7 @@ public reports.
 ## Threat model
 
 A STRIDE-based threat model is maintained in
-[`THREAT_MODEL.md`](THREAT_MODEL.md). The highest-risk component is the
+[`THREAT_MODEL.md`][threat-model]. The highest-risk component is the
 **collector boundary**: it interacts with user-provided targets, external
 binaries, remote hosts and credentials. Code review of collectors, subprocess
 argument handling (argument vectors, never shell strings) and log redaction are
@@ -97,6 +97,9 @@ checklist there.
 
 A full source audit (27 findings, OY-01..OY-27, with executed proofs of
 concept where applicable) is recorded in
-[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md): 16 findings are fixed and the
+[`SECURITY_AUDIT.md`][security-audit]: 16 findings are fixed and the
 remaining ones are documented as accepted residuals in the threat model
 (R-8..R-12).
+
+[threat-model]: https://github.com/NataliaPerez08/orbyn/blob/main/docs/THREAT_MODEL.md
+[security-audit]: https://github.com/NataliaPerez08/orbyn/blob/main/docs/SECURITY_AUDIT.md

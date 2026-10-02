@@ -195,4 +195,4 @@ cargo test --all-targets
 ```
 
 [GitHub releases]: https://github.com/NataliaPerez08/orbyn/releases
-[README configuration section]: ../README.md#configuration
+[README configuration section]: configuration.md

@@ -1,0 +1,99 @@
+site_name: Orbyn
+site_description: Open-source infrastructure discovery, dependency mapping, and migration assessment — from the command line.
+site_url: https://nataliaperez08.github.io/orbyn/
+repo_url: https://github.com/NataliaPerez08/orbyn
+repo_name: NataliaPerez08/orbyn
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+exclude_docs: |
+  BACKLOG.md
+  PLAN_ISSUES.md
+  PRE_RELEASE_PLAN.md
+  SECURITY_AUDIT.md
+  SECURITY_SUMMARY.md
+  THREAT_MODEL.md
+  RELEASE_NOTES_*.md
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - tables
+  - attr_list
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: INSTALL.md
+      - Quickstart: quickstart.md
+  - CLI reference: cli.md
+  - Collectors:
+      - Overview: collectors/index.md
+      - Nmap: collectors/nmap.md
+      - SNMP: collectors/snmp.md
+      - SSH (Linux): collectors/ssh.md
+      - Windows over SSH: collectors/windows.md
+      - WinRM: collectors/winrm.md
+      - DNS evidence: collectors/dns.md
+      - Framework internals: collectors/framework.md
+  - Importers & integrations:
+      - Overview: importers/index.md
+      - Cloud platforms: importers/cloud.md
+      - Observability: importers/observability.md
+      - Source of truth & export: importers/inventory.md
+  - Reference:
+      - Configuration: configuration.md
+      - Security: security.md
+      - Security policy: SECURITY.md
+      - Architecture: ARCHITECTURE.md
+      - Known issues: KnowIssues.md
+      - Plugins: PLUGINS.md
+      - Roadmap: ROADMAP.md
+      - Contributing: CONTRIBUTING.md
+  - Third-party notices: third-party.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/NataliaPerez08/orbyn
+
+copyright: >
+  Copyright © 2026 Orbyn contributors.
+  Orbyn is licensed under the Apache License 2.0.
+  This site documents Orbyn and is not affiliated with any third-party
+  product, service, or trademark it references.
