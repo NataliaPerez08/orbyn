@@ -138,11 +138,20 @@ sizing decision.
 
 ## Cycle 5 — Performance baselines (Phase 6)
 
-- Run the golden datasets at 100/1k/10k (plus 50k edges / 100k samples where
-  feasible) and record wall clock, peak RSS, DB size, SQL count in
-  `docs/PERFORMANCE.md`.
-- Keep `tests/e2e_scale.rs` budgets; a >25% regression on the same reference
-  dataset is investigated.
+### Status — **done**
+- `examples/bench_inventory.rs` generates the deterministic reference inventory
+  (byte-identical to the scale tests' generator).
+- `scripts/bench.sh` (+ `make bench`) measures import/assess/export/graph
+  wall-clock and peak RSS via GNU `time` at 100 / 1k / 10k assets on the
+  release binary and rewrites `docs/PERFORMANCE.md`, including DB size after
+  import.
+- Baseline numbers recorded (order-of-magnitude expectations). The scale suite
+  (`tests/e2e_scale.rs`) remains the regression gate (wall-clock budgets); a
+  >25% change on an identical reference dataset warrants investigation.
+- 50k edges / 100k metric samples deferred (the suite already covers metric
+  aggregation at 1.5k assets with a week of history).
+
+**Acceptance:** documented, reproducible baselines; regression policy stated.
 
 ---
 

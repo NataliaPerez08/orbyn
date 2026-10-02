@@ -1,4 +1,4 @@
-.PHONY: build check test lint fmt fmt-check audit fuzz-smoke run clean
+.PHONY: build check test lint fmt fmt-check audit fuzz-smoke bench run clean
 
 build:
 	cargo build
@@ -20,6 +20,9 @@ fmt-check:
 
 audit:
 	cargo audit
+
+bench:
+	scripts/bench.sh
 
 fuzz-smoke:
 	cargo +nightly fuzz run import -- -runs=1000 -max_len=4096
