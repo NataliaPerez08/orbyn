@@ -4,7 +4,7 @@
 
 Orbyn helps teams discover infrastructure, build an accurate asset inventory, understand how systems depend on each other, and generate the data needed to plan migrations and right-size target environments. Everything is a local, single-binary CLI tool.
 
-> **Status:** v1.0 stable release — CLI focus; v1.1 integrations included.
+> **Status:** v1.0.3 stable release — discovery, inventory, assessment, integrations, metrics/right-sizing and cloud adapters.
 
 ## Why Orbyn?
 
@@ -177,7 +177,7 @@ The repository currently provides:
   * `orbyn metrics <id-or-ip>` summarizes a utilization window with
     avg/p95/p99/peak CPU and RAM plus a `SampleConfidence` label based on
     sample count and validity.
-* CPU/RAM/swap utilization and right-sizing (v1.2 and Phase 3):
+* CPU/RAM/swap utilization and right-sizing (historical metrics milestone):
   * `orbyn prometheus import` pulls a week of historical CPU/RAM/swap
     utilization from a Prometheus server (`/api/v1/query_range` through
     `curl`; node_exporter queries by default, overridable) and maps series
@@ -228,7 +228,7 @@ The repository currently provides:
   * Ansible inventory exporter (`orbyn export --format ansible`).
   * Terraform-friendly export (`orbyn export --format terraform`).
   * Plugin/collector SDK (docs/PLUGINS.md + `examples/custom_collector.rs`).
-* Cloud and platform adapters (Phase 5, read-only):
+* Cloud and platform adapters (read-only):
   * Proxmox VE importer (`orbyn proxmox import`): nodes, node datastores, QEMU
     VMs and LXC containers with per-guest interfaces (guest agent / container
     API / config fallback), OS identity, filesystems and CPU/RAM capacity.
@@ -260,7 +260,7 @@ Release details are documented in
 [`docs/RELEASE_NOTES_v1.0.3.md`](docs/RELEASE_NOTES_v1.0.3.md).
 
 The v1.0 CLI surface, completions, audit trail and release packaging are
-implemented. The current release candidate is `v1.0.3`.
+implemented. The current release is `v1.0.3`.
 
 ## Requirements
 
@@ -668,12 +668,12 @@ The underlying asset and dependency model should remain portable.
 | PowerShell | Windows inventory and capacity (over OpenSSH) | v0.3 |
 | WinRM      | Native Windows transport (WS-Man over HTTPS) | v0.3 |
 | VMware     | VM and hypervisor inventory           | Later  |
-| NetBox     | Source-of-truth import (devices/VMs)  | v1.1   |
-| Prometheus | Historical utilization                | v1.2+  |
-| Zabbix     | Historical utilization                | v1.2+  |
-| Proxmox VE | Nodes, storage, VMs, containers, disks, interfaces | Phase 5 |
-| AWS        | EC2, EBS, VPC/subnets and network interfaces | Phase 5 |
-| Huawei Cloud | ECS, EVS, VPC/subnets, interfaces and flavor capacity | Phase 5 |
+| NetBox     | Source-of-truth import (devices/VMs)  | Shipped |
+| Prometheus | Historical utilization                | Shipped |
+| Zabbix     | Historical utilization                | Shipped |
+| Proxmox VE | Nodes, storage, VMs, containers, disks, interfaces | Shipped |
+| AWS        | EC2, EBS, VPC/subnets and network interfaces | Shipped |
+| Huawei Cloud | ECS, EVS, VPC/subnets, interfaces and flavor capacity | Shipped |
 | eBPF       | Runtime dependency observations       | Later  |
 
 ## Orbyn Graph
@@ -814,7 +814,7 @@ v0.5    Migration assessment     (done)
            ↓
  v1.0    Stable CLI product    (done)
           ↓
-v1.2    Historical metrics + right-sizing
+v1.0.x  Integrations, metrics + right-sizing, cloud adapters
 ```
 
 A web/HTTP interface for `orbyn` is a possible later add-on, not a goal for the

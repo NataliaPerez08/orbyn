@@ -19,7 +19,7 @@ added; today the product surface is `orbyn` subcommands.
   (real binary against fake collector binaries).
 - [x] **P1** Add CI: fmt, clippy, test, build (GitHub Actions, `.github/workflows/ci.yml`).
 - [x] **P1** Add release workflow (binary artifacts + checksums; tag-triggered
-  matrix for Linux/macOS/Windows in `.github/workflows/release.yml`).
+  matrix for Linux/Windows in `.github/workflows/release.yml`).
 - [x] **P1** Add shell completion scripts (bash/zsh/fish) via `orbyn completions <shell>`.
 - [ ] **P2** Add Docker image.
 
@@ -52,7 +52,7 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P2** Virtualization metadata.
 - [x] **P2** Disk/filesystem inventory.
 
-## Integrations (v1.1)
+## Integrations milestone
 
 - [x] **P1** NetBox source-of-truth importer (devices + virtual machines via REST).
 - [x] **P1** Ansible inventory exporter (INI, configurable grouping).
@@ -138,7 +138,8 @@ added; today the product surface is `orbyn` subcommands.
 ### Phase 3 — Evidence-based right-sizing
 
 - [x] **P1** Add CPU, RAM, swap and storage right-sizing rules. (CPU/RAM shipped
-  in v1.2 catalog 0.7.0; `rs.swap-pressure` and `rs.storage-overprovisioned`
+  in the metrics milestone (catalog 0.7.0); `rs.swap-pressure` and
+  `rs.storage-overprovisioned`
   shipped in catalog 0.8.0.)
 - [x] **P1** Define minimum observation windows and insufficient-data behavior.
   (168h + high confidence; `rs.window-insufficient` is the explicit warning.)

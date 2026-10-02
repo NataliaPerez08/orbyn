@@ -139,10 +139,11 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
 
 19. **Metric samples are only collected on demand** — ~`gap`~ **FIXED**
     ~`store_observations` logs `"observation type not yet persisted"` for
-    `Observation::MetricSample`. CPU/RAM utilization and right-sizing are v1.2.~
+    `Observation::MetricSample`. CPU/RAM utilization and right-sizing are the
+    metrics milestone.~
     Snapshot sampling ships as part of discovery (3 samples per SSH probe);
     `orbyn metrics` aggregates avg/p95/p99/peak with a confidence label and
-    the window span. Since v1.2, `orbyn prometheus import` pulls a week of
+    the window span. Since the metrics milestone, `orbyn prometheus import` pulls a week of
     history (idempotent re-imports) and the `rs.*` rules produce explainable
     right-sizing findings from ready windows. Periodic *scheduling* of
     collection remains out of scope: run the importer from cron/systemd
@@ -168,7 +169,7 @@ behavior), **gap** (missing feature/limitation), **quality** (data or UX).
     of failing. (Resolved in `src/import.rs` + `src/main.rs`.)
 
 22. **`export --format table` removed** — `quality`
-    v1.1 narrowed `export` to `json|csv|ansible|terraform`; the old `table`
+    the integrations milestone narrowed `export` to `json|csv|ansible|terraform`; the old `table`
     form is gone (a small breaking change vs v0.5).
 
 23. **Ansible YAML inventory unsupported** — `gap` ~~FIXED~~

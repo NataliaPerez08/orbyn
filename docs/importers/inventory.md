@@ -60,7 +60,7 @@ orbyn export --format terraform --tf-import aws_instance --output import.tf
 | `-o, --output <file>` | stdout | Write to a file instead |
 
 !!! note
-    `export --format table` was removed in v1.1 — use `orbyn assets` for a
+    `export --format table` was removed in the integrations milestone — use `orbyn assets` for a
     human-readable table, or `--format csv` for a file.
 
 ## Typical flows

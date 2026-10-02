@@ -9,8 +9,8 @@ plan migrations and right-size target environments. Everything is a local,
 single-binary CLI tool.
 
 !!! info "Status"
-    v1.0 stable release — CLI focus; v1.1 integrations included.
-    The current release candidate is `v1.0.3`.
+    v1.0.3 stable release — discovery, inventory, assessment, integrations,
+    metrics/right-sizing and cloud adapters.
 
 ## Why Orbyn?
 

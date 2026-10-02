@@ -73,7 +73,7 @@ Examples:
 - PowerShell CIM queries on Windows (over OpenSSH, or native WS-Man/WinRM
   over HTTPS).
 - NetBox (read-only importer).
-- Prometheus (read-only historical utilization importer, v1.2).
+- Prometheus (read-only historical utilization importer, metrics milestone).
 - Zabbix (read-only historical utilization importer, Phase 3).
 - Proxmox VE (read-only cloud adapter, Phase 5).
 - AWS EC2 (read-only cloud adapter, Phase 5).
@@ -178,7 +178,7 @@ output. `src/assessment/` (v0.5) is a versioned rule engine:
   likely co-migrating application groups.
 
 Planned later outputs include over-provisioning indicators, CPU/RAM target
-recommendations (v1.2 right-sizing) and cloud-target compatibility rules.
+recommendations (right-sizing milestone) and cloud-target compatibility rules.
 `orbyn assess --rules` lists the catalog.
 
 ### 5. Dependency graph
@@ -203,7 +203,7 @@ Evidence may come from:
 - service configuration (planned);
 - user-confirmed relationships (`orbyn deps add` / `orbyn deps confirm`).
 
-Third-party integrations live in `src/integrations/` (v1.1): NetBox is a
+Third-party integrations live in `src/integrations/` (integrations milestone): NetBox is a
 read-only source-of-truth importer (REST API via `curl`, token streamed through
 stdin), while Ansible (INI inventory) and Terraform (HCL `locals`) are
 pure exporters over the normalized domain. A collector/plugin SDK is documented

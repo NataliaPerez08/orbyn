@@ -54,26 +54,6 @@ does not store passwords or private key contents.
 Install `nmap`, `snmpwalk`, OpenSSH and `curl` with the package manager for
 your distribution when needed.
 
-## macOS
-
-Download the archive matching your Mac:
-
-- Apple Silicon: `aarch64-apple-darwin`
-- Intel: `x86_64-apple-darwin`
-
-Then verify and install it locally:
-
-```bash
-sha256sum -c orbyn-<version>-<target>.tar.gz.sha256
-tar -xzf orbyn-<version>-<target>.tar.gz
-sudo install -m 0755 orbyn-<version>-<target> /usr/local/bin/orbyn
-orbyn --version
-```
-
-Install external collector tools with Homebrew or another trusted package
-manager. macOS may ask for confirmation the first time a downloaded binary is
-run; only approve artifacts downloaded from the project release page.
-
 ## Windows
 
 1. Download `orbyn-<version>-x86_64-pc-windows-msvc.exe.zip` and its checksum

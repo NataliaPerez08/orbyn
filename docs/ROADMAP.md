@@ -2,6 +2,11 @@
 
 The roadmap describes product capability, not guaranteed release dates.
 
+Release versions follow SemVer and are tagged (`v1.0.x` currently). Headings
+below mark capability milestones: their capabilities shipped incrementally
+across the v1.0.x releases, so a heading is not a promise that a `v1.1` or
+`v1.2` release exists.
+
 ## v0.1 — Network discovery foundation
 
 Goal: produce a useful inventory from an authorized IP range, driven from the CLI.
@@ -95,7 +100,7 @@ possible later extensions of the same transport.
 
 ## v1.0 — Stable CLI product
 
-**Status:** complete; the stable CLI is published as `v1.0.2`.
+**Status:** complete; the stable CLI is published as `v1.0.3`.
 
 - Stable CLI v1 (subcommand surface frozen with `orbyn <cmd> --help`).
 - Command completion scripts (bash/zsh/fish).
@@ -107,7 +112,7 @@ possible later extensions of the same transport.
 
 ### v1.0 completion plan
 
-- [x] Production installation documentation for Linux, macOS and Windows,
+- [x] Production installation documentation for Linux and Windows,
    including dependencies, configuration, completions, verification, upgrade and
    uninstall procedures.
 - [x] Database upgrade verification: existing SQLite databases must migrate
@@ -136,7 +141,7 @@ development tooling or undocumented manual steps.
 A web/HTTP interface is a possible later add-on and is explicitly out of scope
 for the core product.
 
-## v1.1 — Integrations
+## Integrations milestone
 
 **Status:** implemented (NetBox import + Ansible/Terraform exporters + plugin
 SDK). vCenter is deferred to a follow-up (large SOAP/session client; the exit
@@ -155,9 +160,9 @@ criterion only requires one source-of-truth and one automation export).
   `examples/custom_collector.rs`, and PLUGINS.md.
 
 **Exit criterion:** demonstrated by the automated end-to-end suite (fake
-`curl` for NetBox) rather than a CI pipeline, which is not yet configured.
+`curl` for NetBox) in CI.
 
-## v1.2 — CPU/RAM utilization
+## Historical metrics and right-sizing milestone
 
 **Status:** implemented. Snapshots ship with host-level discovery (3 samples
 per SSH/WinRM probe); a week of history comes from the Prometheus importer
@@ -312,6 +317,10 @@ Shipped in this phase:
 
 **Status:** complete. Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP and Azure
 use the common read-only adapter contract.
+
+**Maturity:** all six adapters are **offline tested** (fixture-backed
+end-to-end coverage). None is claimed **production validated**; live validation
+is tracked in the validation matrix (Phase 4).
 
 **Goal:** bring private infrastructure and public clouds into Orbyn's common
 normalized model.
