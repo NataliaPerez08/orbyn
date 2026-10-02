@@ -178,9 +178,19 @@ no credentials, and leave the DB consistent.
 
 ## Cycle 7 — Release smoke test (Phase 8)
 
-- Add `scripts/release-smoke.sh`: extract artifact → `orbyn --version` (matches
-  tag) → `orbyn --help` → temp DB → `orbyn assets`.
-- Wire into `.github/workflows/release.yml` after build.
+### Status — **done**
+- `scripts/release-smoke.sh`: extracts a built artifact (tar.gz or zip), asserts
+  `orbyn --version` matches the release tag, renders `--help`, and serves
+  `orbyn assets --format csv` from a fresh database (proving migrations run).
+- Wired into `.github/workflows/release.yml` as a step after packaging on the
+  Linux target (`if: matrix.os != 'windows-latest'`), asserting the artifact
+  version equals `${RELEASE_TAG#v}`.
+- The rest of Phase 8 (pinned toolchain, `--locked`, pinned actions, checksums,
+  LICENSE/THIRD_PARTY_NOTICES in the archive) was already enforced by
+  `release.yml` / `ci.yml` and the audit OY-10.
+
+**Acceptance:** the binary version matches the release tag and a fresh database
+works, checked in CI on every release.
 
 ---
 

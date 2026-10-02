@@ -87,10 +87,18 @@ jobs:
              tar -xzf "$asset.tar.gz" -C "$inspect"
              test -f "$inspect/$asset"
              test -f "$inspect/LICENSE"
-             test -f "$inspect/THIRD_PARTY_NOTICES.md"
-             sha256sum -c "$asset.tar.gz.sha256"
-             test -s "$asset.tar.gz"
-           fi
+              test -f "$inspect/THIRD_PARTY_NOTICES.md"
+              sha256sum -c "$asset.tar.gz.sha256"
+              test -s "$asset.tar.gz"
+            fi
+
+      - name: Release smoke test
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          bash scripts/release-smoke.sh \
+            "orbyn-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "${RELEASE_TAG#v}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
