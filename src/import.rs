@@ -48,7 +48,11 @@ pub fn read_capped_within<R: Read>(reader: &mut R, what: &str, limit: u64) -> Re
             limit
         );
     }
-    String::from_utf8(bytes).with_context(|| format!("{what} is not valid UTF-8"))
+    let text = String::from_utf8(bytes).with_context(|| format!("{what} is not valid UTF-8"))?;
+    // A leading UTF-8 BOM (Windows editors, some exports) would otherwise
+    // poison the first field of a CSV row or fail a JSON parse.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+    Ok(text)
 }
 
 /// An asset row accepted by `orbyn import` (JSON or CSV).
@@ -146,6 +150,10 @@ pub fn resolve_asset_id(raw: &str) -> String {
 /// is treated as being entirely in the `assets` section. Sections Orbyn does
 /// not import are skipped.
 pub fn parse_import_csv(input: &str) -> Result<ImportedInventory> {
+    // Normalize line endings: `\r\n` collapses to `\n` and a bare `\r`
+    // (classic Mac exports) to `\n` too. `str::lines()` only splits on `\n`,
+    // so a bare-CR file would otherwise parse as one giant row.
+    let input = input.replace("\r\n", "\n").replace('\r', "\n");
     let mut inventory = ImportedInventory::default();
     let mut section = String::from("assets");
     for line in input.lines() {
@@ -681,5 +689,21 @@ mod tests {
         let csv = "10.0.0.1,web-01,server,prod,x,high,\r\n10.0.0.2,db-01,server,prod,x,high,\n";
         let inv = parse_import_csv(csv).expect("parse");
         assert_eq!(inv.assets.len(), 2);
+    }
+
+    #[test]
+    fn bare_cr_line_endings_parse() {
+        let csv = "10.0.0.1,web-01,server,prod,x,high,\r10.0.0.2,db-01,server,prod,x,high,\r";
+        let inv = parse_import_csv(csv).expect("parse");
+        assert_eq!(inv.assets.len(), 2);
+        assert_eq!(inv.assets[1].hostname.as_deref(), Some("db-01"));
+    }
+
+    #[test]
+    fn read_capped_strips_leading_bom() {
+        let input = b"\xef\xbb\xbf{\"assets\":[]}".to_vec();
+        let read =
+            read_capped_within(&mut input.as_slice(), "import file x.json", 64).expect("parse");
+        assert_eq!(read, "{\"assets\":[]}");
     }
 }

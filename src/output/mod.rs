@@ -931,7 +931,11 @@ fn mermaid_edge_label(d: &Dependency) -> String {
     if d.evidence_kind() == EvidenceKind::Dns {
         format!("dns {:.0}%", d.confidence * 100.0)
     } else {
-        format!("{}/{} {:.0}%", d.proto, d.port, d.confidence * 100.0)
+        // The proto comes from imported services (free-form string); `|`
+        // terminates the `-->|label|` edge and a newline splits the graph,
+        // so both are stripped before the label is embedded.
+        let proto = d.proto.replace(['|', '\n', '\r'], "_");
+        format!("{proto}/{} {:.0}%", d.port, d.confidence * 100.0)
     }
 }
 
@@ -1366,6 +1370,23 @@ mod tests {
         let first = mermaid_node_id("10.0.0.1");
         let second = mermaid_node_id("10_0_0_1");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn mermaid_edge_label_sanitizes_proto() {
+        let mut edge = dep("a", "b", 443, true, "manual");
+        edge.proto = "x|evil\nyes".into();
+        let out = mermaid(&[edge], &[]);
+        assert!(
+            out.contains("x_evil_yes/443"),
+            "proto must be sanitized in the edge label: {out}"
+        );
+        assert!(!out.contains("x|evil"), "proto pipe must not escape: {out}");
+        assert_eq!(
+            out.lines().count(),
+            2,
+            "proto newline must not split the graph: {out}"
+        );
     }
 
     #[test]
