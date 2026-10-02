@@ -6,3 +6,4 @@
 .venv/opencode.json
 /fuzz/target
 /fuzz/artifacts
+/fuzz/corpus/*/[0-9a-f]*
