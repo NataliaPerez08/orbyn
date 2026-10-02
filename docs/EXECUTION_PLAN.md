@@ -194,10 +194,26 @@ works, checked in CI on every release.
 
 ---
 
+## Cycle 8 — Validation matrix (Phase 4)
+
+### Status — **done**
+- `docs/VALIDATION_MATRIX.md`: honest per-integration status across fixture /
+  live / scale validation. All collectors, integrations and cloud adapters are
+  **fixture tested**; none is claimed production-validated on fixtures alone.
+- PostgreSQL is the only backend with documented live coverage (audit OY-06,
+  2026-09-30); SQLite is exercised live on every run.
+- Live validation procedures documented per integration (manual commands +
+  assertions) for the credential/billing-gated providers.
+
+**Acceptance:** the matrix records fixture/live/scale status and the manual live
+procedure for every integration.
+
+---
+
 ## Explicitly deferred
 
 Phases 9 (cloud SKU matching) and 10 (migration waves) are non-goals until
-Cycles 1–7 are green. No new providers, web UI, or agents.
+Cycles 1–8 are green. No new providers, web UI, or agents.
 
 ## Execution rules per change
 

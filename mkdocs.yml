@@ -82,6 +82,8 @@ nav:
       - Security policy: SECURITY.md
       - Architecture: ARCHITECTURE.md
       - Known issues: KnowIssues.md
+      - Validation matrix: VALIDATION_MATRIX.md
+      - Performance: PERFORMANCE.md
       - Plugins: PLUGINS.md
       - Roadmap: ROADMAP.md
       - Contributing: CONTRIBUTING.md
