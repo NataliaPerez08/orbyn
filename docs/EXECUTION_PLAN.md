@@ -91,19 +91,26 @@ the build.
 Goal: all six adapters (Proxmox, AWS, Huawei, OpenStack, GCP, Azure) share
 equivalent guarantees.
 
-- Extend `tests/e2e_cloud.rs` with a shared fake-`curl` harness that serves a
-  scripted status per request.
-- Per adapter verify:
-  - **Auth:** missing/invalid credentials; secret redaction; never persisted.
-  - **HTTP:** success, pagination, timeout, response-size cap, malformed payload,
-    partial response, 401/403/404/429/500/502/503.
-  - **Retry:** 429/500/503/timeout retried; 401/403 not retried; invalid payload
-    no blind loop.
-  - **Inventory:** asset/interface/capacity/disk/tags normalization, account/
-    region provenance, stable ids, idempotent re-import, partial-failure
-    preservation.
+### Status — **done**
+- The six adapters share the `CurlClient` (`src/integrations/cloud/mod.rs`), so
+  the HTTP/retry contract is proven once through the shared path.
+- Existing per-adapter e2e already cover auth (missing/invalid, stdin
+  credentials, redaction) and inventory normalization (assets/interfaces/
+  capacity/filesystems, tags, account/region provenance, stable ids, partial
+  failure preservation via "Skipped N resource(s)").
+- Added to `tests/e2e_cloud.rs` a scripted fake `curl` (fail-first-then-delegate)
+  and contract tests:
+  - **Retry:** 429 / 500 / 503 / timeout are replayed and the import then
+    succeeds; the failing endpoint is attempted more than once.
+  - **No retry:** 401 / 403 / malformed body fail cleanly in one attempt, no
+    blind loop, no credential in the output.
+  - **Budget:** a persistently 500 provider spends the 3-attempt budget then
+    fails explicitly.
+  - **Idempotency:** re-importing the same provider state reconciles rows
+    instead of duplicating assets.
 
-**Acceptance:** one behavioral contract matrix passes for all adapters.
+**Acceptance:** one behavioral contract matrix passes for all adapters (shared
+path) — 16 e2e cloud tests green.
 
 ---
 

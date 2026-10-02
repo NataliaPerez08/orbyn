@@ -1,10 +1,14 @@
 //! End-to-end cloud adapter tests: the Proxmox VE importer against a fake
-//! `curl`. No network or real Proxmox cluster is required.
+//! `curl`, plus the shared `CurlClient` contract (retries, rejected
+//! credentials, malformed responses, idempotent re-import). No network or real
+//! cloud is required.
 
 mod common;
 
 #[cfg(unix)]
 use common::*;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 
 /// A fake `curl` that serves the Proxmox API endpoints the adapter calls.
 ///
@@ -835,4 +839,164 @@ fn huawei_import_requires_credentials() {
             .env_remove("HUAWEICLOUD_SDK_SK"),
     );
     assert!(out.contains("Huawei Cloud access key is required"), "{out}");
+}
+
+/// A `curl` that fails the first `success_after - 1` requests with a scripted
+/// mode (429/500/503/timeout/401/403/malformed) and then delegates to the real
+/// fixture. Every request is appended to `ORBYN_CURL_ATTEMPT_LOG.requests`, so
+/// a test can count retries. Exercises the shared `CurlClient` contract that
+/// every cloud adapter uses.
+#[cfg(unix)]
+fn scripted_curl(dir: &TempDir) -> PathBuf {
+    fake_bin(
+        dir,
+        "scripted-curl",
+        r#"#!/usr/bin/env bash
+log="${ORBYN_CURL_ATTEMPT_LOG:-}"
+url="${@: -1}"
+attempt=1
+if [[ -n "$log" && -f "$log" ]]; then attempt=$(($(cat "$log") + 1)); fi
+printf '%s' "$attempt" > "$log"
+if [[ -n "$log" ]]; then printf '%s\t%s\n' "$attempt" "$url" >> "$log.requests"; fi
+if [[ -n "$ORBYN_CURL_FAIL_MODE" && "$attempt" -lt "${ORBYN_CURL_SUCCESS_AFTER:-1}" ]]; then
+  case "$ORBYN_CURL_FAIL_MODE" in
+    timeout) exit 28 ;;
+    malformed) printf '{"data":[]}'; exit 0 ;;
+    *) printf '{"data":[]}'; printf '%s' "$ORBYN_CURL_FAIL_MODE" ;;
+  esac
+  exit 0
+fi
+exec bash "$ORBYN_REAL_CURL" "$@"
+"#,
+    )
+}
+
+/// Run a Proxmox import through the scripted curl under a failure mode,
+/// returning the combined output and the per-request log.
+#[cfg(unix)]
+fn run_scripted_proxmox(
+    dir: &TempDir,
+    real_curl: &Path,
+    fail_mode: Option<&str>,
+    success_after: usize,
+) -> (String, Vec<String>) {
+    let curl = scripted_curl(dir);
+    let attempt_log = dir.path().join("curl-attempt.log");
+    let mut cmd = orbyn(dir);
+    cmd.args(["proxmox", "import", "--url", "https://pve.example.com:8006"])
+        .args(["--token", "root@pam!orbyn=supersecrettoken123"])
+        .env("ORBYN_CURL_BIN", &curl)
+        .env("ORBYN_REAL_CURL", real_curl)
+        .env("ORBYN_CURL_ATTEMPT_LOG", &attempt_log);
+    if let Some(mode) = fail_mode {
+        cmd.env("ORBYN_CURL_FAIL_MODE", mode)
+            .env("ORBYN_CURL_SUCCESS_AFTER", success_after.to_string());
+    }
+    let output = cmd.output().expect("run proxmox import");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = std::fs::read_to_string(format!("{}.requests", attempt_log.display()))
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+    (combined, requests)
+}
+
+/// The shared retry contract: 429/500/503/timeout are replayed and the import
+/// then succeeds; the failing endpoint must be attempted more than once.
+#[cfg(unix)]
+#[test]
+fn cloud_adapter_retries_transient_http_failures() {
+    let dir = TempDir::new("cloud-retry");
+    let real = fake_bin(&dir, "real-proxmox-curl", FAKE_PROXMOX_CURL_SCRIPT);
+    for mode in ["429", "500", "503", "timeout"] {
+        let d = TempDir::new("cloud-retry-case");
+        let (out, requests) = run_scripted_proxmox(&d, &real, Some(mode), 2);
+        assert!(
+            out.contains("Imported"),
+            "{mode} must be retried then succeed: {out}"
+        );
+        let hits = requests
+            .iter()
+            .filter(|l| l.contains("cluster/status"))
+            .count();
+        assert!(
+            hits >= 2,
+            "{mode}: expected a retry of the first endpoint, saw {hits} attempt(s): {requests:?}"
+        );
+        assert!(
+            !out.contains("supersecrettoken123"),
+            "token leak after {mode}: {out}"
+        );
+    }
+}
+
+/// Rejected credentials and malformed payloads are permanent: no retry, a
+/// clean failure, and no credential in the output.
+#[cfg(unix)]
+#[test]
+fn cloud_adapter_does_not_retry_permanent_failures() {
+    for mode in ["401", "403", "malformed"] {
+        let d = TempDir::new("cloud-permanent");
+        let real = fake_bin(&d, "real-proxmox-curl", FAKE_PROXMOX_CURL_SCRIPT);
+        let (out, requests) = run_scripted_proxmox(&d, &real, Some(mode), 999_999);
+        let needle = if mode == "malformed" {
+            "malformed curl response"
+        } else {
+            &format!("HTTP {mode}")
+        };
+        assert!(out.contains(needle), "{mode}: {out}");
+        assert_eq!(
+            requests.len(),
+            1,
+            "{mode} must not be retried: {requests:?}"
+        );
+        assert!(
+            !out.contains("supersecrettoken123"),
+            "token leak on {mode}: {out}"
+        );
+    }
+}
+
+/// A persistently transient provider spends the retry budget (3 attempts) and
+/// then fails explicitly instead of looping forever.
+#[cfg(unix)]
+#[test]
+fn cloud_adapter_fails_after_exhausted_retry_budget() {
+    let d = TempDir::new("cloud-exhausted");
+    let real = fake_bin(&d, "real-proxmox-curl", FAKE_PROXMOX_CURL_SCRIPT);
+    let (out, requests) = run_scripted_proxmox(&d, &real, Some("500"), 999_999);
+    assert!(out.contains("HTTP 500"), "{out}");
+    assert_eq!(
+        requests.len(),
+        3,
+        "the 3-attempt budget must be spent: {requests:?}"
+    );
+    assert!(!out.contains("supersecrettoken123"), "{out}");
+}
+
+/// Re-importing the same provider state reconciles existing rows instead of
+/// duplicating assets.
+#[cfg(unix)]
+#[test]
+fn cloud_import_is_idempotent() {
+    let dir = TempDir::new("cloud-idempotent");
+    let curl = fake_bin(&dir, "curl", FAKE_PROXMOX_CURL_SCRIPT);
+    for _ in 0..2 {
+        let out = run_ok_combined(
+            orbyn(&dir)
+                .args(["proxmox", "import", "--url", "https://pve.example.com:8006"])
+                .args(["--token", "root@pam!orbyn=supersecrettoken123"])
+                .env("ORBYN_CURL_BIN", &curl),
+        );
+        assert!(out.contains("Imported 4 assets"), "{out}");
+    }
+    let assets = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert_eq!(
+        assets.lines().count(),
+        5,
+        "4 assets + header, no duplicates after re-import: {assets}"
+    );
 }
