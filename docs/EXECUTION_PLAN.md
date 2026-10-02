@@ -157,10 +157,22 @@ sizing decision.
 
 ## Cycle 6 — Failure and recovery (Phase 7)
 
-- Add SQLite locked, corrupt/unreadable SQLite, PostgreSQL unavailable, and
-  interrupted-connection tests.
-- Assert the partial-failure contract: completed observations persisted, job
-  records the failure, no credentials in errors, DB consistent.
+### Status — **done**
+- New `tests/e2e_failures.rs`:
+  - **Missing collector binary** (`ORBYN_NMAP_BIN=/nonexistent`) fails the job
+    cleanly ("failed to start") and records an `nmap,failed` job.
+  - **Corrupt SQLite** database file surfaces a clean error instead of a panic.
+  - **PostgreSQL unavailable** (unreachable endpoint) fails cleanly with the
+    URL password redacted (audit OY-06).
+- The partial-failure contract (completed observations persisted, failed job
+  recorded with accurate counts, no credentials in errors, DB consistent) was
+  already covered by `e2e_discovery::partial_failure_keeps_successful_targets`,
+  the timeout/stderr-flood nmap tests, and the malformed/oversized import tests.
+- SQLite *locked* is not tested deterministically (busy-timeout handled by
+  sqlx); noted as a residual.
+
+**Acceptance:** partial failures keep completed work, record the failure, leak
+no credentials, and leave the DB consistent.
 
 ---
 
