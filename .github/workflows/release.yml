@@ -105,8 +105,8 @@ jobs:
         with:
           name: orbyn-${{ matrix.target }}
           path: |
-            orbyn-*.${{ matrix.ext }}.tar.gz
-            orbyn-*.${{ matrix.ext }}.zip
+            orbyn-*.tar.gz
+            orbyn-*.zip
             *.sha256
           if-no-files-found: error
 
