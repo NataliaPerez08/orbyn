@@ -35,6 +35,37 @@ Todos los fix verificados con los PoC del informe re-ejecutados contra el binari
 recompilado (y el fallback `PGPASSWORD` probado contra un PostgreSQL vivo),
 además de `cargo fmt`, `clippy -D warnings` y la suite completa.
 
+## Hardening post-auditoría (2026-10-03)
+
+Fixes aterrizados después de la fotografía del audit, todos con cobertura de
+tests y/o fuzzing:
+
+- **Panic encontrado por fuzzing**: `split_http_status` hacía `split_at` sobre
+  un `&str` decodificado con pérdida; una cola multibyte (caracteres de
+  reemplazo) caía en un índice que no era char boundary y paniqueaba. Ahora
+  devuelve `None` con rangos no-panicking (`src/http.rs`); test de regresión +
+  seed de corpus.
+- **Export Mermaid**: la etiqueta de arista incrusta el `proto` libre de
+  servicios importados; `|`, `\n`, `\r` se neutralizan (inyección de grafo) y
+  las etiquetas de nodo eliminan comillas/corchetes/saltos de línea
+  (`src/output/mod.rs`).
+- **Export Ansible**: `sanitize_name` solo admite `[A-Za-z0-9._-]` y los valores
+  INI de `host_vars` (environment/owner/tags) se sanitizan, cerrando la
+  inyección de secciones INI (`src/integrations/ansible.rs`).
+- **Import**: un BOM UTF-8 inicial se elimina y los finales de línea con `\r`
+  desnudo se normalizan (exports Mac) (`src/import.rs`).
+- **Export CSV**: los sucedáneos fullwidth de fórmula (`＝＋－`) se neutralizan
+  como los ASCII (`src/output/mod.rs`).
+- **Salida de terminal**: el render de tablas elimina secuencias de control
+  C0/C1 y ESC (familia OY-26) en el límite de render; JSON/CSV conservan los
+  bytes crudos (`src/output/mod.rs`).
+- **OY-19 (tope de import)**: confirmado cerrado — `read_capped` impone el tope
+  de 64 MiB con error claro (`src/import.rs`). **OY-26 (escapes de terminal)**:
+  mitigado en el límite de render de tablas; el residual se reduce a flujos
+  fuera de tablas.
+- **Fuzzing**: 7 targets `cargo-fuzz` compilan y corren en CI (job `fuzz`,
+  nightly); la clase de crash anterior quedaría atrapada por el smoke de CI.
+
 ## Resumen ejecutivo
 
 | Severidad    | Cantidad |
