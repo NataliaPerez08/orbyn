@@ -4,7 +4,7 @@
 
 Orbyn discovers infrastructure, builds an accurate asset inventory, maps how systems depend on each other, and produces the data needed to plan migrations and right-size target environments — from a local, single-binary CLI.
 
-> **Status:** v1.0.3 stable release — discovery, inventory, assessment, integrations, metrics/right-sizing and cloud adapters.
+> **Status:** v1.0.4 stable release — discovery, inventory, assessment, integrations, metrics/right-sizing, cloud adapters, SKU matching and migration waves.
 
 ## What Orbyn does
 
@@ -151,7 +151,7 @@ mkdocs serve          # http://127.0.0.1:8000
 mkdocs build --strict # outputs to site/
 ```
 
-Every push to `main` rebuilds and deploys it to GitHub Pages. Third-party licensing is documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md); release notes in [`docs/RELEASE_NOTES_v1.0.3.md`](docs/RELEASE_NOTES_v1.0.3.md).
+Every push to `main` rebuilds and deploys it to GitHub Pages. Third-party licensing is documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md); release notes in [`docs/RELEASE_NOTES_v1.0.4.md`](docs/RELEASE_NOTES_v1.0.4.md).
 
 ## Contributing
 

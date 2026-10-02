@@ -9,8 +9,8 @@ plan migrations and right-size target environments. Everything is a local,
 single-binary CLI tool.
 
 !!! info "Status"
-    v1.0.3 stable release — discovery, inventory, assessment, integrations,
-    metrics/right-sizing and cloud adapters.
+    v1.0.4 stable release — discovery, inventory, assessment, integrations,
+    metrics/right-sizing, cloud adapters, SKU matching and migration waves.
 
 ## Why Orbyn?
 

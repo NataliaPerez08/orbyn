@@ -65,7 +65,7 @@ Review:
 
 Current problem:
 
-- package version is `1.0.3`;
+- package version is `1.0.4`;
 - roadmap declares v1.1 and v1.2 capabilities implemented;
 - post-v1 phases are also marked complete.
 

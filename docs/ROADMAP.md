@@ -100,7 +100,7 @@ possible later extensions of the same transport.
 
 ## v1.0 — Stable CLI product
 
-**Status:** complete; the stable CLI is published as `v1.0.3`.
+**Status:** complete; the stable CLI is published as `v1.0.4`.
 
 - Stable CLI v1 (subcommand surface frozen with `orbyn <cmd> --help`).
 - Command completion scripts (bash/zsh/fish).
