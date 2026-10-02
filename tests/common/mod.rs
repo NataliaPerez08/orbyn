@@ -278,3 +278,56 @@ pub fn import_json(dir: &TempDir, json: &str) -> String {
             .arg(&file),
     )
 }
+
+/// Interfaces and services per asset in the representative inventory.
+pub const INTERFACES_PER_ASSET: usize = 2;
+pub const SERVICES_PER_ASSET: usize = 4;
+
+/// A representative inventory: servers, network gear and hypervisors, spread
+/// over environments and owners, each with interfaces, services and tags.
+/// Deterministic for a given size, so the same asset count always produces the
+/// same rows (used by the scale and golden suites).
+pub fn representative_inventory(assets: usize) -> String {
+    const CLASSES: [&str; 4] = ["server", "network", "storage", "virtual-machine"];
+    const OSES: [(&str, &str); 3] = [
+        ("Ubuntu 22.04.4 LTS", "5.15.0-94-generic"),
+        ("RHEL 8.9", "4.18.0-513.9.1.el8_9.x86_64"),
+        ("Windows Server 2022 Standard", "10.0.20348"),
+    ];
+
+    let mut rows = Vec::with_capacity(assets);
+    let mut interfaces = Vec::with_capacity(assets * INTERFACES_PER_ASSET);
+    let mut services = Vec::with_capacity(assets * SERVICES_PER_ASSET);
+    for i in 0..assets {
+        let third = i / 250;
+        let ip = format!("10.{third}.{}.1", i % 250);
+        let device_class = CLASSES[i % CLASSES.len()];
+        let (os_name, os_version) = OSES[i % OSES.len()];
+        rows.push(format!(
+            r#"{{"ip":"{ip}","hostname":"host-{i:05}","device_class":"{device_class}","os_name":"{os_name}","os_version":"{os_version}","environment":"env-{}","owner":"team-{}","criticality":"{}","tags":["tag-{}","zone-{}"]}}"#,
+            i % 4,
+            i % 12,
+            ["low", "medium", "high"][i % 3],
+            i % 20,
+            i % 5
+        ));
+        for n in 0..INTERFACES_PER_ASSET {
+            interfaces.push(format!(
+                r#"{{"asset_id":"{ip}","name":"eth{n}","mac":"02:00:00:{:02x}:{:02x}","ip":"{ip}"}}"#,
+                i % 256,
+                n
+            ));
+        }
+        for (n, port) in [22u16, 443, 3306, 9090].into_iter().enumerate() {
+            services.push(format!(
+                r#"{{"asset_id":"{ip}","proto":"tcp","port":{port},"name":"svc-{n}","state":"open"}}"#
+            ));
+        }
+    }
+    format!(
+        r#"{{"assets":[{}],"interfaces":[{}],"services":[{}]}}"#,
+        rows.join(","),
+        interfaces.join(","),
+        services.join(",")
+    )
+}

@@ -1,0 +1,238 @@
+{
+  "rules_version": "0.8.0",
+  "assets_assessed": 10,
+  "overall_score": 16,
+  "complexity": "low",
+  "findings": [
+    {
+      "rule_id": "svc.insecure-protocol",
+      "severity": "high",
+      "message": "insecure cleartext service exposed; must be decommissioned or replaced as part of migration",
+      "evidence": [
+        "tcp/23 open (telnet)"
+      ],
+      "asset_id": "192-168-0-0"
+    },
+    {
+      "rule_id": "os.eol",
+      "severity": "high",
+      "message": "operating system is at or near end of vendor support; in-place upgrade or re-platforming is likely required before migration",
+      "evidence": [
+        "reported OS: Ubuntu 18.04.6 LTS",
+        "EOL table version: 2026-09",
+        "Ubuntu 18.04 LTS standard support ended in 2023"
+      ],
+      "asset_id": "192-168-0-2"
+    },
+    {
+      "rule_id": "svc.insecure-protocol",
+      "severity": "high",
+      "message": "insecure cleartext service exposed; must be decommissioned or replaced as part of migration",
+      "evidence": [
+        "tcp/23 open (telnet)"
+      ],
+      "asset_id": "192-168-0-4"
+    },
+    {
+      "rule_id": "os.eol",
+      "severity": "high",
+      "message": "operating system is at or near end of vendor support; in-place upgrade or re-platforming is likely required before migration",
+      "evidence": [
+        "reported OS: Ubuntu 18.04.6 LTS",
+        "EOL table version: 2026-09",
+        "Ubuntu 18.04 LTS standard support ended in 2023"
+      ],
+      "asset_id": "192-168-0-6"
+    },
+    {
+      "rule_id": "svc.insecure-protocol",
+      "severity": "high",
+      "message": "insecure cleartext service exposed; must be decommissioned or replaced as part of migration",
+      "evidence": [
+        "tcp/23 open (telnet)"
+      ],
+      "asset_id": "192-168-0-8"
+    },
+    {
+      "rule_id": "dep.hub",
+      "severity": "warning",
+      "message": "2 assets depend on this asset; migration requires coordinated planning and a verified blast radius",
+      "evidence": [
+        "host-00002 -> tcp/5432",
+        "host-00003 -> tcp/3306"
+      ],
+      "asset_id": "192-168-0-1"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.0 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-0"
+    },
+    {
+      "rule_id": "os.missing",
+      "severity": "info",
+      "message": "no operating system details discovered; OS-based migration checks cannot run for this asset",
+      "evidence": [
+        "asset 192.168.0.0 has no recorded OS"
+      ],
+      "asset_id": "192-168-0-0"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.1 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-1"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.2 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-2"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.3 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-3"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.4 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-4"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.5 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-5"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.6 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-6"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.7 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-7"
+    },
+    {
+      "rule_id": "os.missing",
+      "severity": "info",
+      "message": "no operating system details discovered; OS-based migration checks cannot run for this asset",
+      "evidence": [
+        "asset 192.168.0.7 has no recorded OS"
+      ],
+      "asset_id": "192-168-0-7"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.8 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-8"
+    },
+    {
+      "rule_id": "capacity.missing",
+      "severity": "info",
+      "message": "no CPU/RAM capacity recorded; right-sizing is impossible until host-level collection runs",
+      "evidence": [
+        "run `orbyn discover --target 192.168.0.9 --collector ssh` (or windows/winrm)"
+      ],
+      "asset_id": "192-168-0-9"
+    }
+  ],
+  "asset_scores": [
+    {
+      "asset_id": "192-168-0-0",
+      "score": 29,
+      "findings": 3
+    },
+    {
+      "asset_id": "192-168-0-2",
+      "score": 27,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-4",
+      "score": 27,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-6",
+      "score": 27,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-8",
+      "score": 27,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-1",
+      "score": 12,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-7",
+      "score": 4,
+      "findings": 2
+    },
+    {
+      "asset_id": "192-168-0-3",
+      "score": 2,
+      "findings": 1
+    },
+    {
+      "asset_id": "192-168-0-5",
+      "score": 2,
+      "findings": 1
+    },
+    {
+      "asset_id": "192-168-0-9",
+      "score": 2,
+      "findings": 1
+    }
+  ],
+  "application_groups": [
+    {
+      "id": "app-1",
+      "asset_ids": [
+        "192-168-0-1",
+        "192-168-0-2",
+        "192-168-0-3"
+      ],
+      "edge_count": 2
+    }
+  ]
+}

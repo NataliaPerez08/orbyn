@@ -1,0 +1,3 @@
+192-168-0-2,192-168-0-1,tcp,5432,manual,1,true
+192-168-0-3,192-168-0-1,tcp,3306,manual,1,true
+source_asset_id,target_asset_id,proto,port,evidence_source,confidence,confirmed
