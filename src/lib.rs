@@ -16,4 +16,5 @@ pub mod output;
 pub mod parsing;
 pub mod process;
 pub mod redact;
+pub mod sku;
 pub mod store;

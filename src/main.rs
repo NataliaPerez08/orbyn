@@ -398,6 +398,22 @@ enum Command {
         rules: bool,
     },
 
+    /// Match a right-sizing baseline (vCPU + RAM) to candidate instance
+    /// types (SKUs) for a provider.
+    SkuMatch {
+        /// Provider catalog to match against.
+        #[arg(long, value_enum)]
+        provider: orbyn::sku::Provider,
+        /// Required vCPU cores.
+        #[arg(long)]
+        cores: u32,
+        /// Required RAM in MiB.
+        #[arg(long)]
+        ram_mb: u64,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
@@ -1590,6 +1606,14 @@ async fn main() -> anyhow::Result<()> {
                 let report = run_assessment(&input);
                 print!("{}", orbyn::output::report(&report, format));
             }
+        }
+        Command::SkuMatch {
+            provider,
+            cores,
+            ram_mb,
+            format,
+        } => {
+            print!("{}", orbyn::sku::render(provider, cores, ram_mb, format));
         }
     }
 
@@ -2867,6 +2891,7 @@ mod tests {
             "huawei",
             "graph",
             "assess",
+            "sku-match",
             "completions",
         ];
         for name in expected {

@@ -231,10 +231,31 @@ reproduced, fixed at the shared root cause, and pinned with a regression test.
 
 ---
 
+## Cycle 10 — Cloud SKU matching (Phase 9)
+
+### Status — **done**
+- `src/sku/mod.rs`: curated catalogs (AWS EC2, Azure VM sizes, GCP machine
+  types) and a pure `match_skus(provider, cores, ram_mb)` — smallest fit
+  first, meeting both requirements.
+- CLI: `orbyn sku-match --provider aws|azure|gcp --cores <n> --ram-mb <m>
+  [--format table|json|csv]`. Kept separate from core right-sizing (the
+  baseline comes from the vendor-neutral `rs.*` rules and is passed
+  explicitly).
+- Unit tests (smallest fit, every candidate meets the requirement, no-fit,
+  catalog uniqueness) + `tests/e2e_sku.rs` (all three formats via the binary).
+- Docs: `docs/sku.md` + `cli.md` entry + site nav.
+- `ponytail:` cost comparison (live pricing) deferred — list prices rot;
+  add a pricing source behind the same `match_skus` shape when needed.
+
+**Acceptance:** a baseline produces a deterministic, smallest-fit candidate
+list per provider, decoupled from the assessment rules.
+
+---
+
 ## Explicitly deferred
 
-Phases 9 (cloud SKU matching) and 10 (migration waves) are non-goals until
-Cycles 1–8 are green. No new providers, web UI, or agents.
+Phase 10 (migration waves) is a non-goal until Cycles 1–10 are green. No new
+providers, web UI, or agents.
 
 ## Execution rules per change
 

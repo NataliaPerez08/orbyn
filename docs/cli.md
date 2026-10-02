@@ -86,6 +86,12 @@ orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
 | Command | Purpose |
 | --- | --- |
 | `orbyn assess [--format ...] [--rules]` | Migration assessment report / rule catalog |
+| `orbyn sku-match --provider aws\|azure\|gcp --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
+
+`sku-match` keeps provider catalogs separate from the assessment: feed it the
+baseline suggested by an `rs.*` finding (e.g. "4 cores, 6144 MB") to see which
+provider instance types satisfy it. The catalog is a curated subset; a baseline
+with no fit reports so rather than guessing. See [Cloud SKU matching](sku.md).
 
 ## Import and export
 

@@ -1206,7 +1206,7 @@ fn csv(field: &str) -> String {
     }
 }
 
-fn table(header: &[&str]) -> Table {
+pub(crate) fn table(header: &[&str]) -> Table {
     let mut table = Table::new();
     table
         .set_content_arrangement(ContentArrangement::Dynamic)
@@ -1228,7 +1228,7 @@ fn terminal_safe(s: &str) -> String {
 }
 
 /// Render a comfy-table, scrubbing terminal escapes from every cell.
-fn render_table(table: Table) -> String {
+pub(crate) fn render_table(table: Table) -> String {
     terminal_safe(&table.to_string())
 }
 
