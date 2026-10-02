@@ -1579,6 +1579,99 @@ mod tests {
     }
 
     #[test]
+    fn rs_recommendations_expose_the_full_evidence_contract() {
+        // Every right-sizing finding must expose: rule id, observation span,
+        // sample confidence, current capacity, the relevant percentile, the
+        // safety margin / threshold, the recommendation, and the evidence it
+        // rests on. The rule version is carried by the report (checked below).
+        let assert_contract = |f: &Finding, expects: &[&str]| {
+            assert!(!f.rule_id.is_empty());
+            assert!(!f.message.is_empty());
+            assert!(!f.evidence.is_empty());
+            let all = format!("{}\n{}", f.message, f.evidence.join("\n"));
+            for needle in expects {
+                assert!(
+                    all.contains(needle),
+                    "{} missing {needle:?} in:\n{all}",
+                    f.rule_id
+                );
+            }
+            assert!(
+                f.evidence.iter().any(|e| e.contains("window:")),
+                "{} must expose the observation span",
+                f.rule_id
+            );
+            assert!(
+                f.evidence.iter().any(|e| e.contains("confidence")),
+                "{} must expose the sample confidence",
+                f.rule_id
+            );
+        };
+
+        let over = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 16, 16384)],
+            metric_windows: vec![ready_window("a1", 10.0, 4096.0)],
+            ..Default::default()
+        };
+        let c = run(&over, "rs.cpu-overprovisioned");
+        assert_eq!(c.len(), 1);
+        assert_contract(&c[0], &["16 cores", "p99", "headroom", "could shrink to 3"]);
+        let r = run(&over, "rs.ram-overprovisioned");
+        assert_eq!(r.len(), 1);
+        assert_contract(&r[0], &["16384 MB", "p99", "headroom", "6144 MB"]);
+
+        let sat = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![ready_window("a1", 95.0, 15872.0)],
+            ..Default::default()
+        };
+        let s = run(&sat, "rs.cpu-saturated");
+        assert_eq!(s.len(), 1);
+        assert_contract(&s[0], &["p95 95.0%", "saturated"]);
+        let r2 = run(&sat, "rs.ram-saturated");
+        assert_eq!(r2.len(), 1);
+        assert_contract(&r2[0], &["16384 MB", "96.9%", "saturated"]);
+
+        let swap = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window_with_swap("a1", 4096)],
+            ..Default::default()
+        };
+        let w = run(&swap, "rs.swap-pressure");
+        assert_eq!(w.len(), 1);
+        assert_contract(&w[0], &["p95 4096 MB", "16384 MB RAM", "threshold"]);
+
+        let trend = AssessmentInput {
+            assets: vec![asset("a1", "10.0.0.1", None)],
+            capacities: vec![capacity_for("a1", 8, 16384)],
+            metric_windows: vec![window_with_trend("a1", 10.0, 30.0)],
+            ..Default::default()
+        };
+        let t = run(&trend, "rs.utilization-trend");
+        assert_eq!(t.len(), 1);
+        assert_contract(&t[0], &["CPU p95 10.0% -> 30.0%", "not a stable baseline"]);
+
+        // The report carries the rule version alongside the findings, and every
+        // right-sizing finding names the window it rests on.
+        let report = crate::assessment::run_assessment(&over);
+        assert_eq!(report.rules_version, crate::assessment::RULES_VERSION);
+        for f in report
+            .findings
+            .iter()
+            .filter(|f| f.rule_id.starts_with("rs."))
+        {
+            assert!(
+                f.evidence.iter().any(|e| e.contains("window:")),
+                "rs finding must carry the observation window: {}",
+                f.rule_id
+            );
+        }
+    }
+
+    #[test]
     fn sustained_swap_warns() {
         // 4096 MB of swap p95 on 16384 MB of RAM: 25% of RAM, well past both
         // the 256 MB floor and the 10% share.

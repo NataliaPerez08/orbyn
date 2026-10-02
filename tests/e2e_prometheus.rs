@@ -346,6 +346,34 @@ fn assess_right_sizes_a_week_of_utilization() {
         "{assess}"
     );
     assert!(assess.contains("0.8.0"), "{assess}");
+
+    // The JSON form exposes the rule version and every right-sizing finding
+    // carries its evidence array, so a recommendation never drops the data it
+    // rests on.
+    let json = run_ok(orbyn(&dir).args(["assess", "--format", "json"]));
+    let report: serde_json::Value = serde_json::from_str(&json).expect("assess json");
+    assert_eq!(report["rules_version"], "0.8.0");
+    let rs_findings: Vec<&serde_json::Value> = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter(|f| {
+            f["rule_id"]
+                .as_str()
+                .map(|id| id.starts_with("rs."))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(!rs_findings.is_empty(), "right-sizing findings present");
+    for f in rs_findings {
+        assert!(
+            f["evidence"]
+                .as_array()
+                .map(|e| !e.is_empty())
+                .unwrap_or(false),
+            "rs finding must carry evidence: {f}"
+        );
+    }
 }
 
 #[cfg(unix)]

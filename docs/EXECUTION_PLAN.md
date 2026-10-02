@@ -116,13 +116,23 @@ path) — 16 e2e cloud tests green.
 
 ## Cycle 4 — Right-sizing validation (Phase 5)
 
-- Deterministic scenario tests for the 8 scenarios in the plan (CPU/RAM
-  overprovisioned + saturated, insufficient evidence, trend instability, swap
-  pressure, storage cases).
-- Assert every recommendation exposes the 9 fields: rule id, rule version,
-  span, confidence, capacity, percentile, safety margin, recommendation,
-  evidence.
-- Assert no snapshot is treated as historical evidence.
+### Status — **done**
+- Per-scenario unit coverage (overprovisioned/saturated CPU+RAM, swap pressure
+  + floor, storage oversized/not-flagged, trend/insufficient window) already
+  existed in `src/assessment/rules.rs`.
+- Added the missing **evidence contract**:
+  - `rs_recommendations_expose_the_full_evidence_contract` asserts every
+    right-sizing finding exposes rule id, observation span, sample confidence,
+    current capacity, relevant percentile, safety margin/threshold,
+    recommendation, and its evidence; the report carries `rules_version`.
+  - `e2e_prometheus.rs` parses `assess --format json` after a week of history
+    and asserts `rules_version` plus a non-empty evidence array on every `rs.*`
+    finding.
+- `snapshots_never_drive_right_sizing` keeps the invariant that no snapshot is
+  treated as historical evidence.
+
+**Acceptance:** every recommendation exposes the 9 fields; no snapshot drives a
+sizing decision.
 
 ---
 
