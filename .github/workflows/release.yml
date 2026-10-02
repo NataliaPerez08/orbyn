@@ -93,7 +93,7 @@ jobs:
             fi
 
       - name: Release smoke test
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-latest' && hashFiles('scripts/release-smoke.sh') != ''
         shell: bash
         run: |
           bash scripts/release-smoke.sh \
