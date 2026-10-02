@@ -130,3 +130,37 @@ jobs:
 
       - name: Source policy
         run: cargo deny check sources
+
+  fuzz:
+    name: fuzz targets (build + smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      # Compiling every target catches API drift in the lib the fuzzers
+      # exercise (the fuzz workspace is excluded from the main workspace).
+      - name: Build fuzz targets
+        working-directory: fuzz
+        run: cargo +nightly fuzz build
+
+      # A short smoke per target keeps the harness honest without spending
+      # CI minutes; a libFuzzer crash fails the job.
+      - name: Fuzz smoke
+        working-directory: fuzz
+        run: |
+          for t in import parsing sanitize netbox_origin device_output structural nmap_xml; do
+            max=4096; [ "$t" = nmap_xml ] && max=16384; [ "$t" = device_output ] && max=8192
+            cargo +nightly fuzz run "$t" -- -runs=500 -max_len="$max"
+          done

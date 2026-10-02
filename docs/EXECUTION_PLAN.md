@@ -222,8 +222,11 @@ procedure for every integration.
   non-panicking `get` ranges (`src/http.rs`), with the fuzz input committed to
   the corpus and a unit regression test added.
 - All other targets and all subsequent runs are clean.
+- A `fuzz` job was added to `.github/workflows/ci.yml`: builds every target
+  (catches API drift in the fuzzed lib) and runs a 500-run smoke per target on
+  nightly, so the crash class stays caught in CI.
 
-**Acceptance:** fuzz harness runs in CI-adjacent fashion (locally); any crash is
+**Acceptance:** fuzz harness runs in CI; any crash is
 reproduced, fixed at the shared root cause, and pinned with a regression test.
 
 ---
