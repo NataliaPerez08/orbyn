@@ -414,6 +414,20 @@ enum Command {
         format: Format,
     },
 
+    /// Suggest ordered migration waves from the dependency graph, application
+    /// groups, criticality, complexity, external coupling and manual
+    /// constraints, with the reasoning exposed.
+    Waves {
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+        /// Force `<asset>=<wave>` (1-3); moves the whole application group.
+        #[arg(long = "pin", value_parser = parse_pin)]
+        pins: Vec<(String, usize)>,
+        /// Leave an asset out of planning.
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
@@ -1615,6 +1629,19 @@ async fn main() -> anyhow::Result<()> {
         } => {
             print!("{}", orbyn::sku::render(provider, cores, ram_mb, format));
         }
+        Command::Waves {
+            format,
+            pins,
+            excludes,
+        } => {
+            let store = open_store(&config).await?;
+            let input = assessment_input(store.as_ref()).await?;
+            let report = run_assessment(&input);
+            print!(
+                "{}",
+                orbyn::waves::render(&report, &input, &pins, &excludes, format)
+            );
+        }
     }
 
     Ok(())
@@ -1940,6 +1967,20 @@ async fn assessment_input(store: &dyn Store) -> Result<AssessmentInput> {
         connections,
         metric_windows,
     })
+}
+
+/// Parse `--pin <asset>=<wave>`.
+fn parse_pin(s: &str) -> Result<(String, usize), String> {
+    let (asset, wave) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected <asset>=<wave>, got {s:?}"))?;
+    let wave: usize = wave
+        .parse()
+        .map_err(|_| format!("wave must be a number 1-3, got {wave:?}"))?;
+    if !(1..=3).contains(&wave) {
+        return Err(format!("wave must be 1-3, got {wave}"));
+    }
+    Ok((asset.to_string(), wave))
 }
 
 /// Summarize every asset's recorded samples into utilization windows (one
@@ -2892,6 +2933,7 @@ mod tests {
             "graph",
             "assess",
             "sku-match",
+            "waves",
             "completions",
         ];
         for name in expected {

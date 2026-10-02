@@ -87,11 +87,16 @@ orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
 | --- | --- |
 | `orbyn assess [--format ...] [--rules]` | Migration assessment report / rule catalog |
 | `orbyn sku-match --provider aws\|azure\|gcp --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
+| `orbyn waves [--format ...] [--pin <asset>=<wave>]... [--exclude <asset>]...` | Ordered migration waves (low risk first) with exposed reasoning |
 
 `sku-match` keeps provider catalogs separate from the assessment: feed it the
 baseline suggested by an `rs.*` finding (e.g. "4 cores, 6144 MB") to see which
 provider instance types satisfy it. The catalog is a curated subset; a baseline
 with no fit reports so rather than guessing. See [Cloud SKU matching](sku.md).
+
+`waves` scores assets into three risk bands (low/medium/high), keeps application
+groups together, and honors manual `--pin`/`--exclude` constraints. See
+[Migration waves](waves.md).
 
 ## Import and export
 
@@ -147,6 +152,7 @@ orbyn assets
 orbyn asset 10.0.0.10
 orbyn capacity 10.0.0.10
 orbyn assess
+orbyn waves
 ```
 
 ## Operational limits and partial failures

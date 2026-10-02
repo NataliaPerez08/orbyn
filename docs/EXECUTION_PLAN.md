@@ -252,10 +252,37 @@ list per provider, decoupled from the assessment rules.
 
 ---
 
+## Cycle 11 — Migration waves (Phase 10)
+
+### Status — **done**
+- `src/waves/mod.rs`: pure planner over `AssessmentReport + AssessmentInput`.
+  Per-asset risk score 0-9 (environment, criticality, complexity band, external
+  coupling, unconfirmed deps) bucketed into three risk bands; application
+  groups take the riskiest member's score and move as one unit; every score
+  term is an exposed reason string.
+- CLI: `orbyn waves [--format table|json|csv] [--pin <asset>=<wave>]...
+  [--exclude <asset>]...` — pins move the whole group and are clamped to 1-3,
+  unknown pins warn instead of failing silently.
+- Refactor: extracted `assessment::external_endpoints` shared by the
+  `dep.external` rule and wave planning so the definition cannot drift.
+- Unit tests (banding, group cohesion, pin/exclude, conservative unknowns,
+  reasons exposed) + `tests/e2e_waves.rs` (all formats + constraints).
+- Docs: `docs/waves.md` + `cli.md` entry + site nav + README bullet.
+- `ponytail:` scheduling, dates and freeze windows are out of scope — waves are
+  an ordered suggestion, not a calendar.
+
+**Acceptance:** a deterministic, explainable wave plan per inventory, keeping
+applications together and honoring manual constraints.
+
+---
+
 ## Explicitly deferred
 
-Phase 10 (migration waves) is a non-goal until Cycles 1–10 are green. No new
-providers, web UI, or agents.
+Cycles 1–11 are complete. Remaining non-goals from the master plan's explicit
+list stay deferred: no web UI, REST API for UI convenience, Kubernetes
+discovery, additional cloud providers (Oracle, DigitalOcean, Hetzner, Linode,
+Alibaba, Nutanix, Hyper-V), embedded monitoring platform, custom agent, or
+eBPF runtime collector.
 
 ## Execution rules per change
 

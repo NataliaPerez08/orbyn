@@ -37,6 +37,7 @@ Everything is read-only, scoped to authorized targets, and runs locally against 
 - **Metrics & right-sizing**: snapshot utilization plus a week of history from Prometheus or Zabbix; avg/p95/p99/peak windows with sample confidence; explainable CPU/RAM/swap/storage sizing rules (`rs.*`) — snapshots alone never drive a sizing decision.
 - **Assessment**: versioned rule catalog with explainable findings (rule id, evidence, observation window), per-asset complexity scores and application groups.
 - **SKU matching**: `orbyn sku-match --provider aws|azure|gcp --cores <n> --ram-mb <m>` converts a right-sizing baseline into candidate instance types (smallest fit first), separate from the assessment rules.
+- **Migration waves**: `orbyn waves` orders the inventory into low/medium/high-risk waves with the reasoning exposed, keeps application groups together, and honors manual `--pin`/`--exclude` constraints.
 - **Integrations**: NetBox source-of-truth import; Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP and Azure adapters; Ansible and Terraform exports.
 - **Operations**: bounded concurrency, rate limiting, subprocess timeouts and output caps, import size caps, retries with backoff, audit trail, discovery job history, secret redaction, deterministic golden datasets and CI-enforced fuzzing.
 

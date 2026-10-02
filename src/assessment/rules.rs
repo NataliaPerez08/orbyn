@@ -7,8 +7,6 @@
 //! Severity weights drive the complexity score: Info 2, Warning 10, High 25
 //! (capped at 100 per asset).
 
-use std::collections::HashSet;
-use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use super::{AssessmentInput, AssetWindow, Finding, Severity};
@@ -416,28 +414,18 @@ fn rule_dep_hub(input: &AssessmentInput, findings: &mut Vec<Finding>) {
 }
 
 fn rule_dep_external(input: &AssessmentInput, findings: &mut Vec<Finding>) {
-    let known: HashSet<IpAddr> = input.assets.iter().map(|a| a.ip).collect();
+    let external = super::external_endpoints(&input.assets, &input.connections);
     for asset in &input.assets {
-        let mut external: Vec<String> = Vec::new();
-        for conn in input.connections.iter().filter(|c| c.asset_id == asset.id) {
-            if conn.remote_ip.is_loopback() || known.contains(&conn.remote_ip) {
-                continue;
-            }
-            let endpoint = format!("{}:{}", conn.remote_ip, conn.remote_port);
-            if !external.contains(&endpoint) {
-                external.push(endpoint);
-            }
-        }
-        if external.is_empty() {
+        let Some(endpoints) = external.get(&asset.id) else {
             continue;
-        }
+        };
         findings.push(Finding {
             rule_id: "dep.external".into(),
             severity: Severity::Warning,
             message: "active connections target endpoints outside the managed \
                       inventory; unknown coupling complicates migration planning"
                 .into(),
-            evidence: external,
+            evidence: endpoints.clone(),
             asset_id: Some(asset.id.clone()),
         });
     }

@@ -18,3 +18,4 @@ pub mod process;
 pub mod redact;
 pub mod sku;
 pub mod store;
+pub mod waves;

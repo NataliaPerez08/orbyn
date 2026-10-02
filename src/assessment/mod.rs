@@ -12,6 +12,8 @@ pub mod grouping;
 pub mod rules;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::IpAddr;
 
 use crate::domain::{Asset, Capacity, Connection, Dependency, Filesystem, Service};
 
@@ -67,6 +69,29 @@ impl std::fmt::Display for Complexity {
             Complexity::High => write!(f, "high"),
         }
     }
+}
+
+/// External endpoints (remote IPs outside the managed inventory) per asset.
+///
+/// Shared by the `dep.external` rule and wave planning so both use the same
+/// definition of "external": not loopback and not an asset IP.
+pub fn external_endpoints(
+    assets: &[Asset],
+    connections: &[Connection],
+) -> HashMap<String, Vec<String>> {
+    let known: std::collections::HashSet<IpAddr> = assets.iter().map(|a| a.ip).collect();
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for conn in connections {
+        if conn.remote_ip.is_loopback() || known.contains(&conn.remote_ip) {
+            continue;
+        }
+        let endpoint = format!("{}:{}", conn.remote_ip, conn.remote_port);
+        let list = out.entry(conn.asset_id.clone()).or_default();
+        if !list.contains(&endpoint) {
+            list.push(endpoint);
+        }
+    }
+    out
 }
 
 /// Everything the rule engine may look at: a full inventory snapshot.
@@ -177,7 +202,8 @@ pub fn run_assessment(input: &AssessmentInput) -> AssessmentReport {
     }
 }
 
-fn complexity_band(score: u8) -> Complexity {
+/// Band of a score on the 0-100 complexity scale.
+pub(crate) fn complexity_band(score: u8) -> Complexity {
     if score < 20 {
         Complexity::Low
     } else if score < 50 {
