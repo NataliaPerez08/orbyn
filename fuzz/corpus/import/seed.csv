@@ -1,0 +1,3 @@
+#assets
+id,ip,hostname,device_class,os_name,os_version,environment,owner,criticality,tags,first_seen,last_seen
+10-0-0-1,10.0.0.1,"=HYPERLINK(""http://evil"",""x"")",server,,,,,,"core,api",,

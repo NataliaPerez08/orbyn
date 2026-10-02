@@ -444,4 +444,38 @@ mod tests {
             .expect("empty run is valid XML");
         assert!(observations.is_empty());
     }
+
+    #[test]
+    fn xxe_does_not_expand_external_entities() {
+        let collector = NmapCollector::new();
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<nmaprun><host><address addr="&xxe;" addrtype="ipv4"/></host></nmaprun>"#;
+        if let Ok(obs) = collector.parse_xml(xml) {
+            assert!(obs.is_empty(), "XXE must not produce observations: {obs:?}");
+        }
+    }
+
+    #[test]
+    fn truncated_xml_is_an_error() {
+        let collector = NmapCollector::new();
+        assert!(collector
+            .parse_xml(r#"<nmaprun><host><address addr="10.0.0.1" addrtype="ipv4""#)
+            .is_err());
+    }
+
+    #[test]
+    fn hostname_attribute_newlines_do_not_panic() {
+        let collector = NmapCollector::new();
+        let xml = r#"<nmaprun><host>
+<address addr="10.0.0.10" addrtype="ipv4"/>
+<hostnames><hostname name="web&#10;evil" type="PTR"/></hostnames>
+</host></nmaprun>"#;
+        let observations = collector.parse_xml(xml).expect("well-formed XML");
+        let host = observations.iter().find_map(|o| match o {
+            Observation::Asset(a) => a.hostname.as_deref(),
+            _ => None,
+        });
+        assert_eq!(host, Some("web\nevil"));
+    }
 }

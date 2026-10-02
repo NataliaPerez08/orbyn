@@ -1,4 +1,4 @@
-.PHONY: build check test lint fmt fmt-check audit run clean
+.PHONY: build check test lint fmt fmt-check audit fuzz-smoke run clean
 
 build:
 	cargo build
@@ -20,6 +20,12 @@ fmt-check:
 
 audit:
 	cargo audit
+
+fuzz-smoke:
+	cargo +nightly fuzz run import -- -runs=1000 -max_len=4096
+	cargo +nightly fuzz run nmap_xml -- -runs=1000 -max_len=16384
+	cargo +nightly fuzz run parsing -- -runs=1000 -max_len=4096
+	cargo +nightly fuzz run sanitize -- -runs=1000 -max_len=4096
 
 run:
 	cargo run -- --help

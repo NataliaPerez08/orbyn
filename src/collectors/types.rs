@@ -227,6 +227,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_whitespace_suffixes_and_junk() {
+        for target in [
+            " 10.0.0.1",
+            "10.0.0.0/24\n",
+            "10.0.0.0/24;id",
+            "10.0.0.1/24 extra",
+        ] {
+            assert!(
+                validate_target(target).is_err(),
+                "target {target:?} must be rejected"
+            );
+        }
+        assert_eq!(
+            validate_target("10.0.0.0/024").unwrap(),
+            ScanTarget::Cidr("10.0.0.0/024".into()),
+            "leading zeros still parse as a prefix"
+        );
+    }
+
+    #[test]
     fn valid_targets_round_trip_ip_addr_type() {
         match validate_target("10.0.0.1").unwrap() {
             ScanTarget::Ip(IpAddr::V4(_)) => {}

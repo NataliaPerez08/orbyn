@@ -4,3 +4,5 @@
 *.db
 .env
 .venv/opencode.json
+/fuzz/target
+/fuzz/artifacts

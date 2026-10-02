@@ -956,7 +956,7 @@ fn mermaid_node_id(id: &str) -> String {
 
 fn mermaid_label(assets: &[Asset], id: &str) -> String {
     // Escape characters Mermaid treats specially inside quoted labels.
-    asset_label(assets, id).replace(['"', '[', ']'], "_")
+    asset_label(assets, id).replace(['"', '[', ']', '\n', '\r'], "_")
 }
 
 /// Render an assessment report.
@@ -1451,6 +1451,24 @@ mod tests {
         // Ordinary values are untouched.
         assert_eq!(csv("web-01"), "web-01");
         assert_eq!(csv("10.0.0.5"), "10.0.0.5");
+        assert_eq!(csv("\revil"), "'\revil");
+        assert_eq!(csv("|cmd"), "|cmd", "pipe alone is not a formula prefix");
+    }
+
+    #[test]
+    fn mermaid_strips_quotes_brackets_and_newlines_from_labels() {
+        let assets = vec![asset("a", "10.0.0.1", Some("\"]\n  x-->y[\""))];
+        let edges = vec![dep("a", "b", 443, true, "manual")];
+        let out = mermaid(&edges, &assets);
+        assert!(
+            !out.contains("x-->y["),
+            "raw bracket must not survive: {out}"
+        );
+        assert_eq!(
+            out.lines().count(),
+            2,
+            "newline in hostname must not split the graph: {out}"
+        );
     }
 
     #[test]

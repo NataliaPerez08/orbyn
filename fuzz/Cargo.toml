@@ -1,0 +1,44 @@
+[package]
+name = "orbyn-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+chrono = "0.4"
+libfuzzer-sys = "0.4"
+orbyn = { path = ".." }
+serde_json = "1"
+
+[[bin]]
+name = "import"
+path = "fuzz_targets/import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nmap_xml"
+path = "fuzz_targets/nmap_xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parsing"
+path = "fuzz_targets/parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sanitize"
+path = "fuzz_targets/sanitize.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

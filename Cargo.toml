@@ -30,3 +30,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 lto = true
+
+[workspace]
+members = ["."]
+exclude = ["fuzz"]

@@ -319,6 +319,17 @@ mod tests {
     }
 
     #[test]
+    fn escapes_nul_as_unicode() {
+        let assets = vec![Asset {
+            hostname: Some("pre\0post".into()),
+            ..asset("a", "10.0.0.1", None, &[])
+        }];
+        let out = render_terraform(&assets);
+        assert!(out.contains("pre\\u0000post"), "NUL must be escaped: {out}");
+        assert!(!out.contains("pre\0post"), "raw NUL leaked: {out}");
+    }
+
+    #[test]
     fn empty_inventory_still_valid_hcl() {
         let out = render_terraform(&[]);
         assert!(out.contains("orbyn_inventory = {"));

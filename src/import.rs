@@ -652,4 +652,34 @@ mod tests {
         let input = vec![0xff, 0xfe, 0x00];
         assert!(read_capped_within(&mut input.as_slice(), "import file x.json", 64).is_err());
     }
+
+    #[test]
+    fn sql_shaped_ip_is_kept_for_later_error() {
+        let csv = "10.0.0.1; DROP TABLE assets,web-01,server,prod,x,high,\n";
+        let inv = parse_import_csv(csv).expect("parse must not drop the row");
+        assert_eq!(inv.assets[0].ip, "10.0.0.1; DROP TABLE assets");
+    }
+
+    #[test]
+    fn sql_looking_hostname_is_kept() {
+        let csv = "10.0.0.1,' OR 1=1 --,server,prod,x,high,\n";
+        let inv = parse_import_csv(csv).expect("parse");
+        assert_eq!(inv.assets[0].hostname.as_deref(), Some("' OR 1=1 --"));
+    }
+
+    #[test]
+    fn json_type_confusion_is_rejected() {
+        assert!(serde_json::from_str::<ImportedInventory>(r#"{"assets":"nope"}"#).is_err());
+        assert!(serde_json::from_str::<ImportedAsset>(r#"{"ip":["10.0.0.1"]}"#).is_err());
+        assert!(serde_json::from_str::<ImportedInventory>(r#"{"assets":{}}"#).is_err());
+        let empty: Vec<ImportedAsset> = serde_json::from_str("[]").expect("empty array");
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn mixed_newlines_parse() {
+        let csv = "10.0.0.1,web-01,server,prod,x,high,\r\n10.0.0.2,db-01,server,prod,x,high,\n";
+        let inv = parse_import_csv(csv).expect("parse");
+        assert_eq!(inv.assets.len(), 2);
+    }
 }

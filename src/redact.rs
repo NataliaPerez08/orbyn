@@ -112,4 +112,15 @@ mod tests {
         let r = Redactor::new();
         assert_eq!(r.redact("nothing sensitive"), "nothing sensitive");
     }
+
+    #[test]
+    fn redacts_multiple_distinct_secrets() {
+        let mut r = Redactor::new();
+        r.add_value("token1234");
+        r.add_value("othersecret");
+        assert_eq!(
+            r.redact("token1234 then othersecret"),
+            "[REDACTED] then [REDACTED]"
+        );
+    }
 }

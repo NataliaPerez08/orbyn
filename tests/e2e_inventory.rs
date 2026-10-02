@@ -379,3 +379,58 @@ fn error_paths_report_clean_failures() {
     );
     assert!(out.contains("invalid JSON import"), "got: {out}");
 }
+
+#[cfg(unix)]
+#[test]
+fn hostile_import_values_are_sanitized_at_export_boundaries() {
+    let dir = TempDir::new("hostile-export");
+    let json = r#"{"assets":[
+      {"ip":"10.0.0.1","hostname":"=HYPERLINK(\"http://evil\",\"x\")","device_class":"server","environment":"prod","tags":["' OR 1=1 --"]},
+      {"ip":"10.0.0.2","hostname":"evil${local.pwned}\nnext","device_class":"server"}
+    ]}"#;
+    import_json(&dir, json);
+
+    let stored = run_ok(orbyn(&dir).args(["assets", "--format", "json"]));
+    assert!(
+        stored.contains("HYPERLINK"),
+        "JSON keeps raw data: {stored}"
+    );
+    assert!(
+        stored.contains("${local.pwned}"),
+        "JSON keeps raw data: {stored}"
+    );
+
+    let csv = run_ok(orbyn(&dir).args(["assets", "--format", "csv"]));
+    assert!(
+        csv.contains("'=HYPERLINK"),
+        "CSV formula must be neutralized: {csv}"
+    );
+    assert!(
+        csv.contains("' OR 1=1 --"),
+        "CSV data must remain present: {csv}"
+    );
+
+    let ansible = run_ok(orbyn(&dir).args(["export", "--format", "ansible"]));
+    assert!(
+        !ansible.contains("evil${local.pwned}"),
+        "raw interpolation leaked: {ansible}"
+    );
+    assert!(
+        !ansible.contains("evil\nnext"),
+        "raw newline leaked: {ansible}"
+    );
+
+    let terraform = run_ok(orbyn(&dir).args(["export", "--format", "terraform"]));
+    assert!(
+        terraform.contains("$${local.pwned}"),
+        "HCL interpolation must be escaped: {terraform}"
+    );
+    assert!(
+        !terraform.contains("evil${local.pwned}"),
+        "raw interpolation leaked: {terraform}"
+    );
+    assert!(
+        !terraform.contains("evil\nnext"),
+        "raw newline leaked: {terraform}"
+    );
+}

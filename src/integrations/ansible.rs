@@ -148,10 +148,16 @@ fn host_vars(asset: &Asset) -> String {
     vars.join(" ")
 }
 
-/// Group names and host names in inventories must not contain whitespace.
+/// Group names and host names are emitted as inventory tokens.
 fn sanitize_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -417,10 +423,25 @@ mod tests {
         let mut a = asset("a", "10.0.0.1", Some("\"weird"), None, None, &[]);
         a.environment = Some("back\\slash: x".into());
         let out = render_ansible_yaml(&[a], GroupBy::DeviceClass);
-        assert!(out.contains("\"\\\"weird\":\n"), "{out}");
+        assert!(out.contains("        \"-weird\":\n"), "{out}");
         assert!(
             out.contains("orbyn_environment: \"back\\\\slash: x\"\n"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn yaml_quotes_bool_like_and_comment_hostnames() {
+        let a = asset("a", "10.0.0.1", Some("true"), None, None, &[]);
+        let out = render_ansible_yaml(&[a], GroupBy::DeviceClass);
+        assert!(out.contains("\"true\":\n"), "{out}");
+
+        let a = asset("a", "10.0.0.1", Some("#comment"), None, None, &[]);
+        let out = render_ansible_yaml(&[a], GroupBy::DeviceClass);
+        assert!(out.contains("        \"-comment\":\n"), "{out}");
+        assert!(
+            !out.contains("#comment"),
+            "raw comment marker leaked: {out}"
         );
     }
 

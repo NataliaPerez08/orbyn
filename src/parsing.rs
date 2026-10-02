@@ -136,4 +136,35 @@ mod tests {
         );
         assert_eq!(parse_addr_port("not-an-endpoint"), None);
     }
+
+    #[test]
+    fn split_csv_line_tolerates_malformed_input() {
+        assert_eq!(split_csv_line(""), vec![""]);
+        assert_eq!(split_csv_line(","), vec!["", ""]);
+        assert_eq!(split_csv_line("a,"), vec!["a", ""]);
+        assert_eq!(split_csv_line("\"unclosed"), vec!["unclosed"]);
+        assert_eq!(split_csv_line("a\0b,c"), vec!["a\0b", "c"]);
+    }
+
+    #[test]
+    fn split_sections_ignores_invalid_markers() {
+        let sections = split_sections("###1\nnope\n###toolongmarker\nnope\n###os\nok\n");
+        assert_eq!(
+            sections.get("os").map(Vec::as_slice),
+            Some(["ok".to_string()].as_slice())
+        );
+        assert!(!sections.contains_key("1"));
+        assert!(!sections.contains_key("toolongmarker"));
+        assert!(split_sections("").is_empty());
+    }
+
+    #[test]
+    fn parse_addr_port_rejects_garbage() {
+        assert_eq!(parse_addr_port("10.0.0.1:65536"), None);
+        assert_eq!(parse_addr_port("10.0.0.1"), None);
+        assert_eq!(parse_addr_port("2001:db8::1]:443"), None);
+        assert_eq!(parse_addr_port("10.0.0.1:443 trailing"), None);
+        assert_eq!(normalize_ip(" 10.0.0.1"), Some("10.0.0.1".parse().unwrap()));
+        assert_eq!(normalize_ip("not-an-ip"), None);
+    }
 }
