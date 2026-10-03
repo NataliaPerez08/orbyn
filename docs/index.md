@@ -87,6 +87,7 @@ future option; the CLI is the interface that matters.
 | --- | --- |
 | [Installation](INSTALL.md) | Release binaries, requirements, shell completions |
 | [Quickstart](quickstart.md) | First scan to first assessment in a few commands |
+| [Test environment runs](demo.md) | Real captured output from a scripted test environment |
 | [CLI reference](cli.md) | Every subcommand and flag, in one table |
 | [Collectors](collectors/index.md) | How each discovery collector works and how to run it |
 | [Importers](importers/index.md) | NetBox, Prometheus, Zabbix, Proxmox and cloud importers |

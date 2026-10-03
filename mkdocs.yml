@@ -61,6 +61,7 @@ nav:
   - Getting started:
       - Installation: INSTALL.md
       - Quickstart: quickstart.md
+      - Test environment runs: demo.md
   - CLI reference: cli.md
   - Collectors:
       - Overview: collectors/index.md
