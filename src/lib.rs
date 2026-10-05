@@ -4,6 +4,7 @@
 //! through the command line; the library surface exists so capabilities can be
 //! embedded or reused by other tooling.
 
+pub mod applications;
 pub mod assessment;
 pub mod collectors;
 pub mod config;
