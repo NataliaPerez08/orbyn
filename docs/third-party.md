@@ -17,6 +17,10 @@ Copyright © 2026 Orbyn contributors.
 
 ## External tools Orbyn can invoke
 
+For the engineering review of these dependencies (KEEP / REPLACE /
+INVESTIGATE decisions and migration constraints) see
+[EXTERNAL_DEPENDENCIES.md](EXTERNAL_DEPENDENCIES.md).
+
 These tools are used only when **independently installed by the operator**.
 They are **not bundled** in Orbyn release artifacts and are not redistributed
 by this project. Users must obtain them separately and comply with their
