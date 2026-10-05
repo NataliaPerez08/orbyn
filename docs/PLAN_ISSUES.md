@@ -1,5 +1,11 @@
 # Plan de resolución de Known Issues
 
+> **Historical document — completed.** Todas las fases de este plan se
+> ejecutaron; el registro vivo de issues es [`KnowIssues.md`](KnowIssues.md)
+> (nótese que el #17, WinRM nativo, diferido aquí, se implementó después).
+> Documento conservado como historial; no describe el estado actual del
+> proyecto. Dirección actual: [ROADMAP.md](ROADMAP.md).
+
 Plan de trabajo para resolver los issues registrados en `KnowIssues.md`.
 Se agrupan por fases y cada item incluye el enfoque propuesto.
 

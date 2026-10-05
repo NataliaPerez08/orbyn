@@ -1,5 +1,11 @@
 # Orbyn — Agent Execution Plan
 
+> **Historical document — executed in full.** All ten phases of this plan
+> shipped across the v1.0.x series (SKU matching was Phase 9, migration waves
+> Phase 10). It is kept as a record and does not describe current project
+> state. Current direction: [ROADMAP.md](ROADMAP.md). Current design:
+> [ARCHITECTURE.md](ARCHITECTURE.md). Known issues: [KnowIssues.md](KnowIssues.md).
+
 ## Objective
 
 Consolidate Orbyn as a reliable, production-grade infrastructure discovery and migration assessment CLI.

@@ -1,5 +1,11 @@
 # Orbyn — Execution Plan
 
+> **Historical document — executed in full.** All cycles (1–11) completed;
+> their outcomes shipped in the v1.0.3 and v1.0.4 releases. It is kept as a
+> record and does not describe current project state. Current direction:
+> [ROADMAP.md](ROADMAP.md). Current design: [ARCHITECTURE.md](ARCHITECTURE.md).
+> Known issues: [KnowIssues.md](KnowIssues.md).
+
 Tactical plan derived from a review of `docs/ORBYN_AGENT_PLAN.md` against the
 current repository. Follows the plan's priority order. Each cycle is
 self-contained, testable in CI, and lands as an isolated commit.

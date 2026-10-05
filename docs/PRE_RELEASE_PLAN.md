@@ -1,8 +1,14 @@
 # Orbyn — Release Verification Plan
 
+> **Historical document — completed.** The target `v1.0.3` patch release
+> shipped, and the follow-up work shipped as `v1.0.4`. It is kept as a record
+> and does not describe current project state. Current direction:
+> [ROADMAP.md](ROADMAP.md). Release history: `RELEASE_NOTES_v1.0.*.md`.
+> Known issues: [KnowIssues.md](KnowIssues.md).
+
 > **Target:** `v1.0.3` patch release
 > **License:** Apache-2.0  
-> **Status:** Follow-up in progress
+> **Status:** completed — shipped as v1.0.3, follow-up as v1.0.4
 > **Primary goal:** Ship the minimum compliance and packaging fixes for the next patch release without expanding product scope.
 
 ---

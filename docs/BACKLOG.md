@@ -99,7 +99,8 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P2** Prometheus importer (`orbyn prometheus import`, idempotent re-imports).
 - [x] **P2** Zabbix importer.
 - [x] **P2** Right-sizing rules with evidence (catalog 0.8.0: `rs.*`).
-- [ ] **P3** Cloud SKU adapters.
+- [x] **P3** Cloud SKU matching (`orbyn sku-match`, static catalogs for
+  AWS/Azure/GCP; on-demand pricing deliberately not embedded).
 
 ## Security
 
