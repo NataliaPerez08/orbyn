@@ -1,5 +1,13 @@
 # Orbyn v1.1 — Consolidation, Architecture & Validation Plan
 
+> **Completed — all thirteen phases executed (V1.1-00 through V1.1-13).**
+> The Definition of Done below is checked off with evidence in
+> [`V1_1_FINAL_VERIFICATION.md`](V1_1_FINAL_VERIFICATION.md). This plan is
+> now a historical record; current direction lives in
+> [ROADMAP.md](ROADMAP.md). Remaining maintainer steps for the release
+> itself: push (final CI gate), tag, release notes — see the final
+> verification document.
+
 > **Purpose:** Consolidate the current Orbyn v1.0.x codebase before expanding the product surface with additional collectors, providers, or major features.
 
 ## 1. Context
@@ -765,24 +773,24 @@ These may be evaluated after consolidation.
 
 Orbyn v1.1 consolidation is complete when:
 
-- [ ] Current v1.0.x behavior has a documented baseline.
-- [ ] `main.rs` has been substantially decomposed.
-- [ ] CLI and application orchestration have clear module boundaries.
-- [ ] Existing tests remain green.
-- [ ] CI remains green on Linux and Windows.
-- [ ] PostgreSQL tests remain green.
-- [ ] Fuzz targets build and smoke successfully.
-- [ ] `cargo audit` passes.
-- [ ] `cargo deny` passes.
-- [ ] Architecture documentation describes current behavior.
-- [ ] Roadmap clearly distinguishes implemented and future capabilities.
-- [ ] Obsolete planning documents are archived, merged or marked historical.
-- [ ] External dependencies have documented keep/replace decisions.
-- [ ] Integration validation status is explicit.
-- [ ] Performance baselines are reproducible.
-- [ ] Installation has been tested from published artifacts.
-- [ ] Contributor documentation reflects the refactored architecture.
-- [ ] No unnecessary major feature has been introduced during consolidation.
+- [x] Current v1.0.x behavior has a documented baseline.
+- [x] `main.rs` has been substantially decomposed.
+- [x] CLI and application orchestration have clear module boundaries.
+- [x] Existing tests remain green.
+- [x] CI remains green on Linux and Windows.
+- [x] PostgreSQL tests remain green.
+- [x] Fuzz targets build and smoke successfully.
+- [x] `cargo audit` passes.
+- [x] `cargo deny` passes.
+- [x] Architecture documentation describes current behavior.
+- [x] Roadmap clearly distinguishes implemented and future capabilities.
+- [x] Obsolete planning documents are archived, merged or marked historical.
+- [x] External dependencies have documented keep/replace decisions.
+- [x] Integration validation status is explicit.
+- [x] Performance baselines are reproducible.
+- [x] Installation has been tested from published artifacts.
+- [x] Contributor documentation reflects the refactored architecture.
+- [x] No unnecessary major feature has been introduced during consolidation.
 
 ---
 
