@@ -121,6 +121,153 @@ orbyn proxmox import --url https://100.115.215.49:8006 --token - < ~/.proxmox-to
 The importer talks to the same `pve-api-daemon` verified above, so the
 connectivity results apply directly.
 
+## 7. Resource inventory with orbyn
+
+The path was then used for a real import. A dedicated read-only API token
+was created on the node over SSH, using the built-in `PVEAuditor` role —
+no privileges beyond reading cluster state:
+
+```bash
+ssh root@100.115.215.49
+pveum user add orbyn@pve --comment "orbyn importer"
+pveum acl modify / --users orbyn@pve --roles PVEAuditor
+pveum user token add orbyn@pve docs --privsep 0
+```
+
+The token secret (`orbyn@pve!docs=<value>`) is stored in `~/.proxmox-token`
+(`chmod 600`), never in the repository.
+
+### The import
+
+```bash
+orbyn --db proxmox.db proxmox import \
+  --url https://100.115.215.49:8006 --token - --no-verify < ~/.proxmox-token
+```
+
+```text
+WARNING: --no-verify disables TLS certificate verification.
+Only use this against a trusted self-signed Proxmox instance; connections can be silently intercepted.
+Imported 11 assets, 39 interfaces, 11 capacity rows, 17 filesystems from Proxmox (proxmox:orbyn@pve).
+Skipped 1 resource(s) that could not be represented.
+```
+
+One guest (`debian12`, vmid 102) was skipped: it has no reachable IP
+address — no guest agent and no IP in its configuration.
+
+### The inventory
+
+```bash
+orbyn --db proxmox.db assets --format csv
+```
+
+```text
+id,ip,hostname,device_class,os_name,os_version,environment,owner,criticality,tags,first_seen,last_seen
+10-0-0-21,10.0.0.21,pushlane-git,virtual-machine,Ubuntu 24.04.5 LTS,24.04,,,,"proxmox-node:proxmox,proxmox-vmid:204,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+10-0-0-22,10.0.0.22,pushlane-ci,virtual-machine,Ubuntu 24.04.5 LTS,24.04,,,,"proxmox-node:proxmox,proxmox-vmid:202,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+10-0-0-23,10.0.0.23,pushlane-app,virtual-machine,Ubuntu 24.04.5 LTS,24.04,,,,"proxmox-node:proxmox,proxmox-vmid:203,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+10-0-0-50,10.0.0.50,noble-template,virtual-machine,Linux,,,,,"proxmox-node:proxmox,proxmox-vmid:9000,proxmox-status:stopped,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-10,172.20.0.10,proxmox,hypervisor,,,,,,"proxmox-node:proxmox,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-16,172.20.0.16,loki-ct,container,debian,,,,,"proxmox-node:proxmox,proxmox-vmid:111,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-20,172.20.0.20,monitoring,container,debian,,,,,"proxmox-node:proxmox,proxmox-vmid:200,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-21,172.20.0.21,cloudflared,container,debian,,,,,"proxmox-node:proxmox,proxmox-vmid:201,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-22,172.20.0.22,overleaf,container,ubuntu,,,,,"proxmox-node:proxmox,proxmox-vmid:110,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-26,172.20.0.26,development,container,debian,,,,,"proxmox-node:proxmox,proxmox-vmid:100,proxmox-status:stopped,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+172-20-0-30,172.20.0.30,nextcloud,container,ubuntu,,,,,"proxmox-node:proxmox,proxmox-vmid:112,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve",2026-10-05T22:11:44.348946335+00:00,2026-10-05T22:11:44.348946335+00:00
+```
+
+That is **1 hypervisor**, **4 virtual machines** (3 running, plus the
+stopped `noble-template`) and **6 LXC containers** (5 running, plus the
+stopped `development`). The two networks are visible in the addressing:
+VMs live on `10.0.0.0/24`, containers on `172.20.0.0/24`.
+
+### Node capacity and datastores
+
+```bash
+orbyn --db proxmox.db asset 172.20.0.10
+```
+
+```text
+Asset     : 172-20-0-10
+IP        : 172.20.0.10
+Hostname  : proxmox
+Class     : hypervisor
+Tags      : proxmox-node:proxmox,cloud:proxmox,cloud-account:orbyn@pve
+
+CPU model  : -
+Sockets    : -
+Cores      : 4
+RAM        : 15862 MB
+Hypervisor : - (bare metal or undetected)
+Collected  : 2026-10-05 22:11:44
+
+┌────────┬───────────┬─────────┬────────┬────────┬────────┬──────┐
+│ Device ┆ Mount     ┆ Type    ┆ Size   ┆ Used   ┆ Free   ┆ Use% │
+╞════════╪═══════════╪════════╪════════╪════════╪════════╪══════╡
+│ -      ┆ local     ┆ dir     ┆ 93.9G  ┆ 58.4G  ┆ 30.7G  ┆ 62%  │
+├╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ -      ┆ local-lvm ┆ lvmthin ┆ 347.9G ┆ 124.2G ┆ 223.7G ┆ 36%  │
+└────────┴──────────┴─────────┴────────┴────────┴────────┴──────┘
+```
+
+### A guest, in detail
+
+`orbyn --db proxmox.db asset 10.0.0.22` shows what the importer captures
+per guest — here the `pushlane-ci` VM, including the Docker bridges its
+guest agent reports:
+
+```text
+Asset     : 10-0-0-22
+IP        : 10.0.0.22
+Hostname  : pushlane-ci
+Class     : virtual-machine
+OS        : Ubuntu 24.04.5 LTS 24.04
+Tags      : proxmox-node:proxmox,proxmox-vmid:202,proxmox-status:running,cloud:proxmox,cloud-account:orbyn@pve
+
+┌─────────────────┬───────────────────┬───────────────────────────┬────────┬─────┬───────┐
+│ Name            ┆ MAC               ┆ IP                        ┆ Vendor ┆ MTU ┆ State │
+╞═════════════════╪═══════════════════╪═══════════════════════════╪════════╪═════╪═══════╡
+│ br-3aa71f70d989 ┆ 3a:73:9d:67:29:0b ┆ 172.18.0.1                ┆ -      ┆ -   ┆ up    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ br-5b9507338350 ┆ 96:8e:61:95:0e:b0 ┆ 172.19.0.1                ┆ -      ┆ -   ┆ up    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ docker0         ┆ d2:13:48:ad:5a:a6 ┆ 172.17.0.1                ┆ -      ┆ -   ┆ up    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ eth0            ┆ bc:24:11:e8:b4:73 ┆ 10.0.0.22                 ┆ -      ┆ -   ┆ up    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ veth011b320     ┆ a6:32:8d:28:55:0c ┆ fe80::a432:8dff:fe28:550c ┆ -      ┆ -   ┆ up    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ veth7ba096b     ┆ 6e:db:2b:7f:fa5d ┆ fe80::6cdb:2bff:fe7f:fa5d ┆ -      ┆ -   ┆ up    │
+└─────────────────┴───────────────────┴───────────────────────────┴────────┴─────┴───────┘
+CPU model  : -
+Sockets    : 1
+Cores      : 4
+RAM        : 4096 MB
+Hypervisor : kvm
+Collected  : 2026-10-05 22:11:44
+
+┌────────────┬───────────┬──────┬────────┬─────────┬────────┬──────┐
+│ Device     ┆ Mount     ┆ Type ┆ Size   ┆ Used    ┆ Free   ┆ Use% │
+╞════════════╪═══════════╪══════╪════════╪═════════╪════════╪══════╡
+│ /dev/sda1  ┆ /         ┆ ext4 ┆ 37.7G  ┆ 8024.6M ┆ 29.9G  ┆ 21%  │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ /dev/sda16 ┆ /boot     ┆ ext4 ┆ 818.7M ┆ 116.6M  ┆ 702.2M ┆ 14%  │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ /dev/sda15 ┆ /boot/efi ┆ vfat ┆ 104.3M ┆ 6249K   ┆ 98.2M  ┆ 6%   │
+└────────────┴──────────┴──────┴────────┴─────────┴────────┴──────┘
+```
+
+Containers import the same way — e.g. `nextcloud` (vmid 112) lands as a
+`container` asset at `172.20.0.30` with hypervisor `lxc` and its
+`local-lvm:vm-112-disk-0` root filesystem.
+
+### Dependencies
+
+`orbyn --db proxmox.db graph` reports no dependencies yet: a cloud import
+inventories resources but does not observe live connections. To map who
+talks to whom, run host-level collection on the guests
+(see [SSH collector](collectors/ssh.md)) or add edges manually with
+`orbyn deps add`.
+
 ## Security notes
 
 - The PVE web UI and API (`tcp/8006`) are **not** exposed to the public
