@@ -18,8 +18,9 @@ use sqlx::{PgPool, Row};
 
 use crate::domain::Observation;
 use crate::store::rows::{
-    status_as_str, AssetRow, AuditEventRow, CapacityRow, ConnectionRow, DependencyRow,
-    FilesystemRow, InterfaceRow, JobRow, MetricSampleRow, RunningServiceRow, ServiceRow,
+    status_as_str, ApplicationMemberRow, ApplicationRow, AssetRow, AuditEventRow, CapacityRow,
+    ConnectionRow, DependencyEvidenceRow, DependencyRow, FilesystemRow, InterfaceRow, JobRow,
+    MetricSampleRow, RunningServiceRow, ServiceRow,
 };
 use crate::store::traits::{AnnotationField, AssetAnnotations};
 
@@ -318,6 +319,9 @@ impl crate::store::traits::Store for PostgresStore {
                 Observation::Connection(conn) => {
                     let remote_ip = conn.remote_ip.to_string();
                     let now = chrono::Utc::now().to_rfc3339();
+                    // Re-observing an endpoint increments its counter: the
+                    // number of observations is application inference
+                    // evidence (repeated communication).
                     sqlx::query(
                         "INSERT INTO asset_connections \
                            (asset_id, proto, local_ip, local_port, remote_ip, remote_port, process, first_seen, last_seen) \
@@ -326,7 +330,8 @@ impl crate::store::traits::Store for PostgresStore {
                            local_ip = COALESCE(EXCLUDED.local_ip, asset_connections.local_ip), \
                            local_port = COALESCE(EXCLUDED.local_port, asset_connections.local_port), \
                            process = COALESCE(EXCLUDED.process, asset_connections.process), \
-                           last_seen = EXCLUDED.last_seen",
+                           last_seen = EXCLUDED.last_seen, \
+                           observation_count = asset_connections.observation_count + 1",
                     )
                     .bind(&conn.asset_id)
                     .bind(&conn.proto)
@@ -693,6 +698,252 @@ impl crate::store::traits::Store for PostgresStore {
         .await
         .context("removing dependency")?;
         Ok(result.rows_affected() as usize)
+    }
+
+    async fn create_application(&self, application: crate::domain::Application) -> Result<()> {
+        let result = sqlx::query(
+            "INSERT INTO applications (id, name, source, confidence, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&application.id)
+        .bind(&application.name)
+        .bind(application.source.as_str())
+        .bind(application.confidence)
+        .bind(application.created_at.to_rfc3339())
+        .bind(application.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await;
+        if let Err(e) = result {
+            // A name collision is the only expected violation; surface it
+            // as a clean error instead of a raw constraint failure.
+            if self.get_application(&application.name).await?.is_some() {
+                anyhow::bail!("application '{}' already exists", application.name);
+            }
+            return Err(e).context("creating application");
+        }
+        Ok(())
+    }
+
+    async fn update_application_confidence(&self, id: &str, confidence: f32) -> Result<()> {
+        // Manual precedence: only inferred applications are refreshed by
+        // discovery; the literal is built from the canonical value.
+        let sql = format!(
+            "UPDATE applications SET confidence = $2, updated_at = $3 \
+             WHERE id = $1 AND source = '{}'",
+            crate::domain::AppSource::Inferred.as_str()
+        );
+        sqlx::query(&sql)
+            .bind(id)
+            .bind(confidence)
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .context("updating application confidence")?;
+        Ok(())
+    }
+
+    async fn delete_application(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("beginning transaction")?;
+        sqlx::query("DELETE FROM application_members WHERE application_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("deleting application members")?;
+        sqlx::query("DELETE FROM applications WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("deleting application")?;
+        tx.commit().await.context("committing transaction")
+    }
+
+    async fn list_applications(&self) -> Result<Vec<crate::domain::Application>> {
+        let rows = sqlx::query_as::<_, ApplicationRow>(
+            "SELECT id, name, source, confidence, created_at, updated_at \
+             FROM applications ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing applications")?;
+        Ok(rows
+            .into_iter()
+            .map(ApplicationRow::into_application)
+            .collect())
+    }
+
+    async fn get_application(
+        &self,
+        id_or_name: &str,
+    ) -> Result<Option<crate::domain::Application>> {
+        let by_id = sqlx::query_as::<_, ApplicationRow>(
+            "SELECT id, name, source, confidence, created_at, updated_at \
+             FROM applications WHERE id = $1",
+        )
+        .bind(id_or_name)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching application")?;
+        if let Some(row) = by_id {
+            return Ok(Some(row.into_application()));
+        }
+        let by_name = sqlx::query_as::<_, ApplicationRow>(
+            "SELECT id, name, source, confidence, created_at, updated_at \
+             FROM applications WHERE LOWER(name) = LOWER($1) LIMIT 1",
+        )
+        .bind(id_or_name)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching application by name")?;
+        Ok(by_name.map(ApplicationRow::into_application))
+    }
+
+    async fn list_application_members(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<crate::domain::ApplicationMember>> {
+        let rows = sqlx::query_as::<_, ApplicationMemberRow>(
+            "SELECT application_id, asset_id, source, confidence, evidence, is_excluded \
+             FROM application_members WHERE application_id = $1 ORDER BY asset_id",
+        )
+        .bind(application_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing application members")?;
+        Ok(rows
+            .into_iter()
+            .map(ApplicationMemberRow::into_member)
+            .collect())
+    }
+
+    async fn add_application_member(&self, member: crate::domain::ApplicationMember) -> Result<()> {
+        // Manual precedence: an existing manual row is never overwritten;
+        // an inferred or tombstone row is upgraded to the new values.
+        let sql = format!(
+            "INSERT INTO application_members \
+               (application_id, asset_id, source, confidence, evidence, is_excluded) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT(application_id, asset_id) DO UPDATE SET \
+               source = EXCLUDED.source, \
+               confidence = EXCLUDED.confidence, \
+               evidence = EXCLUDED.evidence, \
+               is_excluded = EXCLUDED.is_excluded \
+             WHERE application_members.source != '{}'",
+            crate::domain::AppSource::Manual.as_str()
+        );
+        sqlx::query(&sql)
+            .bind(&member.application_id)
+            .bind(&member.asset_id)
+            .bind(member.source.as_str())
+            .bind(member.confidence)
+            .bind(serde_json::to_string(&member.evidence)?)
+            .bind(member.is_excluded)
+            .execute(&self.pool)
+            .await
+            .context("adding application member")?;
+        Ok(())
+    }
+
+    async fn remove_application_member(
+        &self,
+        application_id: &str,
+        asset_id: &str,
+    ) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT source FROM application_members \
+             WHERE application_id = $1 AND asset_id = $2",
+        )
+        .bind(application_id)
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching application member")?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let source: String = row.try_get("source").context("reading member source")?;
+        if source == crate::domain::AppSource::Manual.as_str() {
+            sqlx::query(
+                "DELETE FROM application_members \
+                 WHERE application_id = $1 AND asset_id = $2",
+            )
+            .bind(application_id)
+            .bind(asset_id)
+            .execute(&self.pool)
+            .await
+            .context("removing application member")?;
+        } else {
+            // Inferred member: keep a tombstone so re-discovery cannot
+            // re-add the asset the user explicitly removed.
+            sqlx::query(
+                "UPDATE application_members SET is_excluded = TRUE \
+                 WHERE application_id = $1 AND asset_id = $2",
+            )
+            .bind(application_id)
+            .bind(asset_id)
+            .execute(&self.pool)
+            .await
+            .context("excluding application member")?;
+        }
+        Ok(true)
+    }
+
+    async fn replace_inferred_members(
+        &self,
+        application_id: &str,
+        members: Vec<crate::domain::ApplicationMember>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("beginning transaction")?;
+        // Only the inferred, non-excluded slice is refreshed: manual rows
+        // and exclusion tombstones survive re-discovery.
+        let delete_sql = format!(
+            "DELETE FROM application_members \
+             WHERE application_id = $1 AND source = '{}' AND is_excluded = FALSE",
+            crate::domain::AppSource::Inferred.as_str()
+        );
+        sqlx::query(&delete_sql)
+            .bind(application_id)
+            .execute(&mut *tx)
+            .await
+            .context("replacing inferred application members")?;
+        for member in members {
+            // DO NOTHING keeps manual rows and tombstones that the caller
+            // could not have filtered (e.g. created concurrently).
+            sqlx::query(
+                "INSERT INTO application_members \
+                   (application_id, asset_id, source, confidence, evidence, is_excluded) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (application_id, asset_id) DO NOTHING",
+            )
+            .bind(application_id)
+            .bind(&member.asset_id)
+            .bind(crate::domain::AppSource::Inferred.as_str())
+            .bind(member.confidence)
+            .bind(serde_json::to_string(&member.evidence)?)
+            .bind(false)
+            .execute(&mut *tx)
+            .await
+            .context("inserting inferred application member")?;
+        }
+        tx.commit().await.context("committing transaction")
+    }
+
+    async fn list_dependency_evidence(&self) -> Result<Vec<crate::domain::DependencyEvidence>> {
+        let rows = sqlx::query_as::<_, DependencyEvidenceRow>(
+            "SELECT c.asset_id AS source_asset_id, a.id AS target_asset_id, \
+                    c.proto, c.remote_port AS port, SUM(c.observation_count) AS observations \
+             FROM asset_connections c \
+             JOIN assets a ON a.ip = c.remote_ip \
+             WHERE c.asset_id != a.id \
+             GROUP BY c.asset_id, a.id, c.proto, c.remote_port \
+             ORDER BY c.asset_id, a.id, c.proto, c.remote_port",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing dependency evidence")?;
+        Ok(rows
+            .into_iter()
+            .map(DependencyEvidenceRow::into_evidence)
+            .collect())
     }
 
     async fn list_running_services(

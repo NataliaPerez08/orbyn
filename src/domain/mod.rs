@@ -242,6 +242,95 @@ pub struct Connection {
     pub process: Option<String>,
 }
 
+/// Where an application definition came from.
+///
+/// The stored `source` strings are the single point of truth for the
+/// values Orbyn itself produces, mirroring [`EvidenceKind`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AppSource {
+    /// Reconstructed from dependency evidence by the inference engine.
+    Inferred,
+    /// Created or curated by hand via `orbyn applications`.
+    Manual,
+    /// A value Orbyn does not produce itself.
+    Imported,
+}
+
+impl AppSource {
+    /// The canonical stored string for this source.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inferred => "inferred",
+            Self::Manual => "manual",
+            Self::Imported => "imported",
+        }
+    }
+
+    /// Classify a stored `source` value.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "inferred" => Self::Inferred,
+            "manual" => Self::Manual,
+            _ => Self::Imported,
+        }
+    }
+}
+
+/// A logical application reconstructed from inventory and dependency
+/// evidence (v1.1): a set of assets that belong together and should be
+/// assessed and migrated together.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Application {
+    pub id: String,
+    pub name: String,
+    pub source: AppSource,
+    /// 0.0-1.0; how much evidence backs the grouping. 1.0 for manual
+    /// applications.
+    pub confidence: f32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One asset's membership in an application.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApplicationMember {
+    pub application_id: String,
+    pub asset_id: String,
+    pub source: AppSource,
+    /// 0.0-1.0; how much evidence ties this asset to the application.
+    pub confidence: f32,
+    /// The evidence records behind the confidence score.
+    pub evidence: Vec<ApplicationEvidence>,
+    /// Manual override tombstone: the asset was explicitly removed from
+    /// this application and inference must not re-add it.
+    pub is_excluded: bool,
+}
+
+/// A single piece of evidence behind an application membership.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApplicationEvidence {
+    /// Signal kind, e.g. `runtime-connection`, `matching-owner`.
+    pub source: String,
+    /// Weight of this signal in the inference model (0.0-1.0).
+    pub weight: f32,
+    /// Human-readable description of what was observed.
+    pub description: String,
+}
+
+/// Aggregated connection evidence between two assets: how often the
+/// source asset was observed talking to the target asset. Derived from
+/// the `asset_connections` upsert counters joined against the inventory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DependencyEvidence {
+    pub source_asset_id: String,
+    pub target_asset_id: String,
+    pub proto: String,
+    pub port: u16,
+    /// Times the connection was observed (upsert counter).
+    pub observations: u32,
+}
+
 /// Hardware/virtual machine allocation for a single asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capacity {
@@ -428,6 +517,14 @@ mod tests {
             assert_eq!(EvidenceKind::parse(kind.as_str()), kind);
         }
         assert_eq!(EvidenceKind::parse("something-else"), EvidenceKind::Other);
+    }
+
+    #[test]
+    fn app_source_round_trips_canonical_values() {
+        for source in [AppSource::Inferred, AppSource::Manual] {
+            assert_eq!(AppSource::parse(source.as_str()), source);
+        }
+        assert_eq!(AppSource::parse("something-else"), AppSource::Imported);
     }
 
     #[test]

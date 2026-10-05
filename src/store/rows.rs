@@ -7,8 +7,9 @@
 use sqlx::FromRow;
 
 use crate::domain::{
-    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
-    Interface, JobStatus, MetricSample, RunningService, Service,
+    AppSource, Application, ApplicationEvidence, ApplicationMember, Asset, AuditEvent, Capacity,
+    Connection, Criticality, Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface,
+    JobStatus, MetricSample, RunningService, Service,
 };
 
 #[derive(Debug, FromRow)]
@@ -254,6 +255,74 @@ impl DependencyRow {
             evidence_source: self.evidence_source,
             confidence: self.confidence as f32,
             confirmed: self.confirmed,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct DependencyEvidenceRow {
+    pub source_asset_id: String,
+    pub target_asset_id: String,
+    pub proto: String,
+    pub port: i64,
+    pub observations: i64,
+}
+
+impl DependencyEvidenceRow {
+    pub fn into_evidence(self) -> DependencyEvidence {
+        DependencyEvidence {
+            source_asset_id: self.source_asset_id,
+            target_asset_id: self.target_asset_id,
+            proto: self.proto,
+            port: self.port as u16,
+            observations: self.observations.max(0) as u32,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct ApplicationRow {
+    pub id: String,
+    pub name: String,
+    pub source: String,
+    pub confidence: f64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl ApplicationRow {
+    pub fn into_application(self) -> Application {
+        Application {
+            id: self.id,
+            name: self.name,
+            source: AppSource::parse(&self.source),
+            confidence: self.confidence as f32,
+            created_at: parse_ts(&self.created_at),
+            updated_at: parse_ts(&self.updated_at),
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct ApplicationMemberRow {
+    pub application_id: String,
+    pub asset_id: String,
+    pub source: String,
+    pub confidence: f64,
+    pub evidence: String,
+    pub is_excluded: bool,
+}
+
+impl ApplicationMemberRow {
+    pub fn into_member(self) -> ApplicationMember {
+        ApplicationMember {
+            application_id: self.application_id,
+            asset_id: self.asset_id,
+            source: AppSource::parse(&self.source),
+            confidence: self.confidence as f32,
+            evidence: serde_json::from_str::<Vec<ApplicationEvidence>>(&self.evidence)
+                .unwrap_or_default(),
+            is_excluded: self.is_excluded,
         }
     }
 }

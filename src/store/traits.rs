@@ -2,8 +2,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::domain::{
-    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, Filesystem,
-    Interface, JobOutcome, JobStatus, MetricSample, Observation, RunningService, Service,
+    Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection, Criticality,
+    Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface, JobOutcome, JobStatus,
+    MetricSample, Observation, RunningService, Service,
 };
 
 /// An annotation field that can be cleared with `orbyn annotate --unset`.
@@ -111,6 +112,55 @@ pub trait Store: Send + Sync {
         proto: Option<&str>,
         port: Option<u16>,
     ) -> Result<usize>;
+
+    // Applications (v1.1): persisted logical applications with per-member
+    // confidence and evidence. Manual rows always win over inference.
+
+    /// Insert a new application. Fails when the name is already taken.
+    async fn create_application(&self, application: Application) -> Result<()>;
+
+    /// Refresh an inferred application's confidence. Manual/imported
+    /// applications are never touched (manual precedence).
+    async fn update_application_confidence(&self, id: &str, confidence: f32) -> Result<()>;
+
+    /// Delete an application and its member rows.
+    async fn delete_application(&self, id: &str) -> Result<()>;
+
+    async fn list_applications(&self) -> Result<Vec<Application>>;
+
+    /// Look up an application by id or (case-insensitive) name.
+    async fn get_application(&self, id_or_name: &str) -> Result<Option<Application>>;
+
+    /// All member rows of an application, including manual exclusion
+    /// tombstones (`is_excluded`); callers filter what they show.
+    async fn list_application_members(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<ApplicationMember>>;
+
+    /// Add or upgrade a member. A manual add on an existing inferred
+    /// member upgrades it to manual and clears any exclusion tombstone.
+    async fn add_application_member(&self, member: ApplicationMember) -> Result<()>;
+
+    /// Remove a member. An inferred member becomes an exclusion tombstone
+    /// so a later re-discover cannot re-add it; a manual member row is
+    /// deleted. Returns true when a row existed.
+    async fn remove_application_member(&self, application_id: &str, asset_id: &str)
+        -> Result<bool>;
+
+    /// Refresh the inferred members of an application in one transaction:
+    /// inferred, non-excluded rows are replaced; manual and tombstone
+    /// rows are preserved.
+    async fn replace_inferred_members(
+        &self,
+        application_id: &str,
+        members: Vec<ApplicationMember>,
+    ) -> Result<()>;
+
+    /// Aggregated per-edge connection observation counts, joined against
+    /// the inventory (only connections whose remote IP matches a known
+    /// asset). Feeds the application inference engine.
+    async fn list_dependency_evidence(&self) -> Result<Vec<DependencyEvidence>>;
 
     /// Apply inventory annotation edits (environment/owner/criticality/tags).
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()>;

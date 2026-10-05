@@ -59,6 +59,8 @@ async fn migrations_create_all_expected_tables() {
         "asset_running_services",
         "asset_connections",
         "audit_events",
+        "applications",
+        "application_members",
         "_sqlx_migrations",
     ] {
         assert!(
@@ -82,6 +84,7 @@ async fn migrations_create_expected_indexes() {
         "idx_dependencies_source",
         "idx_dependencies_target",
         "idx_audit_events_started",
+        "idx_application_members_asset",
     ] {
         assert!(
             indexes.iter().any(|i| i == expected),
@@ -159,11 +162,18 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .fetch_one(upgraded.pool())
         .await
         .expect("count applied migrations");
-    assert_eq!(migration_count, 9, "all current migrations must be applied");
+    assert_eq!(
+        migration_count, 10,
+        "all current migrations must be applied"
+    );
     assert!(table_names(&upgraded)
         .await
         .iter()
         .any(|name| name == "asset_connections"));
+    assert!(table_names(&upgraded)
+        .await
+        .iter()
+        .any(|name| name == "applications"));
     // The Phase 2 virtualization column must exist on the upgraded schema.
     let hypervisor: Option<String> =
         sqlx::query_scalar("SELECT hypervisor FROM asset_capacity LIMIT 1")
@@ -187,6 +197,199 @@ async fn foreign_keys_are_enforced() {
         )))
         .await;
     assert!(result.is_err(), "FK violation must be rejected");
+}
+
+#[tokio::test]
+async fn applications_support_manual_precedence_and_tombstones() {
+    use orbyn::domain::{AppSource, Application, ApplicationMember, Connection};
+
+    let store = open("schema-applications").await;
+    let now = chrono::Utc::now();
+
+    let asset = |id: &str, ip: &str| Asset {
+        id: id.into(),
+        ip: ip.parse().unwrap(),
+        hostname: None,
+        device_class: None,
+        os_name: None,
+        os_version: None,
+        sys_descr: None,
+        environment: None,
+        owner: None,
+        criticality: None,
+        tags: Vec::new(),
+        first_seen: now,
+        last_seen: now,
+    };
+    store
+        .store_observation(Observation::Asset(asset("app-asset-1", "10.0.0.61")))
+        .await
+        .expect("store asset 1");
+    store
+        .store_observation(Observation::Asset(asset("app-asset-2", "10.0.0.62")))
+        .await
+        .expect("store asset 2");
+
+    // Re-observing the same connection increments the observation counter
+    // and the aggregate joins against the inventory.
+    let conn = Connection {
+        asset_id: "app-asset-1".into(),
+        proto: "tcp".into(),
+        local_ip: None,
+        local_port: None,
+        remote_ip: "10.0.0.62".parse().unwrap(),
+        remote_port: 5432,
+        process: None,
+    };
+    store
+        .store_observation(Observation::Connection(conn.clone()))
+        .await
+        .expect("connection 1");
+    store
+        .store_observation(Observation::Connection(conn))
+        .await
+        .expect("connection 2");
+    let evidence = store.list_dependency_evidence().await.expect("evidence");
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].source_asset_id, "app-asset-1");
+    assert_eq!(evidence[0].target_asset_id, "app-asset-2");
+    assert_eq!(evidence[0].observations, 2, "upsert must increment");
+
+    // Manual application: create, add, remove deletes the row outright.
+    let app = |id: &str, name: &str, source: AppSource| Application {
+        id: id.into(),
+        name: name.into(),
+        source,
+        confidence: 1.0,
+        created_at: now,
+        updated_at: now,
+    };
+    store
+        .create_application(app("manual-1", "billing", AppSource::Manual))
+        .await
+        .expect("create manual application");
+    store
+        .add_application_member(ApplicationMember {
+            application_id: "manual-1".into(),
+            asset_id: "app-asset-1".into(),
+            source: AppSource::Manual,
+            confidence: 1.0,
+            evidence: Vec::new(),
+            is_excluded: false,
+        })
+        .await
+        .expect("add manual member");
+    // Lookup is by id or case-insensitive name.
+    assert_eq!(
+        store.get_application("BILLING").await.unwrap().unwrap().id,
+        "manual-1"
+    );
+    assert!(store
+        .remove_application_member("manual-1", "app-asset-1")
+        .await
+        .unwrap());
+    assert!(store
+        .list_application_members("manual-1")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A duplicate name is rejected with a clean error.
+    store
+        .create_application(app("manual-2", "billing", AppSource::Manual))
+        .await
+        .expect_err("duplicate name must be rejected");
+
+    // Inferred application: refresh replaces inferred members but keeps
+    // manual rows and exclusion tombstones.
+    store
+        .create_application(app("inf-1", "web-stack", AppSource::Inferred))
+        .await
+        .expect("create inferred application");
+    let inferred_member = |asset_id: &str| ApplicationMember {
+        application_id: "inf-1".into(),
+        asset_id: asset_id.into(),
+        source: AppSource::Inferred,
+        confidence: 0.9,
+        evidence: Vec::new(),
+        is_excluded: false,
+    };
+    store
+        .replace_inferred_members(
+            "inf-1",
+            vec![
+                inferred_member("app-asset-1"),
+                inferred_member("app-asset-2"),
+            ],
+        )
+        .await
+        .expect("first inferred refresh");
+    // A manual add on an inferred member upgrades it to manual.
+    store
+        .add_application_member(ApplicationMember {
+            application_id: "inf-1".into(),
+            asset_id: "app-asset-1".into(),
+            source: AppSource::Manual,
+            confidence: 1.0,
+            evidence: Vec::new(),
+            is_excluded: false,
+        })
+        .await
+        .expect("manual upgrade");
+    // Removing the other inferred member leaves a tombstone.
+    assert!(store
+        .remove_application_member("inf-1", "app-asset-2")
+        .await
+        .unwrap());
+
+    // Re-discovery re-infers both assets: the manual row survives, and
+    // the tombstone blocks the excluded asset from coming back.
+    store
+        .replace_inferred_members(
+            "inf-1",
+            vec![
+                inferred_member("app-asset-1"),
+                inferred_member("app-asset-2"),
+            ],
+        )
+        .await
+        .expect("second inferred refresh");
+    let members = store
+        .list_application_members("inf-1")
+        .await
+        .expect("list members");
+    assert_eq!(members.len(), 2);
+    let upgraded = members
+        .iter()
+        .find(|m| m.asset_id == "app-asset-1")
+        .expect("upgraded member");
+    assert_eq!(upgraded.source, AppSource::Manual, "manual must survive");
+    let tombstone = members
+        .iter()
+        .find(|m| m.asset_id == "app-asset-2")
+        .expect("tombstone member");
+    assert!(tombstone.is_excluded, "exclusion must survive");
+
+    // Confidence refreshes only touch inferred applications.
+    store
+        .update_application_confidence("inf-1", 0.5)
+        .await
+        .expect("update confidence");
+    let refreshed = store
+        .get_application("web-stack")
+        .await
+        .unwrap()
+        .expect("inferred app");
+    assert!((refreshed.confidence - 0.5).abs() < f32::EPSILON);
+
+    // Deleting removes the application and its members.
+    store.delete_application("inf-1").await.expect("delete");
+    assert!(store
+        .list_application_members("inf-1")
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(store.get_application("inf-1").await.unwrap().is_none());
 }
 
 #[tokio::test]
