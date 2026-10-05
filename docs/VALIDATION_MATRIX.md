@@ -141,6 +141,49 @@ edit a past record, add a new one.
 - **Limitations discovered:** single-process, local filesystem only;
   multi-process concurrent-writer behavior not exercised
 
+### Linux release install/upgrade — 2026-10-06 (V1.1-11, clean container)
+
+- **Integration:** released binary distribution (Linux x86_64)
+- **Date:** 2026-10-06
+- **Orbyn versions:** v1.0.3 and v1.0.4 (published GitHub release artifacts
+  only — no locally built binaries)
+- **External version:** `ubuntu:24.04` Docker container (clean environment,
+  no Rust toolchain); `debian:bookworm-slim` for the negative case
+- **Scenario:** follow `docs/INSTALL.md` verbatim — download both release
+  archives and their `.sha256` files, verify checksums, install v1.0.3,
+  initialize the database, import two assets, annotate one, back up the
+  database, replace the binary with v1.0.4, reopen the database, verify
+  data integrity, then uninstall
+- **Expected:** checksums verify; `--version`/`--help` work; the database
+  is created with 0600 file / 0700 directory permissions; the upgrade
+  applies pending migrations automatically and preserves all rows; the
+  annotation and job history survive; uninstall removes only the binary
+- **Actual:** all as expected — checksums OK, 2 assets + `production`
+  annotation intact after the v1.0.3 → v1.0.4 upgrade, `data/` untouched
+  by uninstall
+- **Limitations discovered:** the release binary requires **glibc ≥ 2.39**
+  (built on Ubuntu 24.04); on Debian bookworm (glibc 2.36) it fails with
+  `GLIBC_2.39 not found`. `INSTALL.md` now states the requirement and
+  points older distributions to the build-from-source path. A binary built
+  against an older toolchain (or static musl) is a candidate follow-up.
+
+### Windows release artifact — 2026-10-06 (V1.1-11, partial)
+
+- **Integration:** released binary distribution (Windows x86_64)
+- **Date:** 2026-10-06
+- **Orbyn version:** v1.0.4 (published artifact)
+- **External version:** —
+- **Scenario:** download the `x86_64-pc-windows-msvc.exe.zip` release
+  artifact and verify its published checksum; confirm the archive contains
+  `orbyn.exe`, `LICENSE` and `THIRD_PARTY_NOTICES.md`; confirm the CI
+  `windows-latest` job (build + unit/store tests on real Windows) is green
+- **Expected:** checksum verifies; contents match `INSTALL.md`; CI green
+- **Actual:** checksum OK, contents as documented, CI windows job green
+- **Limitations discovered:** a full clean-Windows-VM walkthrough (install,
+  `--version`, database init, import, upgrade, uninstall) has **not** been
+  performed and is not claimed; it remains a manual procedure per the
+  INSTALL.md Windows section
+
 ## Caveats
 
 - Credentials are never persisted or echoed; the redactor scrubs known values

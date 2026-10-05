@@ -51,6 +51,12 @@ does not store passwords or private key contents.
    orbyn --help
    ```
 
+The release binary is built on Ubuntu 24.04 and requires glibc 2.39 or
+newer (Ubuntu 24.04+, Debian trixie+, Fedora 40+). On older distributions
+(for example Debian bookworm, glibc 2.36) the binary fails to load with a
+`GLIBC_2.39 not found` error — use [build from source](#build-from-source)
+there instead.
+
 Install `nmap`, `snmpwalk`, OpenSSH and `curl` with the package manager for
 your distribution when needed.
 

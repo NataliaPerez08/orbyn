@@ -38,8 +38,10 @@ similar operations follow these rules:
   cloud secret keys) resolves from a dedicated environment variable or
   `-`, which reads one line from stdin so the value never lands in argv.
 - **Mutating operations:** none of them prompt — Orbyn is scriptable.
-  Every mutation (`deps add/confirm/remove`, `annotate`, imports,
-  discovery) is recorded in the audit trail (`orbyn audit`).
+  Every mutation leaves a trail: dependency curation and annotation are
+  recorded in the audit trail (`orbyn audit`), while imports and
+  discovery runs are recorded in the job history (`orbyn jobs`, with
+  per-run counts).
 - **JSON/CSV stability:** the golden suite (`tests/golden.rs`) pins the
   import → graph → assess → export pipeline byte-for-byte against
   committed fixtures; regenerate with `ORBYN_GOLDEN_UPDATE=1` only after
@@ -64,6 +66,10 @@ break compatibility for no functional gain):
 - The stdin-secret help wording has minor phrasing variants across
   commands (e.g. "or `-` for stdin" vs "or stdin with `-`"); the behavior
   is identical everywhere.
+- API imports (NetBox, Prometheus, Zabbix, cloud adapters) record in both
+  the job history and the audit trail; file/stdin `import` records only in
+  the job history (which carries the richer per-run counts). Parity is a
+  backlog item, not a defect.
 
 ## Discovery
 

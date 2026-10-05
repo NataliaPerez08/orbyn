@@ -102,6 +102,9 @@ added; today the product surface is `orbyn` subcommands.
 - [x] **P3** Cloud SKU matching (`orbyn sku-match`, static catalogs for
   AWS/Azure/GCP; on-demand pricing deliberately not embedded).
 
+- [ ] **P3** Record file/stdin `import` in the audit trail for parity with
+  API imports (currently job-history only; see docs/cli.md variances).
+
 ## Security
 
 - [x] **P0** Document authorized-use requirement.
