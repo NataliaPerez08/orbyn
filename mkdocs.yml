@@ -62,6 +62,7 @@ nav:
       - Installation: INSTALL.md
       - Quickstart: quickstart.md
       - Test environment runs: demo.md
+      - Proxmox over Tailscale: proxmox-tailscale.md
   - CLI reference: cli.md
   - Collectors:
       - Overview: collectors/index.md
