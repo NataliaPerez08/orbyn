@@ -5,7 +5,8 @@ use anyhow::Result;
 use orbyn::config::Config;
 use orbyn::output::Format;
 
-use crate::cli::{open_store, resolve_asset};
+use crate::app::inventory::resolve_asset;
+use crate::app::open_store;
 
 pub(crate) async fn metrics(
     config: &Config,

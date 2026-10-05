@@ -5,7 +5,7 @@ use anyhow::Result;
 use orbyn::config::Config;
 use orbyn::output::Format;
 
-use crate::cli::open_store;
+use crate::app::open_store;
 
 pub(crate) async fn jobs(config: &Config, limit: usize, format: Format) -> Result<()> {
     let store = open_store(config).await?;

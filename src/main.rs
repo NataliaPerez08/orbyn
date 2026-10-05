@@ -1,7 +1,8 @@
 //! Orbyn CLI entry point: bootstrap (environment, logging, config) and
-//! command dispatch. Argument definitions live in [`cli::args`]; command
-//! handlers live in [`cli::commands`].
+//! command dispatch. Argument definitions live in [`cli::args`], command
+//! handlers in [`cli::commands`], and application workflows in [`app`].
 
+mod app;
 mod cli;
 
 use clap::Parser;

@@ -6,7 +6,8 @@ use orbyn::assessment::run_assessment;
 use orbyn::config::Config;
 use orbyn::output::Format;
 
-use crate::cli::{assessment_input, open_store};
+use crate::app::assessment::assessment_input;
+use crate::app::open_store;
 
 pub(crate) async fn waves(
     config: &Config,

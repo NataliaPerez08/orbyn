@@ -1,18 +1,13 @@
 //! Handlers for inventory imports and the metrics/CMDB integrations:
 //! `import`, `netbox`, `prometheus`, and `zabbix`.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 
 use orbyn::config::Config;
-use orbyn::domain::{
-    asset_id, Asset, Criticality, DiscoveryJob, Interface, JobOutcome, JobStatus, Observation,
-    Service,
-};
-use orbyn::import::{parse_import_csv, resolve_asset_id, ImportedInventory, ImportedStats};
+use orbyn::import::{parse_import_csv, ImportedInventory};
 use orbyn::integrations::netbox::NetBoxClient;
 use orbyn::integrations::prometheus::{
     assemble_samples, ImportOptions, PrometheusClient, DEFAULT_CPU_QUERY, DEFAULT_RAM_QUERY,
@@ -22,13 +17,11 @@ use orbyn::integrations::zabbix::{
     assemble_samples as zabbix_assemble_samples, ImportOptions as ZabbixImportOptions, ZabbixClient,
 };
 use orbyn::output::Format;
-use orbyn::store::traits::AssetAnnotations;
-use orbyn::store::Store;
 
+use crate::app::open_store;
+use crate::app::{begin_audit, finish_audit_result};
 use crate::cli::args::{ImportFormat, NetboxAction, PrometheusAction, ZabbixAction};
-use crate::cli::{
-    begin_audit, finish_audit_result, is_plain_http, open_store, resolve_secret, IMPORT_WRITE_CHUNK,
-};
+use crate::cli::{is_plain_http, resolve_secret};
 
 /// Handle `orbyn import`.
 pub(crate) async fn import(
@@ -38,7 +31,9 @@ pub(crate) async fn import(
 ) -> Result<()> {
     let store = open_store(config).await?;
     let input = read_input(file.as_ref())?;
-    let stats = import_inventory(store.as_ref(), &input, format).await?;
+    let inv = parse_inventory(&input, format)?;
+    let stats =
+        crate::app::inventory::persist_imported_inventory(store.as_ref(), &inv, "import").await?;
     let mut parts = vec![format!("{} assets", stats.assets)];
     if stats.interfaces > 0 {
         parts.push(format!("{} interfaces", stats.interfaces));
@@ -85,9 +80,10 @@ pub(crate) async fn netbox(config: &Config, action: NetboxAction) -> Result<()> 
         .fetch_inventory()
         .await
         .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
-    let stats = persist_imported_inventory(store.as_ref(), &inventory, "netbox")
-        .await
-        .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
+    let stats =
+        crate::app::inventory::persist_imported_inventory(store.as_ref(), &inventory, "netbox")
+            .await
+            .map_err(|e| anyhow!(redactor.redact(&format!("{e:#}"))))?;
     let mut parts = vec![format!("{} assets", stats.assets)];
     if stats.interfaces > 0 {
         parts.push(format!("{} interfaces", stats.interfaces));
@@ -276,22 +272,18 @@ pub(crate) async fn zabbix(config: &Config, action: ZabbixAction) -> Result<()> 
     Ok(())
 }
 
-/// Parse an imported inventory, recording an audit job for the operation.
-async fn import_inventory(
-    store: &dyn Store,
-    input: &str,
-    format: ImportFormat,
-) -> Result<ImportedStats> {
-    let inv: ImportedInventory = match format {
+/// Decode import input as JSON or CSV depending on the CLI `--format`.
+fn parse_inventory(input: &str, format: ImportFormat) -> Result<ImportedInventory> {
+    match format {
         ImportFormat::Json => {
             if input.trim_start().starts_with('[') {
                 let assets = serde_json::from_str(input).with_context(|| {
                     "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
                 })?;
-                ImportedInventory {
+                Ok(ImportedInventory {
                     assets,
                     ..Default::default()
-                }
+                })
             } else {
                 let wrapper: serde_json::Value = serde_json::from_str(input).with_context(|| {
                     "invalid JSON import; expected an array or {\"assets\": [...]} of {ip, hostname, ...} objects"
@@ -306,200 +298,11 @@ async fn import_inventory(
                 }
                 serde_json::from_value(wrapper).with_context(|| {
                     "invalid JSON import; assets, interfaces and services must be arrays of row objects"
-                })?
+                })
             }
         }
-        ImportFormat::Csv => parse_import_csv(input)?,
-    };
-
-    persist_imported_inventory(store, &inv, "import").await
-}
-
-/// Persist an imported inventory — assets plus the interfaces and services
-/// emitted by `orbyn export` — recording an audit job under the given
-/// collector name. Shared by `import` and `netbox`.
-///
-/// Interface and service rows whose `asset_id` matches neither an asset in
-/// this import nor an existing inventory row are skipped with a warning
-/// instead of failing the whole import.
-async fn persist_imported_inventory(
-    store: &dyn Store,
-    inv: &ImportedInventory,
-    collector: &str,
-) -> Result<ImportedStats> {
-    let (rows, duplicates) = orbyn::import::deduplicate(inv.assets.clone());
-    if duplicates > 0 {
-        tracing::warn!(
-            duplicates,
-            "skipped duplicate import rows that share an IP address"
-        );
+        ImportFormat::Csv => parse_import_csv(input),
     }
-
-    // Validate every asset row before writing anything, so a malformed input
-    // never leaves a half-applied import behind.
-    let mut assets = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let ip: std::net::IpAddr = row
-            .ip
-            .parse()
-            .with_context(|| format!("invalid IP '{}' in import", row.ip))?;
-        let criticality = row
-            .criticality
-            .as_deref()
-            .map(str::parse::<Criticality>)
-            .transpose()
-            .map_err(anyhow::Error::msg)?;
-        assets.push((row, ip, criticality));
-    }
-
-    // Asset ids that interface/service rows may reference: the ids this
-    // import creates, plus everything already in the inventory.
-    let mut known_ids: HashSet<String> = assets.iter().map(|&(_, ip, _)| asset_id(ip)).collect();
-    for existing in store.list_assets().await? {
-        known_ids.insert(existing.id);
-    }
-
-    let mut observations = Vec::new();
-    let mut interfaces_persisted = 0usize;
-    let mut services_persisted = 0usize;
-    let mut skipped_refs = 0usize;
-    for iface in &inv.interfaces {
-        let asset_id = resolve_asset_id(&iface.asset_id);
-        if !known_ids.contains(&asset_id) {
-            skipped_refs += 1;
-            tracing::warn!(
-                asset = %iface.asset_id,
-                "skipped interface row referencing an unknown asset"
-            );
-            continue;
-        }
-        let mut interface = Interface::new(
-            &asset_id,
-            iface.name.as_deref(),
-            iface.mac.as_deref(),
-            iface.ip,
-        );
-        interface.vendor = iface.vendor.clone();
-        interface.mtu = iface.mtu;
-        interface.if_index = iface.if_index;
-        interface.is_up = iface.is_up;
-        interfaces_persisted += 1;
-        observations.push(Observation::Interface(interface));
-    }
-    for svc in &inv.services {
-        let asset_id = resolve_asset_id(&svc.asset_id);
-        if !known_ids.contains(&asset_id) {
-            skipped_refs += 1;
-            tracing::warn!(
-                asset = %svc.asset_id,
-                "skipped service row referencing an unknown asset"
-            );
-            continue;
-        }
-        services_persisted += 1;
-        observations.push(Observation::Service(Service {
-            asset_id,
-            proto: svc.proto.clone(),
-            port: svc.port,
-            name: svc.name.clone(),
-            state: svc.state.clone(),
-            banner: svc.banner.clone(),
-        }));
-    }
-    if skipped_refs > 0 {
-        tracing::warn!(
-            skipped_refs,
-            "skipped import rows referencing unknown assets"
-        );
-    }
-
-    if assets.is_empty() && observations.is_empty() {
-        return Ok(ImportedStats::default());
-    }
-
-    let job = DiscoveryJob {
-        id: uuid::Uuid::new_v4().to_string(),
-        collector: collector.into(),
-        targets: rows.iter().map(|r| r.ip.clone()).collect(),
-        status: JobStatus::Running,
-        started_at: Utc::now(),
-        finished_at: None,
-        error: None,
-        assets_found: None,
-        services_found: None,
-        filesystems_found: None,
-        running_services_found: None,
-        connections_found: None,
-    };
-    store.create_job(job.clone()).await?;
-
-    // Assets are written in batches and annotations in a single transaction:
-    // a commit per asset turns a large import into thousands of disk syncs.
-    let mut persisted = 0u32;
-    let mut asset_observations = Vec::with_capacity(assets.len());
-    let mut annotation_edits = Vec::with_capacity(assets.len());
-    for (row, ip, criticality) in assets {
-        let id = asset_id(ip);
-
-        let now = Utc::now();
-        asset_observations.push(Observation::Asset(Asset {
-            id: id.clone(),
-            ip,
-            hostname: row.hostname.clone(),
-            device_class: row.device_class.clone(),
-            os_name: row.os_name.clone(),
-            os_version: row.os_version.clone(),
-            sys_descr: None,
-            environment: None,
-            owner: None,
-            criticality: None,
-            tags: Vec::new(),
-            first_seen: now,
-            last_seen: now,
-        }));
-        annotation_edits.push((
-            id,
-            AssetAnnotations {
-                environment: row.environment.clone(),
-                owner: row.owner.clone(),
-                criticality,
-                unset: Vec::new(),
-                add_tags: row.tags.clone(),
-                remove_tags: Vec::new(),
-            },
-        ));
-        persisted += 1;
-    }
-
-    for chunk in asset_observations.chunks(IMPORT_WRITE_CHUNK) {
-        store.store_observations(chunk.to_vec()).await?;
-    }
-    store.annotate_assets(annotation_edits).await?;
-
-    if !observations.is_empty() {
-        store.store_observations(observations).await?;
-    }
-
-    store
-        .finish_job(
-            &job.id,
-            JobStatus::Succeeded,
-            None,
-            Some(JobOutcome {
-                assets_found: persisted,
-                services_found: services_persisted as u32,
-                filesystems_found: 0,
-                running_services_found: 0,
-                connections_found: 0,
-            }),
-        )
-        .await?;
-
-    Ok(ImportedStats {
-        assets: persisted as usize,
-        interfaces: interfaces_persisted,
-        services: services_persisted,
-    })
 }
 
 /// Read import input from a file or stdin, bounded by

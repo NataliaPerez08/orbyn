@@ -12,10 +12,9 @@ use orbyn::integrations::terraform::{render_import_blocks, render_terraform};
 use orbyn::output::{Format, Inventory};
 use orbyn::store::traits::{AnnotationField, AssetAnnotations};
 
+use crate::app::inventory::{render_asset_detail, resolve_asset};
+use crate::app::{begin_audit, finish_audit_result, open_store};
 use crate::cli::args::{ExportFormat, UnsetField};
-use crate::cli::{
-    begin_audit, finish_audit_result, open_store, render_asset_detail, resolve_asset,
-};
 
 pub(crate) async fn assets(config: &Config, format: Format) -> Result<()> {
     let store = open_store(config).await?;
