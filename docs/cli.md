@@ -20,6 +20,51 @@ orbyn <command> --help
 
 Most commands also accept `--format table|json|csv`.
 
+## Conventions
+
+Verified in the v1.1 consistency pass (V1.1-10); commands performing
+similar operations follow these rules:
+
+- **Exit codes:** `2` for usage errors (clap: bad flags, missing
+  arguments, unknown subcommands), `1` for runtime errors (asset not
+  found, unreachable endpoint, failed job). No other exit codes exist.
+- **Streams:** tables/JSON/CSV on stdout, logs on stderr — stdout stays
+  clean for piping.
+- **Asset addressing:** every asset-scoped command takes the same
+  positional `<ASSET>` argument, accepted as asset ID or IP address.
+- **Output format:** read commands default to `--format table` with
+  `table|json|csv` possible values.
+- **Secret input:** every secret flag (tokens, passwords, SNMP community,
+  cloud secret keys) resolves from a dedicated environment variable or
+  `-`, which reads one line from stdin so the value never lands in argv.
+- **Mutating operations:** none of them prompt — Orbyn is scriptable.
+  Every mutation (`deps add/confirm/remove`, `annotate`, imports,
+  discovery) is recorded in the audit trail (`orbyn audit`).
+- **JSON/CSV stability:** the golden suite (`tests/golden.rs`) pins the
+  import → graph → assess → export pipeline byte-for-byte against
+  committed fixtures; regenerate with `ORBYN_GOLDEN_UPDATE=1` only after
+  an intended change.
+- **Importer shape:** every external source exposes an `import`
+  subcommand (`orbyn <source> import ...`) with a uniform
+  "Import <objects> from <source>" description.
+
+### Intentional variances
+
+These are deliberate, documented rather than "fixed" (changing them would
+break compatibility for no functional gain):
+
+- `export` and `import` accept `-f` as a shorthand for `--format`; read
+  commands are long-only. Historical; harmless.
+- `export` defaults to `json` (it is machine-facing output) and offers
+  `json|csv|ansible|ansible-yaml|terraform` — no table format.
+- `import --format` selects the *input* format (`json|csv`), not an
+  output format.
+- Help screens carry no `Examples:` sections — worked examples live in
+  the README quick tour and this reference.
+- The stdin-secret help wording has minor phrasing variants across
+  commands (e.g. "or `-` for stdin" vs "or stdin with `-`"); the behavior
+  is identical everywhere.
+
 ## Discovery
 
 ```text
