@@ -26,13 +26,24 @@ Crate layout mirrors the logical layers:
 
 ```text
 src/
-├── main.rs               # clap CLI: discover / assets / services / export / graph / assess
+├── main.rs               # bootstrap + dispatch (env, logging, config, command routing)
+├── cli/                  # terminal-facing layer
+│   ├── args.rs           # clap definitions (commands, action enums, arg validation)
+│   ├── mod.rs            # secret resolution, plain-HTTP warnings
+│   └── commands/         # one module per command family (handlers)
+├── app/                  # orchestration layer (clap-free use cases)
+│   ├── mod.rs            # store opening, audit begin/finish
+│   ├── inventory.rs      # asset resolution, inventory/cloud persistence
+│   ├── assessment.rs     # assessment input assembly
+│   ├── discovery.rs      # bounded-pool discovery runner
+│   └── dependencies.rs   # dependency curation (add/confirm/remove, DNS evidence)
 ├── lib.rs                # library surface
 ├── config.rs             # env/flag-based configuration (DbTarget, PG password helpers)
 ├── process.rs            # bounded subprocess execution (timeouts, capture caps)
 ├── redact.rs             # value-based secret redaction
 ├── parsing.rs            # shared text parsing (CSV lines, ### sections)
-├── import.rs             # JSON/CSV inventory import
+├── http.rs               # shared curl-based HTTP plumbing (status codes, response caps)
+├── import.rs             # JSON/CSV inventory import parsing
 ├── domain/               # normalized domain model
 ├── collectors/           # Collector trait + scanner adapters
 │   ├── types.rs          # Collector, ScanTarget, CpuFacts, scope validation
@@ -51,11 +62,13 @@ src/
 │   ├── postgres.rs       # PostgreSQL via sqlx (same Store contract)
 │   └── rows.rs           # row decoding shared by both backends
 ├── integrations/         # importers, cloud adapters, Ansible/Terraform exporters
-│   └── cloud/            # read-only provider adapters (Proxmox VE, AWS, Huawei Cloud)
+│   └── cloud/            # read-only provider adapters (Proxmox VE, AWS, Huawei Cloud, ...)
 ├── metrics/              # capacity/utilization processing (windows, right-sizing readiness)
 ├── assessment/           # migration assessment engine
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
 │   └── grouping.rs       # application grouping (union-find)
+├── sku/                  # right-sizing SKU matching against static provider catalogs
+├── waves/                # migration wave planning (pure function over the assessment)
 └── output/               # table / json / csv rendering
 ```
 
@@ -177,8 +190,9 @@ output. `src/assessment/` (v0.5) is a versioned rule engine:
   runtime/manual dependency edges (DNS alias evidence excluded), producing
   likely co-migrating application groups.
 
-Planned later outputs include over-provisioning indicators, CPU/RAM target
-recommendations (right-sizing milestone) and cloud-target compatibility rules.
+Right-sizing outputs ship today: the `rs.*` rules flag over-provisioned
+CPU/RAM/storage and propose targets with headroom, and `orbyn sku match`
+maps a right-sizing baseline to candidate cloud instance types.
 `orbyn assess --rules` lists the catalog.
 
 ### 5. Dependency graph

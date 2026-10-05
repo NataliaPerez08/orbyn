@@ -166,8 +166,9 @@ criterion only requires one source-of-truth and one automation export).
 
 **Status:** implemented. Snapshots ship with host-level discovery (3 samples
 per SSH/WinRM probe); a week of history comes from the Prometheus importer
-(`orbyn prometheus import`). Zabbix is deferred to Phase 3 (the milestone
-required "Zabbix and/or Prometheus"). Periodic *scheduling* of collection is
+(`orbyn prometheus import`). Zabbix followed in Phase 3 (the milestone
+required "Zabbix and/or Prometheus"; `orbyn zabbix import` is delivered —
+see Phase 3 below). Periodic *scheduling* of collection is
 intentionally out of scope for the CLI product: run the importer from
 cron/systemd timers.
 
