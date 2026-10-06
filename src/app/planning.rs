@@ -26,6 +26,20 @@ pub(crate) struct TargetSpec {
     pub provider: Option<orbyn::sku::Provider>,
 }
 
+/// Build one application's plan without side effects: the shared
+/// workflow behind `plan` (which then persists) and `bundle` (which is
+/// read-only).
+pub(crate) async fn generate(
+    store: &dyn Store,
+    detail: &ApplicationDetail,
+    target: Option<&TargetSpec>,
+) -> Result<PlanOutcome> {
+    let input = crate::app::assessment::assessment_input(store).await?;
+    let report = run_assessment(&input);
+    let waves = wave_plan(store, &input, &report).await?;
+    build(detail, &input, &report, &waves, target).await
+}
+
 /// Plan one application and persist the artifact.
 pub(crate) async fn plan(
     store: &dyn Store,
@@ -41,10 +55,7 @@ pub(crate) async fn plan(
     )
     .await?;
     let result: Result<PlanOutcome> = async {
-        let input = crate::app::assessment::assessment_input(store).await?;
-        let report = run_assessment(&input);
-        let waves = wave_plan(store, &input, &report).await?;
-        let outcome = build(&detail, &input, &report, &waves, target.as_ref()).await?;
+        let outcome = generate(store, &detail, target.as_ref()).await?;
         store.save_plan(outcome.plan.clone()).await?;
         eprintln!(
             "Plan {} saved for '{}': {} (readiness {}/100).",

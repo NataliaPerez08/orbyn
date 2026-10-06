@@ -433,6 +433,17 @@ pub(crate) enum Command {
         format: Format,
     },
 
+    /// Write a self-contained migration handoff for one application:
+    /// inventory, dependencies, assessment, sizing, plan and manifest,
+    /// each in a standard format. Generation is read-only.
+    Bundle {
+        /// Application name or ID.
+        application: String,
+        /// Target provider for instance-type recommendations.
+        #[arg(long, value_enum)]
+        target: Option<PlanTarget>,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
@@ -977,6 +988,7 @@ mod tests {
             "sku-match",
             "waves",
             "plan",
+            "bundle",
             "completions",
         ];
         for name in expected {

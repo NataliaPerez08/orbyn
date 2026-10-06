@@ -175,6 +175,10 @@ async fn main() -> anyhow::Result<()> {
             explain,
             format,
         } => commands::planning::plan(&config, application, all, target, explain, format).await?,
+        Command::Bundle {
+            application,
+            target,
+        } => commands::planning::bundle(&config, application, target).await?,
     }
 
     Ok(())

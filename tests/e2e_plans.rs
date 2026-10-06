@@ -94,3 +94,51 @@ fn plan_all_covers_every_application() {
     assert!(out.contains("\"warnings\""), "{out}");
     assert!(out.contains("\"application_name\": \"frontend\""), "{out}");
 }
+
+#[test]
+fn bundle_writes_the_migration_handoff() {
+    let dir = TempDir::new("bundle");
+    seed(&dir);
+
+    let mut cmd = orbyn(&dir);
+    cmd.args(["bundle", "frontend"]).current_dir(dir.path());
+    let out = run_ok_combined(&mut cmd);
+    assert!(
+        out.contains("Bundle written to frontend-migration/"),
+        "{out}"
+    );
+
+    let base = dir.path().join("frontend-migration");
+    for name in [
+        "inventory.json",
+        "inventory.csv",
+        "applications.json",
+        "dependencies.json",
+        "dependencies.mmd",
+        "assessment.json",
+        "sizing.json",
+        "migration-plan.json",
+        "migration-plan.md",
+        "manifest.json",
+    ] {
+        assert!(base.join(name).exists(), "missing {name}");
+    }
+
+    let manifest = std::fs::read_to_string(base.join("manifest.json")).unwrap();
+    assert!(
+        manifest.contains("\"readiness_version\": \"readiness/v1\""),
+        "{manifest}"
+    );
+    assert!(manifest.contains("\"orbyn_version\""), "{manifest}");
+    assert!(manifest.contains("\"files\""), "{manifest}");
+
+    let plan = std::fs::read_to_string(base.join("migration-plan.md")).unwrap();
+    assert!(plan.contains("Migration plan: frontend"), "{plan}");
+
+    let sizing = std::fs::read_to_string(base.join("sizing.json")).unwrap();
+    assert!(sizing.contains("\"asset_id\": \"10-0-0-2\""), "{sizing}");
+
+    // Generation is read-only: no plan artifact was persisted or audited.
+    let out = run_ok_combined(orbyn(&dir).args(["audit", "--format", "csv"]));
+    assert!(!out.contains("plan.create"), "{out}");
+}

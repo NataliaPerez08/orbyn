@@ -13,7 +13,7 @@ use crate::assessment::{AssessmentReport, AssetScore, Complexity, Finding, Sever
 use crate::domain::{
     AppSource, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
     Criticality, Dependency, DiscoveryJob, EvidenceKind, Filesystem, Interface, JobStatus,
-    MigrationPlan, RunningService, Service,
+    MigrationPlan, PlanProvenance, RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -1681,6 +1681,41 @@ pub fn migration_plans(outcomes: &[PlanOutcome], warnings: &[String], format: Fo
             out
         }
     }
+}
+
+/// Render the sizing section of a plan (bundle `sizing.json`).
+pub fn sizing(outcome: &PlanOutcome) -> String {
+    json(&outcome.plan.targets)
+}
+
+/// Render the bundle manifest: every rule version and the plan's
+/// provenance, so the bundle is reproducible and auditable.
+pub fn bundle_manifest(outcome: &PlanOutcome, files: &[String]) -> String {
+    #[derive(serde::Serialize)]
+    struct Manifest<'a> {
+        application: &'a str,
+        application_id: &'a str,
+        generated_at: chrono::DateTime<chrono::Utc>,
+        orbyn_version: &'a str,
+        files: &'a [String],
+        plan_id: &'a str,
+        strategy: &'a str,
+        readiness: u8,
+        wave: Option<u8>,
+        provenance: &'a PlanProvenance,
+    }
+    json(&Manifest {
+        application: &outcome.application_name,
+        application_id: &outcome.plan.application_id,
+        generated_at: chrono::Utc::now(),
+        orbyn_version: env!("CARGO_PKG_VERSION"),
+        files,
+        plan_id: &outcome.plan.id,
+        strategy: outcome.plan.recommendation.strategy.as_str(),
+        readiness: outcome.plan.readiness,
+        wave: outcome.plan.wave,
+        provenance: &outcome.plan.provenance,
+    })
 }
 
 /// Render the assessment rule catalog (`orbyn assess --rules`).
