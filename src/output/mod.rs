@@ -13,7 +13,7 @@ use crate::assessment::{AssessmentReport, AssetScore, Complexity, Finding, Sever
 use crate::domain::{
     AppSource, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
     Criticality, Dependency, DiscoveryJob, EvidenceKind, Filesystem, Interface, JobStatus,
-    RunningService, Service,
+    MigrationPlan, RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -1462,6 +1462,222 @@ pub fn application_report(
                 ]);
             }
             out.push_str(&render_table(t));
+            out
+        }
+    }
+}
+
+/// A migration plan plus the wave reasoning behind its assignment.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlanOutcome {
+    /// The application's name (the plan itself stores only the id).
+    pub application_name: String,
+    pub plan: MigrationPlan,
+    /// Why the application landed in its wave (`--explain`).
+    pub wave_reasons: Vec<String>,
+}
+
+/// Render one migration plan.
+pub fn migration_plan(
+    outcome: &PlanOutcome,
+    assets: &[Asset],
+    explain: bool,
+    format: Format,
+) -> String {
+    let plan = &outcome.plan;
+    match format {
+        Format::Json => {
+            if explain {
+                json(outcome)
+            } else {
+                json(plan)
+            }
+        }
+        Format::Csv => {
+            let mut out =
+                String::from("#summary\nid,application_id,strategy,confidence,readiness,wave\n");
+            out.push_str(&format!(
+                "{},{},{},{:.3},{},{}\n",
+                csv(&plan.id),
+                csv(&plan.application_id),
+                csv(plan.recommendation.strategy.as_str()),
+                plan.recommendation.confidence,
+                plan.readiness,
+                plan.wave.map(|w| w.to_string()).unwrap_or_default(),
+            ));
+            out.push_str("\n#targets\nasset_id,cores,ram_mb,provider,instance_type\n");
+            for t in &plan.targets {
+                out.push_str(&format!(
+                    "{},{},{},{},{}\n",
+                    csv(&t.asset_id),
+                    t.cores.map(|v| v.to_string()).unwrap_or_default(),
+                    t.ram_mb.map(|v| v.to_string()).unwrap_or_default(),
+                    t.provider.as_deref().unwrap_or(""),
+                    t.instance_type.as_deref().unwrap_or(""),
+                ));
+            }
+            out.push_str("\n#blockers\nseverity,factor,message,evidence\n");
+            for b in &plan.blockers {
+                out.push_str(&format!(
+                    "{},{},{},{}\n",
+                    b.severity.as_str(),
+                    csv(&b.factor),
+                    csv(&b.message),
+                    csv(&b.evidence.join("; ")),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            let mut out = format!("Migration plan: {}\n", outcome.application_name);
+            out.push_str(&format!("Id          : {}\n", plan.id));
+            out.push_str(&format!(
+                "Strategy    : {} ({:.0}%)\n              {}\n",
+                plan.recommendation.strategy,
+                plan.recommendation.confidence * 100.0,
+                plan.recommendation.rationale
+            ));
+            out.push_str(&format!("Readiness   : {}/100\n", plan.readiness));
+            if let Some(wave) = plan.wave {
+                let label = crate::waves::WAVE_LABELS
+                    .get(wave.saturating_sub(1) as usize)
+                    .copied()
+                    .unwrap_or("unknown");
+                out.push_str(&format!("Wave        : {wave} ({label})\n"));
+            }
+            if let Some(target) = plan.targets.first().and_then(|t| t.provider.as_deref()) {
+                out.push_str(&format!("Target      : {target}\n"));
+            }
+
+            out.push_str("\nReadiness factors:\n");
+            if plan.readiness_factors.is_empty() {
+                out.push_str("  (none)\n");
+            }
+            for f in &plan.readiness_factors {
+                out.push_str(&format!("  {} ({})\n", f.factor, f.delta));
+                for line in &f.evidence {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            }
+
+            out.push_str("\nBlockers:\n");
+            if plan.blockers.is_empty() {
+                out.push_str("  (none)\n");
+            }
+            for b in &plan.blockers {
+                out.push_str(&format!(
+                    "  [{}] {} — {}\n",
+                    b.severity.as_str(),
+                    b.factor,
+                    b.message
+                ));
+                for line in &b.evidence {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            }
+
+            out.push_str("\nTargets:\n");
+            if plan.targets.is_empty() {
+                out.push_str("  (none)\n");
+            } else {
+                let mut t = table(&["Asset", "Cores", "RAM MiB", "Provider", "Instance type"]);
+                for target in &plan.targets {
+                    t.add_row(vec![
+                        Cell::new(asset_label(assets, &target.asset_id)),
+                        Cell::new(
+                            target
+                                .cores
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "-".into()),
+                        ),
+                        Cell::new(
+                            target
+                                .ram_mb
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "-".into()),
+                        ),
+                        Cell::new(target.provider.as_deref().unwrap_or("-")),
+                        Cell::new(target.instance_type.as_deref().unwrap_or("-")),
+                    ]);
+                }
+                out.push_str(&render_table(t));
+            }
+
+            out.push_str("\nAssumptions:\n");
+            if plan.assumptions.is_empty() {
+                out.push_str("  (none)\n");
+            }
+            for a in &plan.assumptions {
+                out.push_str(&format!("  {}: {}\n", a.assumption, a.detail));
+            }
+
+            if explain {
+                out.push_str("\nWhy this wave:\n");
+                if outcome.wave_reasons.is_empty() {
+                    out.push_str("  (not assigned)\n");
+                }
+                for reason in &outcome.wave_reasons {
+                    out.push_str(&format!("  {reason}\n"));
+                }
+            }
+            terminal_safe(&out)
+        }
+    }
+}
+
+/// Render the plans of `orbyn plan --all`.
+pub fn migration_plans(outcomes: &[PlanOutcome], warnings: &[String], format: Format) -> String {
+    match format {
+        Format::Json => {
+            #[derive(serde::Serialize)]
+            struct All<'a> {
+                plans: &'a [PlanOutcome],
+                warnings: &'a [String],
+            }
+            json(&All {
+                plans: outcomes,
+                warnings,
+            })
+        }
+        Format::Csv => {
+            let mut out = String::from("application,strategy,confidence,readiness,wave,plan_id\n");
+            for o in outcomes {
+                out.push_str(&format!(
+                    "{},{},{:.3},{},{},{}\n",
+                    csv(&o.application_name),
+                    o.plan.recommendation.strategy.as_str(),
+                    o.plan.recommendation.confidence,
+                    o.plan.readiness,
+                    o.plan.wave.map(|w| w.to_string()).unwrap_or_default(),
+                    csv(&o.plan.id),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if outcomes.is_empty() {
+                return "No applications to plan. Run `orbyn applications discover` first.\n"
+                    .to_string();
+            }
+            let mut t = table(&["Application", "Strategy", "Confidence", "Readiness", "Wave"]);
+            for o in outcomes {
+                t.add_row(vec![
+                    Cell::new(&o.application_name),
+                    Cell::new(o.plan.recommendation.strategy.as_str()),
+                    Cell::new(format!("{:.0}%", o.plan.recommendation.confidence * 100.0)),
+                    Cell::new(o.plan.readiness.to_string()),
+                    Cell::new(
+                        o.plan
+                            .wave
+                            .map(|w| w.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                ]);
+            }
+            let mut out = render_table(t);
+            for w in warnings {
+                out.push_str(&format!("warning: {w}\n"));
+            }
             out
         }
     }

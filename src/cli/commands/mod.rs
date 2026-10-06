@@ -18,6 +18,7 @@ pub(crate) mod discover;
 pub(crate) mod integrations;
 pub(crate) mod inventory;
 pub(crate) mod metrics;
+pub(crate) mod planning;
 pub(crate) mod sku;
 pub(crate) mod waves;
 

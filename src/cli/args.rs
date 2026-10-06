@@ -412,12 +412,45 @@ pub(crate) enum Command {
         excludes: Vec<String>,
     },
 
+    /// Plan the migration of one application — or all of them: readiness,
+    /// strategy, targets, blockers and assumptions, persisted as an
+    /// audited artifact.
+    Plan {
+        /// Application name or ID.
+        #[arg(conflicts_with = "all")]
+        application: Option<String>,
+        /// Plan every application.
+        #[arg(long)]
+        all: bool,
+        /// Target provider for instance-type recommendations
+        /// (affects recommendations only, never the discovered evidence).
+        #[arg(long, value_enum)]
+        target: Option<PlanTarget>,
+        /// Show why the strategy and wave were chosen.
+        #[arg(long)]
+        explain: bool,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
         #[arg(value_enum)]
         shell: Shell,
     },
+}
+
+/// Target providers for `orbyn plan --target`. Huawei and OpenStack are
+/// accepted but have no SKU catalog: recommendations report
+/// NOT_CALCULATED instead of fabricated instance types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PlanTarget {
+    Aws,
+    Azure,
+    Gcp,
+    Huawei,
+    Openstack,
 }
 
 /// Shell backends supported by `orbyn completions`.
@@ -943,6 +976,7 @@ mod tests {
             "assess",
             "sku-match",
             "waves",
+            "plan",
             "completions",
         ];
         for name in expected {

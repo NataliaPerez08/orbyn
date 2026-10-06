@@ -168,6 +168,13 @@ async fn main() -> anyhow::Result<()> {
             pins,
             excludes,
         } => commands::waves::waves(&config, format, pins, excludes).await?,
+        Command::Plan {
+            application,
+            all,
+            target,
+            explain,
+            format,
+        } => commands::planning::plan(&config, application, all, target, explain, format).await?,
     }
 
     Ok(())
