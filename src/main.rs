@@ -152,9 +152,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Applications { action } => {
             commands::applications::applications(&config, action).await?
         }
-        Command::Assess { format, rules } => {
-            commands::assessment::assess(&config, format, rules).await?
-        }
+        Command::Assess {
+            format,
+            rules,
+            application,
+        } => commands::assessment::assess(&config, format, rules, application).await?,
         Command::SkuMatch {
             provider,
             cores,

@@ -74,6 +74,26 @@ fn applications_discover_show_explain_and_manual_precedence() {
     assert!(out.contains("manual"), "{out}");
     let out = run_fail(orbyn(&dir).args(["applications", "show", "nope"]));
     assert!(out.contains("no application matches 'nope'"), "{out}");
+
+    // Application-level assessment rolls up member findings and counts.
+    // State here: frontend = {frontend01, db01}, payments = {frontend02},
+    // so one edge is internal and one crosses to payments. db01 is a
+    // dependency hub (Warning 10) + os/capacity missing (2+2) = 14;
+    // frontend01 = 4; average 9.
+    let out = run_ok(orbyn(&dir).args(["assess", "--application", "frontend", "--format", "json"]));
+    assert!(out.contains("\"assets\": 2"), "{out}");
+    assert!(out.contains("\"overall_score\": 9"), "{out}");
+    assert!(out.contains("\"complexity\": \"low\""), "{out}");
+    assert!(out.contains("\"internal_dependencies\": 1"), "{out}");
+    assert!(out.contains("\"external_dependencies\": 1"), "{out}");
+    assert!(out.contains("\"high_findings\": 0"), "{out}");
+    assert!(out.contains("\"warning_findings\": 1"), "{out}");
+    assert!(out.contains("\"10-0-0-4"), "{out}");
+    let out = run_ok(orbyn(&dir).args(["assess", "--application", "frontend"]));
+    assert!(out.contains("Application assessment: frontend"), "{out}");
+    assert!(out.contains("9/100 (low)"), "{out}");
+    let out = run_fail(orbyn(&dir).args(["assess", "--application", "nope"]));
+    assert!(out.contains("no application matches 'nope'"), "{out}");
 }
 
 #[test]

@@ -8,8 +8,11 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 
 use orbyn::applications::{InferenceInput, InferredMember};
+use orbyn::assessment::{AssetScore, Finding, Severity};
 use orbyn::domain::{AppSource, Application, ApplicationMember};
-use orbyn::output::{ApplicationDetail, ApplicationEdge, ApplicationSummary};
+use orbyn::output::{
+    ApplicationAssessment, ApplicationDetail, ApplicationEdge, ApplicationSummary,
+};
 use orbyn::store::Store;
 
 use crate::app::inventory::resolve_asset;
@@ -323,6 +326,98 @@ pub(crate) async fn application_edges(store: &dyn Store) -> Result<Vec<Applicati
         .collect();
     edges.sort_by(|a, b| (&a.source, &a.target).cmp(&(&b.source, &b.target)));
     Ok(edges)
+}
+
+/// Assess one application: the rule engine runs unchanged over the full
+/// inventory, then findings and scores are filtered to the members and
+/// rolled up (counts, hubs, external coupling, right-sizing readiness).
+pub(crate) async fn assess(store: &dyn Store, key: &str) -> Result<ApplicationAssessment> {
+    let detail = show(store, key).await?;
+    let members: HashSet<String> = detail.members.iter().map(|m| m.asset_id.clone()).collect();
+    let input = crate::app::assessment::assessment_input(store).await?;
+    let report = orbyn::assessment::run_assessment(&input);
+
+    let findings: Vec<Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.asset_id.as_deref().is_some_and(|id| members.contains(id)))
+        .cloned()
+        .collect();
+    let asset_scores: Vec<AssetScore> = report
+        .asset_scores
+        .iter()
+        .filter(|s| members.contains(&s.asset_id))
+        .cloned()
+        .collect();
+
+    let overall_score = if asset_scores.is_empty() {
+        0
+    } else {
+        let total: u32 = asset_scores.iter().map(|s| s.score as u32).sum();
+        (total as f64 / asset_scores.len() as f64).round() as u8
+    };
+
+    let mut internal = 0usize;
+    let mut external = 0usize;
+    let mut unconfirmed = 0usize;
+    for d in &input.dependencies {
+        let (source_in, target_in) = (
+            members.contains(&d.source_asset_id),
+            members.contains(&d.target_asset_id),
+        );
+        if source_in && target_in {
+            internal += 1;
+        } else if source_in || target_in {
+            external += 1;
+        } else {
+            continue;
+        }
+        if !d.confirmed {
+            unconfirmed += 1;
+        }
+    }
+
+    let mut hub_assets: Vec<String> = findings
+        .iter()
+        .filter(|f| f.rule_id == "dep.hub")
+        .filter_map(|f| f.asset_id.clone())
+        .collect();
+    hub_assets.sort();
+    hub_assets.dedup();
+    let mut externally_coupled_assets: Vec<String> = findings
+        .iter()
+        .filter(|f| f.rule_id == "dep.external")
+        .filter_map(|f| f.asset_id.clone())
+        .collect();
+    externally_coupled_assets.sort();
+    externally_coupled_assets.dedup();
+
+    Ok(ApplicationAssessment {
+        application: detail.application,
+        rules_version: report.rules_version,
+        assets: members.len(),
+        overall_score,
+        complexity: orbyn::assessment::complexity_band(overall_score),
+        internal_dependencies: internal,
+        external_dependencies: external,
+        unconfirmed_dependencies: unconfirmed,
+        high_findings: findings
+            .iter()
+            .filter(|f| f.severity == Severity::High)
+            .count(),
+        warning_findings: findings
+            .iter()
+            .filter(|f| f.severity == Severity::Warning)
+            .count(),
+        hub_assets,
+        externally_coupled_assets,
+        right_sizing_findings: findings
+            .iter()
+            .filter(|f| f.rule_id.starts_with("rs."))
+            .count(),
+        findings,
+        asset_scores,
+    })
 }
 
 /// Persist inferred members as store rows.

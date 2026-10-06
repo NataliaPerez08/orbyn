@@ -377,6 +377,9 @@ pub(crate) enum Command {
         /// List the rule catalog (id + description) instead of assessing.
         #[arg(long, conflicts_with = "format")]
         rules: bool,
+        /// Assess one application: roll findings up to its members.
+        #[arg(long, conflicts_with = "rules")]
+        application: Option<String>,
     },
 
     /// Match a right-sizing baseline (vCPU + RAM) to candidate instance

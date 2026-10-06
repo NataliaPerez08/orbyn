@@ -203,7 +203,7 @@ pub fn run_assessment(input: &AssessmentInput) -> AssessmentReport {
 }
 
 /// Band of a score on the 0-100 complexity scale.
-pub(crate) fn complexity_band(score: u8) -> Complexity {
+pub fn complexity_band(score: u8) -> Complexity {
     if score < 20 {
         Complexity::Low
     } else if score < 50 {

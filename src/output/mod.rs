@@ -9,7 +9,7 @@ use std::fmt;
 use comfy_table::{Cell, ContentArrangement, Table};
 
 use crate::assessment::rules::Rule;
-use crate::assessment::{AssessmentReport, Severity};
+use crate::assessment::{AssessmentReport, AssetScore, Complexity, Finding, Severity};
 use crate::domain::{
     AppSource, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
     Criticality, Dependency, DiscoveryJob, EvidenceKind, Filesystem, Interface, JobStatus,
@@ -1321,6 +1321,147 @@ pub fn report(report: &AssessmentReport, format: Format) -> String {
                 }
                 out.push_str(&render_table(t));
             }
+            out
+        }
+    }
+}
+
+/// An application-level assessment rollup: the rule engine run unchanged,
+/// filtered to the application's members and aggregated.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApplicationAssessment {
+    pub application: Application,
+    pub rules_version: String,
+    pub assets: usize,
+    /// Average member complexity, 0-100.
+    pub overall_score: u8,
+    pub complexity: Complexity,
+    pub internal_dependencies: usize,
+    pub external_dependencies: usize,
+    pub unconfirmed_dependencies: usize,
+    pub high_findings: usize,
+    pub warning_findings: usize,
+    /// Member assets flagged as dependency hubs by `dep.hub`.
+    pub hub_assets: Vec<String>,
+    /// Member assets with endpoints outside the inventory (`dep.external`).
+    pub externally_coupled_assets: Vec<String>,
+    /// Member findings from the `rs.*` right-sizing rules.
+    pub right_sizing_findings: usize,
+    pub findings: Vec<Finding>,
+    pub asset_scores: Vec<AssetScore>,
+}
+
+/// Render an application-level assessment rollup.
+pub fn application_report(
+    assessment: &ApplicationAssessment,
+    assets: &[Asset],
+    format: Format,
+) -> String {
+    match format {
+        Format::Json => json(assessment),
+        Format::Csv => {
+            let mut out = String::from(
+                "#summary\nrules_version,assets,overall_score,complexity,internal_dependencies,\
+                 external_dependencies,unconfirmed_dependencies,high_findings,\
+                 warning_findings,right_sizing_findings\n",
+            );
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{}\n",
+                assessment.rules_version,
+                assessment.assets,
+                assessment.overall_score,
+                assessment.complexity,
+                assessment.internal_dependencies,
+                assessment.external_dependencies,
+                assessment.unconfirmed_dependencies,
+                assessment.high_findings,
+                assessment.warning_findings,
+                assessment.right_sizing_findings
+            ));
+            out.push_str("\n#findings\nrule_id,severity,asset_id,message,evidence\n");
+            for f in &assessment.findings {
+                out.push_str(&format!(
+                    "{},{},{},{},{}\n",
+                    csv(&f.rule_id),
+                    severity_str(f.severity),
+                    csv(&f.asset_id.clone().unwrap_or_default()),
+                    csv(&f.message),
+                    csv(&f.evidence.join("; "))
+                ));
+            }
+            out.push_str("\n#asset_scores\nasset_id,score,findings\n");
+            for s in &assessment.asset_scores {
+                out.push_str(&format!("{},{},{}\n", s.asset_id, s.score, s.findings));
+            }
+            out
+        }
+        Format::Table => {
+            let label = |ids: &[String]| {
+                if ids.is_empty() {
+                    "-".to_string()
+                } else {
+                    ids.iter()
+                        .map(|id| asset_label(assets, id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            };
+            let mut out = format!("Application assessment: {}\n", assessment.application.name);
+            out.push_str(&format!("Rules version : {}\n", assessment.rules_version));
+            out.push_str(&format!("Assets        : {}\n", assessment.assets));
+            out.push_str(&format!(
+                "Score         : {}/100 ({})\n",
+                assessment.overall_score, assessment.complexity
+            ));
+            out.push_str(&format!(
+                "Dependencies  : {} internal, {} external, {} unconfirmed\n",
+                assessment.internal_dependencies,
+                assessment.external_dependencies,
+                assessment.unconfirmed_dependencies
+            ));
+            out.push_str(&format!(
+                "Findings      : {} high, {} warning\n",
+                assessment.high_findings, assessment.warning_findings
+            ));
+            out.push_str(&format!(
+                "Hubs          : {}\n",
+                label(&assessment.hub_assets)
+            ));
+            out.push_str(&format!(
+                "External      : {}\n",
+                label(&assessment.externally_coupled_assets)
+            ));
+            out.push_str(&format!(
+                "Right-sizing  : {} findings\n",
+                assessment.right_sizing_findings
+            ));
+
+            out.push_str("\nFindings:\n");
+            if assessment.findings.is_empty() {
+                out.push_str("  (no findings)\n");
+            } else {
+                let mut t = table(&["Rule", "Severity", "Asset", "Finding"]);
+                for f in &assessment.findings {
+                    t.add_row(vec![
+                        Cell::new(&f.rule_id),
+                        Cell::new(severity_str(f.severity)),
+                        Cell::new(f.asset_id.clone().unwrap_or_else(|| "-".into())),
+                        Cell::new(&f.message),
+                    ]);
+                }
+                out.push_str(&render_table(t));
+            }
+
+            out.push_str("\nAsset complexity:\n");
+            let mut t = table(&["Asset", "Score", "Findings"]);
+            for s in &assessment.asset_scores {
+                t.add_row(vec![
+                    Cell::new(asset_label(assets, &s.asset_id)),
+                    Cell::new(s.score),
+                    Cell::new(s.findings),
+                ]);
+            }
+            out.push_str(&render_table(t));
             out
         }
     }
