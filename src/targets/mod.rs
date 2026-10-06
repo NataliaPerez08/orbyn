@@ -13,6 +13,8 @@
 
 use std::sync::OnceLock;
 
+pub mod matching;
+
 /// One instance type: capability data only, never a price.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TargetSku {
