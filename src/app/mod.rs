@@ -3,6 +3,7 @@
 //! independently of clap; terminal-facing behavior (warnings, arg
 //! validation, output) stays in [`crate::cli`].
 
+pub(crate) mod applications;
 pub(crate) mod assessment;
 pub(crate) mod dependencies;
 pub(crate) mod discovery;

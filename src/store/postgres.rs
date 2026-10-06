@@ -873,16 +873,18 @@ impl crate::store::traits::Store for PostgresStore {
             .context("removing application member")?;
         } else {
             // Inferred member: keep a tombstone so re-discovery cannot
-            // re-add the asset the user explicitly removed.
-            sqlx::query(
+            // re-add the asset the user explicitly removed. An already
+            // excluded member is not an active member: report a no-op.
+            let result = sqlx::query(
                 "UPDATE application_members SET is_excluded = TRUE \
-                 WHERE application_id = $1 AND asset_id = $2",
+                 WHERE application_id = $1 AND asset_id = $2 AND is_excluded = FALSE",
             )
             .bind(application_id)
             .bind(asset_id)
             .execute(&self.pool)
             .await
             .context("excluding application member")?;
+            return Ok(result.rows_affected() > 0);
         }
         Ok(true)
     }

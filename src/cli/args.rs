@@ -356,6 +356,13 @@ pub(crate) enum Command {
         asset: Option<String>,
     },
 
+    /// Discover, inspect and curate applications: groups of assets that
+    /// belong together, inferred from evidence or curated manually.
+    Applications {
+        #[command(subcommand)]
+        action: Option<ApplicationsAction>,
+    },
+
     /// Run a migration assessment over discovered assets.
     Assess {
         #[arg(long, value_enum, default_value_t = Format::Table)]
@@ -452,6 +459,55 @@ pub(crate) enum DepsAction {
     /// Derive relationship edges from DNS: forward-resolve asset hostnames
     /// and link assets when a hostname points at another asset's IP.
     Dns,
+}
+
+/// Sub-actions of `orbyn applications`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum ApplicationsAction {
+    /// Infer applications from dependencies and evidence and persist
+    /// them; re-runs refresh and prune.
+    Discover {
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+    /// List applications.
+    List {
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+    /// Show one application and its members.
+    Show {
+        /// Application name or ID.
+        application: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+    /// Show why each member belongs to the application.
+    Explain {
+        /// Application name or ID.
+        application: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+    /// Create an empty manual application.
+    Create {
+        /// Application name.
+        name: String,
+    },
+    /// Manually add an asset to an application.
+    Add {
+        /// Application name or ID.
+        application: String,
+        /// Asset ID, IP or hostname.
+        asset: String,
+    },
+    /// Remove an asset from an application.
+    Remove {
+        /// Application name or ID.
+        application: String,
+        /// Asset ID, IP or hostname.
+        asset: String,
+    },
 }
 
 /// Sub-actions of `orbyn netbox`.
@@ -873,6 +929,7 @@ mod tests {
             "aws",
             "huawei",
             "graph",
+            "applications",
             "assess",
             "sku-match",
             "waves",

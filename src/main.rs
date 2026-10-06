@@ -137,6 +137,9 @@ async fn main() -> anyhow::Result<()> {
             mermaid,
             asset,
         } => commands::dependencies::graph(&config, format, mermaid, asset).await?,
+        Command::Applications { action } => {
+            commands::applications::applications(&config, action).await?
+        }
         Command::Assess { format, rules } => {
             commands::assessment::assess(&config, format, rules).await?
         }

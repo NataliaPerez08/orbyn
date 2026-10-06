@@ -11,8 +11,9 @@ use comfy_table::{Cell, ContentArrangement, Table};
 use crate::assessment::rules::Rule;
 use crate::assessment::{AssessmentReport, Severity};
 use crate::domain::{
-    Asset, AuditEvent, Capacity, Connection, Criticality, Dependency, DiscoveryJob, EvidenceKind,
-    Filesystem, Interface, JobStatus, RunningService, Service,
+    AppSource, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
+    Criticality, Dependency, DiscoveryJob, EvidenceKind, Filesystem, Interface, JobStatus,
+    RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -857,6 +858,204 @@ pub fn mermaid(edges: &[Dependency], assets: &[Asset]) -> String {
             arrow,
             mermaid_node_id(&d.target_asset_id),
             label(&d.target_asset_id),
+        ));
+    }
+    out
+}
+
+/// An application with its member count, for list rendering.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApplicationSummary {
+    pub application: Application,
+    pub members: usize,
+}
+
+/// An application with its members, for show/explain rendering.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApplicationDetail {
+    pub application: Application,
+    pub members: Vec<ApplicationMember>,
+}
+
+/// Render the applications list.
+pub fn applications(summaries: &[ApplicationSummary], format: Format) -> String {
+    match format {
+        Format::Json => json(summaries),
+        Format::Csv => {
+            let mut out = String::from("id,name,source,confidence,members,created_at,updated_at\n");
+            for s in summaries {
+                out.push_str(&format!(
+                    "{},{},{},{:.3},{},{},{}\n",
+                    csv(&s.application.id),
+                    csv(&s.application.name),
+                    csv(s.application.source.as_str()),
+                    s.application.confidence,
+                    s.members,
+                    s.application.created_at.to_rfc3339(),
+                    s.application.updated_at.to_rfc3339(),
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if summaries.is_empty() {
+                return "No applications yet. Run `orbyn applications discover`.\n".to_string();
+            }
+            let mut table = table(&["Name", "Source", "Confidence", "Members", "Updated"]);
+            for s in summaries {
+                table.add_row(vec![
+                    Cell::new(&s.application.name),
+                    Cell::new(s.application.source.as_str()),
+                    Cell::new(format!("{:.0}%", s.application.confidence * 100.0)),
+                    Cell::new(s.members.to_string()),
+                    Cell::new(
+                        s.application
+                            .updated_at
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string(),
+                    ),
+                ]);
+            }
+            render_table(table)
+        }
+    }
+}
+
+/// Render one application with its members.
+pub fn application_detail(detail: &ApplicationDetail, assets: &[Asset], format: Format) -> String {
+    let label = |id: &str| asset_label(assets, id);
+    match format {
+        Format::Json => json(detail),
+        Format::Csv => members_csv(detail),
+        Format::Table => {
+            let mut out = String::new();
+            out.push_str(&format!("Application : {}\n", detail.application.name));
+            out.push_str(&format!("Id          : {}\n", detail.application.id));
+            out.push_str(&format!(
+                "Source      : {}\n",
+                detail.application.source.as_str()
+            ));
+            out.push_str(&format!(
+                "Confidence  : {:.0}%\n",
+                detail.application.confidence * 100.0
+            ));
+            out.push('\n');
+            out.push_str(&members_table(detail, &label));
+            terminal_safe(&out)
+        }
+    }
+}
+
+/// Render why the members belong to the application: per-member evidence
+/// records and the inference model version.
+pub fn application_explain(detail: &ApplicationDetail, assets: &[Asset], format: Format) -> String {
+    let label = |id: &str| asset_label(assets, id);
+    let inferred = detail.application.source == AppSource::Inferred;
+    match format {
+        Format::Json => {
+            #[derive(serde::Serialize)]
+            struct ExplainJson<'a> {
+                application: &'a Application,
+                members: &'a [ApplicationMember],
+                inference_model: Option<&'a str>,
+            }
+            json(&ExplainJson {
+                application: &detail.application,
+                members: &detail.members,
+                inference_model: inferred.then_some(crate::applications::INFERENCE_VERSION),
+            })
+        }
+        Format::Csv => {
+            let mut out = String::from("asset_id,confidence,evidence\n");
+            for m in &detail.members {
+                let evidence = m
+                    .evidence
+                    .iter()
+                    .map(|r| r.description.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                out.push_str(&format!(
+                    "{},{:.3},{}\n",
+                    csv(&m.asset_id),
+                    m.confidence,
+                    csv(&evidence)
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            let mut out = String::new();
+            out.push_str(&format!("Application : {}\n", detail.application.name));
+            out.push_str(&format!("Id          : {}\n", detail.application.id));
+            out.push_str(&format!(
+                "Source      : {}\n",
+                detail.application.source.as_str()
+            ));
+            out.push_str(&format!(
+                "Confidence  : {:.0}%\n",
+                detail.application.confidence * 100.0
+            ));
+            if inferred {
+                out.push_str(&format!(
+                    "Model       : {}\n",
+                    crate::applications::INFERENCE_VERSION
+                ));
+            }
+            out.push_str("\nMembers\n");
+            out.push_str(&members_table(detail, &label));
+            out.push_str("\nEvidence\n");
+            if detail.members.is_empty() {
+                out.push_str("No members.\n");
+            }
+            for m in &detail.members {
+                out.push_str(&format!(
+                    "{} ({:.0}%)\n",
+                    label(&m.asset_id),
+                    m.confidence * 100.0
+                ));
+                if m.evidence.is_empty() {
+                    let note = if m.source == AppSource::Manual {
+                        "manual membership"
+                    } else {
+                        "no evidence records"
+                    };
+                    out.push_str(&format!("  {note}\n"));
+                }
+                for record in &m.evidence {
+                    out.push_str(&format!("  {}\n", record.description));
+                }
+            }
+            terminal_safe(&out)
+        }
+    }
+}
+
+/// Members as a table, with readable asset labels.
+fn members_table(detail: &ApplicationDetail, label: &dyn Fn(&str) -> String) -> String {
+    if detail.members.is_empty() {
+        return "No members.\n".to_string();
+    }
+    let mut table = table(&["Asset", "Source", "Confidence"]);
+    for m in &detail.members {
+        table.add_row(vec![
+            Cell::new(label(&m.asset_id)),
+            Cell::new(m.source.as_str()),
+            Cell::new(format!("{:.0}%", m.confidence * 100.0)),
+        ]);
+    }
+    render_table(table)
+}
+
+/// Members as CSV rows.
+fn members_csv(detail: &ApplicationDetail) -> String {
+    let mut out = String::from("application_id,asset_id,source,confidence\n");
+    for m in &detail.members {
+        out.push_str(&format!(
+            "{},{},{},{:.3}\n",
+            csv(&m.application_id),
+            csv(&m.asset_id),
+            csv(m.source.as_str()),
+            m.confidence
         ));
     }
     out

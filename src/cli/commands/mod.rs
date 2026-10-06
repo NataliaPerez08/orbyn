@@ -9,6 +9,7 @@ use clap::CommandFactory;
 
 use crate::cli::args::{Cli, Shell};
 
+pub(crate) mod applications;
 pub(crate) mod assessment;
 pub(crate) mod audit;
 pub(crate) mod cloud;
