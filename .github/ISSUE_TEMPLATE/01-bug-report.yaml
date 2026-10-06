@@ -1,0 +1,95 @@
+name: 🐛 Bug report
+description: Report a reproducible bug in a current orbyn release.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Note:** this form is only for reproducible bugs in a current release.
+        Orbyn performs read-only collection against **authorized** systems only —
+        if you are unsure whether your usage is covered, read
+        [SECURITY.md](https://github.com/NataliaPerez08/orbyn/blob/main/docs/SECURITY.md) first.
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Prior search
+      description: Please search existing issues before opening a new one.
+      options:
+        - label: I have searched the existing issues for this bug.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Orbyn version
+      description: Output of `orbyn --version`.
+      placeholder: "1.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - macOS
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Database backend
+      options:
+        - SQLite (default)
+        - PostgreSQL
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Subcommand
+      description: The orbyn subcommand that failed.
+      placeholder: "orbyn discover --target 10.0.0.0/24"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps someone else can take to reproduce this with a current release.
+      placeholder: |
+        1. Seed an inventory with `orbyn import ...`
+        2. Run `orbyn deps add ...`
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Verbose output
+      description: |
+        Output of the failing command with `-v` or `-vv`.
+        **Redact first:** remove tokens, passwords, SNMP communities and API keys —
+        orbyn redacts secrets at runtime, but what you paste here is your responsibility.
+      render: shell
+  - type: checkboxes
+    id: authorization
+    attributes:
+      label: Authorization
+      options:
+        - label: The systems involved in this report are systems I am authorized to collect from.
+          required: true

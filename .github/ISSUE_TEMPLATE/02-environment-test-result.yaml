@@ -1,0 +1,89 @@
+name: 🧪 Environment test result
+description: Report a live test of orbyn in your environment; results feed the public validation matrix.
+title: "[Env Test]: "
+labels: ["validation", "environment-tested"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing orbyn against a real system! Results reported here
+        are recorded in the [live validation log](https://github.com/NataliaPerez08/orbyn/blob/main/docs/VALIDATION_MATRIX.md) —
+        fixture tests alone never claim production validation, so live reports
+        like this one are how an integration earns it.
+  - type: dropdown
+    id: integration
+    attributes:
+      label: Integration or collector tested
+      options:
+        - Nmap collector
+        - SNMP collector
+        - SSH (Linux) collector
+        - Windows OpenSSH collector
+        - WinRM/WS-Man collector
+        - DNS evidence
+        - NetBox importer
+        - Prometheus importer
+        - Zabbix importer
+        - Proxmox VE adapter
+        - AWS adapter
+        - Huawei Cloud adapter
+        - OpenStack adapter
+        - GCP adapter
+        - Azure adapter
+        - Ansible export
+        - Terraform export
+        - SQLite backend
+        - PostgreSQL backend
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Orbyn version
+      placeholder: "1.3.0"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Your platform
+      description: OS and architecture orbyn ran on.
+      placeholder: "Debian 12, x86_64"
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target system (sanitized)
+      description: Vendor, product and version of the system you collected from. Do NOT include real hostnames, IPs or domains.
+      placeholder: "Cisco IOS-XE switch; Proxmox VE 8.2"
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Procedure followed
+      description: What you ran, and which of the documented manual validation assertions you checked (see VALIDATION_MATRIX.md).
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: What worked / what failed
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Command output supporting the result. **Redact secrets and real identifiers first.**
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Recording permission
+      options:
+        - label: The systems tested are systems I am authorized to collect from, and this result may be recorded in the public validation matrix.
+          required: true

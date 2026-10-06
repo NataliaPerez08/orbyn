@@ -1,0 +1,61 @@
+name: 🔌 Collector request
+description: Request a new read-only collector (host, network or platform probe).
+title: "[Collector]: "
+labels: ["collector-request", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the request! Collectors in orbyn are **read-only** probes
+        that normalize observations into the common inventory model. Requests are
+        prioritized by community interest — there is no delivery guarantee.
+        Before requesting, check [BACKLOG.md](https://github.com/NataliaPerez08/orbyn/blob/main/docs/BACKLOG.md)
+        and the [plugin SDK](https://github.com/NataliaPerez08/orbyn/blob/main/docs/PLUGINS.md) —
+        out-of-tree collectors are a supported extension point.
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: The platform or protocol you want collected, and what it is.
+      placeholder: "ACME OS is a network operating system used in ..."
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What migration decision this data would enable.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data to collect
+      description: Which facts matter (identity, interfaces, services, connections, capacity, filesystems...).
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How to obtain it
+      description: Commands, APIs or MIBs that expose the data read-only, and the auth model they need.
+      render: shell
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Every orbyn collector must satisfy these.
+      options:
+        - label: The collection can be done read-only (no state changes on the target).
+          required: true
+        - label: Credentials can be supplied per-run (env/stdin/agent) without orbyn storing them.
+          required: true
+        - label: The target is a system users are authorized to collect from.
+          required: true
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to build or test this collector myself.
+        - label: I am affiliated with the vendor of this platform.

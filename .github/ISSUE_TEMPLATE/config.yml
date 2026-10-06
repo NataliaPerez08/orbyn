@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://nataliaperez08.github.io/orbyn/
+    about: Installation, CLI reference, collectors, importers and security documentation.
+  - name: 🔒 Security policy (authorized use)
+    url: https://github.com/NataliaPerez08/orbyn/blob/main/docs/SECURITY.md
+    about: Orbyn performs read-only collection against authorized systems only. Read the policy before opening issues.
+  - name: 🤝 Contributing guide
+    url: https://github.com/NataliaPerez08/orbyn/blob/main/docs/CONTRIBUTING.md
+    about: Development conventions, testing and PR expectations.

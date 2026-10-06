@@ -1,0 +1,47 @@
+name: ✨ Feature proposal
+description: Propose a well-formed feature or behavior change for the orbyn CLI.
+title: "[Proposal]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Note:** this form is for well-formed proposals with an actionable
+        implementation plan — CLI surface, output, defaults. Ideas that are not
+        yet concrete enough to act on will be asked to come back with a plan.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Feature type
+      options:
+        - New command
+        - Change to existing behavior
+        - New assessment rule
+        - New export/import format
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed functionality
+      description: Describe the behavior in detail — CLI surface, output, defaults. The more concrete, the higher the chance of discussion.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What migration decision or workflow this enables that orbyn cannot do today.
+    validations:
+      required: true
+  - type: textarea
+    id: schema
+    attributes:
+      label: Database/schema impact
+      description: New tables, columns or migrations needed (optional — many features need none).
+  - type: textarea
+    id: deps
+    attributes:
+      label: External dependencies
+      description: New external tools, libraries or services this would require (optional).

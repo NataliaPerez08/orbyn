@@ -1,0 +1,68 @@
+name: 🧩 Integration request
+description: Request a new importer, exporter or external-system integration.
+title: "[Integration]: "
+labels: ["integration-request", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Requests for new integrations (source-of-truth importers, exporters,
+        cloud adapters). Every integration follows the shared adapter contract:
+        read-only by default, no credential storage, pagination/rate
+        limiting/timeouts, and provider provenance preserved. See the adapter
+        contract in [ROADMAP.md](https://github.com/NataliaPerez08/orbyn/blob/main/docs/ROADMAP.md)
+        for what an integration must satisfy.
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: The system you want integrated and what it is used for.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Where it fits in a migration workflow (import source, export target, metrics history...).
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Direction
+      options:
+        - Importer (external system -> orbyn)
+        - Exporter (orbyn -> external system)
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: API surface
+      description: Protocol (REST/SOAP/CLI), pagination, rate limits, response sizes, and whether offline documentation is available.
+  - type: input
+    id: auth
+    attributes:
+      label: Authentication model
+      description: Token / API key / agent / request signing — how a user would supply credentials per run.
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: Adapter contract
+      description: Every integration must satisfy these.
+      options:
+        - label: Operation can be read-only by default.
+          required: true
+        - label: Credentials can travel via env/stdin without being persisted or logged.
+          required: true
+        - label: The API supports pagination and bounded requests (or an equivalent way to cap response size).
+          required: true
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I can provide captured (sanitized) API responses as fixtures.
+        - label: I am willing to test the integration against a live system.
+        - label: I am affiliated with the vendor.
