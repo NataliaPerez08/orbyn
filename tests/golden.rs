@@ -161,12 +161,23 @@ fn normalized_plan(json: &str) -> String {
     serde_json::to_string_pretty(&v).expect("serialize plan")
 }
 
+/// The deterministic snapshots of one golden dataset.
+#[cfg(unix)]
+struct Snapshots {
+    graph: String,
+    assess: String,
+    export: String,
+    explain: String,
+    plan: String,
+    compare: String,
+    recommend: String,
+}
+
 /// Import the inventory, add two deterministic manual edges (so the golden
 /// output exercises the dependency graph and application grouping),
-/// discover applications, and return the graph / assessment / export /
-/// application-explain / migration-plan snapshots.
+/// discover applications, and snapshot every planning surface.
 #[cfg(unix)]
-fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String, String) {
+fn snapshot(dir: &TempDir, inventory: &str) -> Snapshots {
     let file = dir.path().join("inventory.json");
     std::fs::write(&file, inventory).expect("write inventory");
     run_ok(
@@ -194,7 +205,8 @@ fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String, 
     let assess = run_ok(orbyn(dir).args(["assess", "--format", "json"]));
     let export = normalized_export(&run_ok(orbyn(dir).args(["export", "--format", "csv"])));
     // Last: `plan` persists an artifact, and the snapshots above must not
-    // see it.
+    // see it. `targets` is read-only and fully deterministic (no
+    // timestamps), so its output needs no normalization.
     let plan = normalized_plan(&run_ok(orbyn(dir).args([
         "plan",
         &name,
@@ -202,7 +214,17 @@ fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String, 
         "--format",
         "json",
     ])));
-    (graph, assess, export, explain, plan)
+    let compare = run_ok(orbyn(dir).args(["targets", "compare", &name, "--format", "json"]));
+    let recommend = run_ok(orbyn(dir).args(["targets", "recommend", &name, "--format", "json"]));
+    Snapshots {
+        graph,
+        assess,
+        export,
+        explain,
+        plan,
+        compare,
+        recommend,
+    }
 }
 
 /// Run one golden dataset: compare against committed files, or regenerate them
@@ -217,14 +239,16 @@ fn run_golden(size: &str, count: usize) {
     if update {
         std::fs::write(base.join("inventory.json"), &inventory).expect("write inventory fixture");
     }
-    let (graph, assess, export, explain, plan) = snapshot(&dir, &inventory);
+    let s = snapshot(&dir, &inventory);
 
     if update {
-        std::fs::write(base.join("graph.csv"), &graph).expect("write graph golden");
-        std::fs::write(base.join("assess.json"), &assess).expect("write assess golden");
-        std::fs::write(base.join("export.csv"), &export).expect("write export golden");
-        std::fs::write(base.join("explain.json"), &explain).expect("write explain golden");
-        std::fs::write(base.join("plan.json"), &plan).expect("write plan golden");
+        std::fs::write(base.join("graph.csv"), &s.graph).expect("write graph golden");
+        std::fs::write(base.join("assess.json"), &s.assess).expect("write assess golden");
+        std::fs::write(base.join("export.csv"), &s.export).expect("write export golden");
+        std::fs::write(base.join("explain.json"), &s.explain).expect("write explain golden");
+        std::fs::write(base.join("plan.json"), &s.plan).expect("write plan golden");
+        std::fs::write(base.join("compare.json"), &s.compare).expect("write compare golden");
+        std::fs::write(base.join("recommend.json"), &s.recommend).expect("write recommend golden");
         return;
     }
     let expect_graph = std::fs::read_to_string(base.join("graph.csv")).expect("graph golden");
@@ -233,14 +257,26 @@ fn run_golden(size: &str, count: usize) {
     let expect_explain =
         std::fs::read_to_string(base.join("explain.json")).expect("explain golden");
     let expect_plan = std::fs::read_to_string(base.join("plan.json")).expect("plan golden");
-    assert_eq!(graph, expect_graph, "dependency graph drift for {size}");
-    assert_eq!(assess, expect_assess, "assessment drift for {size}");
-    assert_eq!(export, expect_export, "export drift for {size}");
+    let expect_compare =
+        std::fs::read_to_string(base.join("compare.json")).expect("compare golden");
+    let expect_recommend =
+        std::fs::read_to_string(base.join("recommend.json")).expect("recommend golden");
+    assert_eq!(s.graph, expect_graph, "dependency graph drift for {size}");
+    assert_eq!(s.assess, expect_assess, "assessment drift for {size}");
+    assert_eq!(s.export, expect_export, "export drift for {size}");
     assert_eq!(
-        explain, expect_explain,
+        s.explain, expect_explain,
         "application explain drift for {size}"
     );
-    assert_eq!(plan, expect_plan, "migration plan drift for {size}");
+    assert_eq!(s.plan, expect_plan, "migration plan drift for {size}");
+    assert_eq!(
+        s.compare, expect_compare,
+        "target comparison drift for {size}"
+    );
+    assert_eq!(
+        s.recommend, expect_recommend,
+        "target recommendation drift for {size}"
+    );
 }
 
 #[cfg(unix)]

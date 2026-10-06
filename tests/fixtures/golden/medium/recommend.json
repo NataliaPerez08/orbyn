@@ -1,0 +1,160 @@
+{
+  "comparison": {
+    "application_name": "host",
+    "strategy": "retain",
+    "readiness": 71,
+    "wave": 2,
+    "fits": [
+      {
+        "provider": "aws",
+        "region": "us-east-1",
+        "score": null,
+        "reasons": [
+          {
+            "input": "strategy",
+            "delta": 0,
+            "detail": "strategy is retain: network/infrastructure workloads are not migrated"
+          }
+        ],
+        "matches": [],
+        "catalog_version": "aws-catalog/2026-10"
+      },
+      {
+        "provider": "azure",
+        "region": "eastus",
+        "score": null,
+        "reasons": [
+          {
+            "input": "strategy",
+            "delta": 0,
+            "detail": "strategy is retain: network/infrastructure workloads are not migrated"
+          }
+        ],
+        "matches": [],
+        "catalog_version": "azure-catalog/2026-10"
+      },
+      {
+        "provider": "gcp",
+        "region": "us-central1",
+        "score": null,
+        "reasons": [
+          {
+            "input": "strategy",
+            "delta": 0,
+            "detail": "strategy is retain: network/infrastructure workloads are not migrated"
+          }
+        ],
+        "matches": [],
+        "catalog_version": "gcp-catalog/2026-10"
+      }
+    ],
+    "costs": [
+      {
+        "provider": "aws",
+        "currency": "USD",
+        "monthly_total": null,
+        "components": [
+          {
+            "component": "compute",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "no member matches; compute not calculated"
+          },
+          {
+            "component": "storage",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+          },
+          {
+            "component": "managed-database",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          }
+        ],
+        "confidence": "Low",
+        "reasons": [],
+        "cost_model_version": "cost/v1"
+      },
+      {
+        "provider": "azure",
+        "currency": "USD",
+        "monthly_total": null,
+        "components": [
+          {
+            "component": "compute",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "no member matches; compute not calculated"
+          },
+          {
+            "component": "storage",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+          },
+          {
+            "component": "managed-database",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          }
+        ],
+        "confidence": "Low",
+        "reasons": [],
+        "cost_model_version": "cost/v1"
+      },
+      {
+        "provider": "gcp",
+        "currency": "USD",
+        "monthly_total": null,
+        "components": [
+          {
+            "component": "compute",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "no member matches; compute not calculated"
+          },
+          {
+            "component": "storage",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+          },
+          {
+            "component": "managed-database",
+            "label": "not_calculated",
+            "monthly": null,
+            "currency": "USD",
+            "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          }
+        ],
+        "confidence": "Low",
+        "reasons": [],
+        "cost_model_version": "cost/v1"
+      }
+    ],
+    "versions": {
+      "rules_version": "0.8.0",
+      "inference_version": "application-inference/v1",
+      "readiness_version": "readiness/v1",
+      "strategy_version": "strategy/v1",
+      "target_fit_version": "target-fit/v1",
+      "cost_model_version": "cost/v1"
+    }
+  },
+  "recommended": null,
+  "alternative": null,
+  "why": [
+    "strategy is retain: no provider fit is calculated"
+  ]
+}
