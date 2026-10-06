@@ -417,8 +417,34 @@ live provider credentials are not required by the test suite.
 
 ### Future assessment capabilities
 
-- Cloud SKU recommendation catalogs.
-- Cost comparison across target providers.
-- Application-wave planning.
 - Extended dependency telemetry such as flow logs/eBPF.
 - Optional distributed collectors.
+
+## v1.1–v1.3 — Application intelligence, planner, targets
+
+**Status:** implemented. The capability milestones described in
+[Orbyn — Roadmap v1.1 to v1.3.md](Orbyn%20—%20Roadmap%20v1.1%20to%20v1.3.md)
+are complete and covered by deterministic fixtures, golden snapshots and
+end-to-end tests:
+
+- **v1.1 Application intelligence:** applications are first-class persisted
+  entities inferred from dependency evidence with per-member confidence and
+  explainability; manual curation overrides inference; application graphs,
+  application-level assessment rollups and wave planning on persisted
+  applications.
+- **v1.2 Migration planner:** readiness (0–100, separate from complexity,
+  every factor explainable), deterministic migration strategies
+  (rehost/replatform/refactor/retain/retire, or `unknown` — never fabricated
+  certainty), per-application plans persisted as audited artifacts with full
+  provenance, and self-contained migration bundles.
+- **v1.3 Target & cost intelligence:** provider-neutral versioned catalogs
+  (capability and pricing data separate, embedded at build time),
+  application-level fit scoring with explainable inputs, an estimated
+  monthly cost baseline where unknown components are never silently zero,
+  multi-cloud comparison and a recommendation engine where price never
+  automatically decides.
+
+Exit criteria for each milestone are mapped to concrete tests (see the
+roadmap document); the deferred items — online pricing APIs, Huawei/OpenStack
+catalog data, storage and managed-database cost calculation — are recorded as
+known `not_calculated` paths, not silent gaps.

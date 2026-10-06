@@ -10,7 +10,10 @@ single-binary CLI tool.
 
 !!! info "Status"
     v1.0.4 stable release — discovery, inventory, assessment, integrations,
-    metrics/right-sizing, cloud adapters, SKU matching and migration waves.
+    metrics/right-sizing, cloud adapters, SKU matching, migration waves,
+    application intelligence (v1.1), the migration planner with readiness,
+    strategies, plans and bundles (v1.2), and target & cost intelligence
+    with multi-cloud comparison (v1.3).
 
 ## Why Orbyn?
 
