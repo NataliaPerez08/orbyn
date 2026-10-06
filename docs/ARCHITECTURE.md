@@ -35,6 +35,8 @@ src/
 │   ├── mod.rs            # store opening, audit begin/finish
 │   ├── inventory.rs      # asset resolution, inventory/cloud persistence
 │   ├── assessment.rs     # assessment input assembly
+│   ├── applications.rs   # application discovery orchestration
+│   ├── planning.rs       # plan/bundle workflows
 │   ├── discovery.rs      # bounded-pool discovery runner
 │   └── dependencies.rs   # dependency curation (add/confirm/remove, DNS evidence)
 ├── lib.rs                # library surface
@@ -68,6 +70,8 @@ src/
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
 │   └── grouping.rs       # application grouping (union-find)
 ├── sku/                  # right-sizing SKU matching against static provider catalogs
+├── applications/         # application inference engine (pure function over the snapshot)
+├── planning/             # readiness + strategy models (pure functions over the snapshot)
 ├── waves/                # migration wave planning (pure function over the assessment)
 └── output/               # table / json / csv rendering
 ```
@@ -295,13 +299,47 @@ persisted applications:
   otherwise) and warns when an application in an earlier wave depends on
   one in a later wave.
 
-### 7. CLI
+### 7. Migration planning
+
+The planner (v1.2) turns the assessment snapshot into per-application
+migration plans:
+
+- `src/planning/` holds two deterministic models, pure functions over the
+  same snapshot the assessment uses (rules never read the store):
+  - `readiness.rs` scores 0–100, separate from complexity. Each concern
+    (inventory completeness, ownership, capacity, metrics window quality,
+    application/dependency confidence, unconfirmed/external dependencies,
+    unsupported software) emits an explainable
+    `{factor, delta, evidence}` record; the version
+    (`readiness/v1`) is stamped into plan provenance.
+  - `strategy.rs` recommends `rehost | replatform | refactor | retain |
+    retire` — or `unknown` when the evidence is insufficient, never
+    fabricated certainty. First matching rule wins; every decision
+    carries confidence, rationale, evidence and alternatives
+    (`strategy/v1`).
+- `orbyn plan` assembles the plan: readiness, strategy, targets (sized
+  from the capacity allocation; `--target` adds instance-type
+  recommendations from the provider catalog and affects recommendations
+  only), blockers (readiness concerns with a severity), assumptions and
+  the wave assignment from the same wave plan `orbyn waves` produces.
+  Providers without a curated catalog (huawei, openstack) report
+  NOT_CALCULATED instead of guessing.
+- Plans are persisted artifacts (migration 0011, `migration_plans` with
+  JSON detail columns): reproducible, version-stamped and audited
+  (`plan.create`).
+- `orbyn bundle` writes the self-contained handoff directory
+  (`inventory`, `applications`, `dependencies`, `assessment`, `sizing`,
+  `migration-plan`, `manifest` with every rule version) — read-only, so
+  generation never mutates the inventory.
+
+### 8. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
 `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`,
 `connections`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`,
-`assess`) fetches data through the `Store` trait, computes results, and
-delegates rendering to `src/output/`.
+`assess`, `applications`, `waves`, `plan`, `bundle`) fetches data through
+the `Store` trait, computes results, and delegates rendering to
+`src/output/`.
 
 Inventory enrichment is a read/write CLI surface:
 

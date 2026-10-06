@@ -155,6 +155,9 @@ inference.
 | `orbyn assess [--format ...] [--rules] [--application <name>]` | Migration assessment report / rule catalog / application rollup |
 | `orbyn sku-match --provider aws\|azure\|gcp --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
 | `orbyn waves [--format ...] [--pin <asset>=<wave>]... [--exclude <asset>]...` | Ordered migration waves (low risk first) with exposed reasoning |
+| `orbyn plan <application> [--target aws\|azure\|gcp\|huawei\|openstack] [--explain] [--format ...]` | Migration plan for one application: readiness, strategy, targets, blockers, assumptions and wave — persisted as an audited artifact |
+| `orbyn plan --all [--target ...] [--format ...]` | Plan every application against one shared wave plan |
+| `orbyn bundle <application> [--target ...]` | Write a self-contained migration handoff directory (`<app>-migration/`); read-only |
 
 `sku-match` keeps provider catalogs separate from the assessment: feed it the
 baseline suggested by an `rs.*` finding (e.g. "4 cores, 6144 MB") to see which
@@ -166,6 +169,23 @@ groups together, and honors manual `--pin`/`--exclude` constraints. When
 applications have been discovered it plans on those persisted units and warns
 when an application in an earlier wave depends on one in a later wave. See
 [Migration waves](waves.md).
+
+`plan` runs two deterministic models over the same snapshot the assessment
+uses: a readiness score (0–100, separate from complexity, one explainable
+factor per concern) and a strategy recommendation (`rehost`, `replatform`,
+`refactor`, `retain`, `retire` — or `unknown` when the evidence is
+insufficient, never fabricated certainty). Targets size from the capacity
+allocation; `--target` adds instance-type recommendations from the provider
+catalog and affects recommendations only, never the discovered evidence.
+Providers without a curated catalog (huawei, openstack) say so instead of
+guessing. `--explain` adds the wave reasoning. Every plan is saved with its
+full provenance (rule versions, snapshot reference) and audited.
+
+`bundle` assembles the handoff: `inventory.json`/`csv`, `applications.json`,
+`dependencies.json`/`mmd`, `assessment.json`, `sizing.json`,
+`migration-plan.json`/`md` and a `manifest.json` recording every rule version,
+so the bundle is reproducible and auditable. Generation is read-only — nothing
+is persisted or audited.
 
 ## Import and export
 
@@ -226,6 +246,8 @@ orbyn applications discover
 orbyn applications explain frontend
 orbyn assess --application frontend
 orbyn waves
+orbyn plan frontend --target aws --explain
+orbyn bundle frontend --target aws
 ```
 
 ## Operational limits and partial failures

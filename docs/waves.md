@@ -68,5 +68,8 @@ Wave planning is a pure function over the same snapshot `orbyn assess`
 builds. It shares the "external endpoint" definition with the `dep.external`
 rule (`assessment::external_endpoints`) so the two can never drift apart.
 
+`orbyn plan` assigns each application's wave from this same wave plan, so a
+plan's wave assignment can never drift from `orbyn waves` output.
+
 Scheduling, dates, and freeze windows are out of scope; waves are an ordered
 suggestion, not a calendar.
