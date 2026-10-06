@@ -1,6 +1,6 @@
 [package]
 name = "orbyn"
-version = "1.0.4"
+version = "1.3.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Open-source infrastructure discovery, dependency mapping, and migration assessment."

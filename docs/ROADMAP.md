@@ -2,10 +2,11 @@
 
 The roadmap describes product capability, not guaranteed release dates.
 
-Release versions follow SemVer and are tagged (`v1.0.x` currently). Headings
+Release versions follow SemVer and are tagged (`v1.0.x` through `v1.0.4`,
+then `v1.3.0` for the v1.1–v1.3 capability milestones). Headings
 below mark capability milestones: their capabilities shipped incrementally
-across the v1.0.x releases, so a heading is not a promise that a `v1.1` or
-`v1.2` release exists.
+across releases, so a heading is not a promise that a matching release
+exists.
 
 ## v0.1 — Network discovery foundation
 

@@ -9,7 +9,7 @@ plan migrations and right-size target environments. Everything is a local,
 single-binary CLI tool.
 
 !!! info "Status"
-    v1.0.4 stable release — discovery, inventory, assessment, integrations,
+    v1.3.0 stable release — discovery, inventory, assessment, integrations,
     metrics/right-sizing, cloud adapters, SKU matching, migration waves,
     application intelligence (v1.1), the migration planner with readiness,
     strategies, plans and bundles (v1.2), and target & cost intelligence
