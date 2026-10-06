@@ -1,5 +1,7 @@
 /target
-/data
+/data/*
+# Catalog source data is embedded at build time — it must be tracked.
+!/data/catalogs/
 /site
 *.db
 .env
