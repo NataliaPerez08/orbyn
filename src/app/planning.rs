@@ -26,6 +26,13 @@ pub(crate) struct TargetSpec {
     pub provider: Option<orbyn::sku::Provider>,
 }
 
+/// The shared assessment snapshot every planning workflow starts from.
+pub(crate) async fn snapshot(store: &dyn Store) -> Result<(AssessmentInput, AssessmentReport)> {
+    let input = crate::app::assessment::assessment_input(store).await?;
+    let report = run_assessment(&input);
+    Ok((input, report))
+}
+
 /// Build one application's plan without side effects: the shared
 /// workflow behind `plan` (which then persists) and `bundle` (which is
 /// read-only).
@@ -34,8 +41,7 @@ pub(crate) async fn generate(
     detail: &ApplicationDetail,
     target: Option<&TargetSpec>,
 ) -> Result<PlanOutcome> {
-    let input = crate::app::assessment::assessment_input(store).await?;
-    let report = run_assessment(&input);
+    let (input, report) = snapshot(store).await?;
     let waves = wave_plan(store, &input, &report).await?;
     build(detail, &input, &report, &waves, target).await
 }
@@ -96,7 +102,7 @@ pub(crate) async fn plan_all(
 
 /// The wave plan over persisted applications (the same planning the
 /// `waves` command runs), so plan wave assignments never drift from it.
-async fn wave_plan(
+pub(crate) async fn wave_plan(
     store: &dyn Store,
     input: &AssessmentInput,
     report: &AssessmentReport,
@@ -111,7 +117,10 @@ async fn wave_plan(
 
 /// The wave an application's members land in, with the reasons of its
 /// first member (a unit migrates together, so the reasons are shared).
-fn wave_assignment(waves: &WavePlan, detail: &ApplicationDetail) -> (Option<u8>, Vec<String>) {
+pub(crate) fn wave_assignment(
+    waves: &WavePlan,
+    detail: &ApplicationDetail,
+) -> (Option<u8>, Vec<String>) {
     for wave in &waves.waves {
         for asset in &wave.assets {
             if detail.members.iter().any(|m| m.asset_id == asset.asset_id) {
@@ -131,18 +140,7 @@ async fn build(
     target: Option<&TargetSpec>,
 ) -> Result<PlanOutcome> {
     let members = &detail.members;
-    let plan_input = PlanInput {
-        application: &detail.application,
-        members,
-        assets: &input.assets,
-        services: &input.services,
-        dependencies: &input.dependencies,
-        connections: &input.connections,
-        capacities: &input.capacities,
-        findings: &report.findings,
-        asset_scores: &report.asset_scores,
-        metric_windows: &input.metric_windows,
-    };
+    let plan_input = PlanInput::from_snapshot(&detail.application, members, input, report);
     let readiness = planning::readiness::score(&plan_input);
     let recommendation = planning::strategy::recommend(&plan_input, readiness.score);
 

@@ -9,6 +9,7 @@ pub(crate) mod dependencies;
 pub(crate) mod discovery;
 pub(crate) mod inventory;
 pub(crate) mod planning;
+pub(crate) mod targets;
 
 use std::sync::Arc;
 

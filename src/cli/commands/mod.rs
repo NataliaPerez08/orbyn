@@ -20,6 +20,7 @@ pub(crate) mod inventory;
 pub(crate) mod metrics;
 pub(crate) mod planning;
 pub(crate) mod sku;
+pub(crate) mod targets;
 pub(crate) mod waves;
 
 /// Handle `orbyn completions <shell>`.

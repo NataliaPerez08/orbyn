@@ -13,7 +13,7 @@ use crate::assessment::{AssessmentReport, AssetScore, Complexity, Finding, Sever
 use crate::domain::{
     AppSource, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
     Criticality, Dependency, DiscoveryJob, EvidenceKind, Filesystem, Interface, JobStatus,
-    MigrationPlan, PlanProvenance, RunningService, Service,
+    MigrationPlan, MigrationStrategy, PlanProvenance, RunningService, Service,
 };
 use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -1716,6 +1716,231 @@ pub fn bundle_manifest(outcome: &PlanOutcome, files: &[String]) -> String {
         wave: outcome.plan.wave,
         provenance: &outcome.plan.provenance,
     })
+}
+
+/// The version stamps that make a target comparison reproducible.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TargetVersions {
+    pub rules_version: String,
+    pub inference_version: String,
+    pub readiness_version: String,
+    pub strategy_version: String,
+    pub target_fit_version: String,
+    pub cost_model_version: String,
+}
+
+/// Every catalog provider's fit and cost for one application.
+#[derive(Debug, serde::Serialize)]
+pub struct TargetComparison {
+    pub application_name: String,
+    pub strategy: MigrationStrategy,
+    pub readiness: u8,
+    pub wave: Option<u8>,
+    pub fits: Vec<crate::targets::matching::ProviderFit>,
+    pub costs: Vec<crate::targets::cost::CostEstimate>,
+    pub versions: TargetVersions,
+}
+
+/// The recommended provider, its alternative, and why.
+#[derive(Debug, serde::Serialize)]
+pub struct TargetRecommendation {
+    pub comparison: TargetComparison,
+    /// Index into `comparison.fits`, `None` when nothing is calculable.
+    pub recommended: Option<usize>,
+    pub alternative: Option<usize>,
+    pub why: Vec<String>,
+}
+
+/// The monthly cost of one component, looked up by name.
+fn component_monthly(cost: &crate::targets::cost::CostEstimate, name: &str) -> Option<f64> {
+    cost.components
+        .iter()
+        .find(|c| c.component == name)
+        .and_then(|c| c.monthly)
+}
+
+/// Render `orbyn targets compare`.
+pub fn targets_compare(c: &TargetComparison, format: Format) -> String {
+    match format {
+        Format::Json => json(c),
+        Format::Csv => {
+            let mut out = String::from(
+                "provider,region,fit,catalog_version,compute_monthly,storage_monthly,\
+                 managed_db_monthly,total_monthly,currency,cost_confidence\n",
+            );
+            for (fit, cost) in c.fits.iter().zip(c.costs.iter()) {
+                out.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{}\n",
+                    csv(&fit.provider),
+                    csv(&fit.region),
+                    fit.score
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "n/c".into()),
+                    csv(&fit.catalog_version),
+                    component_monthly(cost, "compute")
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_default(),
+                    component_monthly(cost, "storage")
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_default(),
+                    component_monthly(cost, "managed-database")
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_default(),
+                    cost.monthly_total
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_default(),
+                    csv(&cost.currency),
+                    cost.confidence,
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            let mut out = format!(
+                "Target comparison: {} (strategy {}, readiness {}/100",
+                c.application_name,
+                c.strategy.as_str(),
+                c.readiness
+            );
+            if let Some(wave) = c.wave {
+                let label = crate::waves::WAVE_LABELS
+                    .get(wave.saturating_sub(1) as usize)
+                    .copied()
+                    .unwrap_or("unknown");
+                out.push_str(&format!(", wave {wave} ({label})"));
+            }
+            out.push_str(")\n\n");
+            let mut t = table(&[
+                "Provider",
+                "Region",
+                "Fit",
+                "Compute/mo",
+                "Storage",
+                "Managed DB",
+                "Est. total",
+                "Conf.",
+            ]);
+            for (fit, cost) in c.fits.iter().zip(c.costs.iter()) {
+                let money =
+                    |v: Option<f64>| v.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/c".into());
+                t.add_row(vec![
+                    Cell::new(&fit.provider),
+                    Cell::new(&fit.region),
+                    Cell::new(
+                        fit.score
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "n/c".into()),
+                    ),
+                    Cell::new(money(component_monthly(cost, "compute"))),
+                    Cell::new(money(component_monthly(cost, "storage"))),
+                    Cell::new(money(component_monthly(cost, "managed-database"))),
+                    Cell::new(money(cost.monthly_total)),
+                    Cell::new(cost.confidence.to_string()),
+                ]);
+            }
+            out.push_str(&render_table(t));
+            out.push_str(&format!(
+                "\nLabels: n/c = not calculated. Prices are curated list prices ({})\n",
+                c.costs
+                    .first()
+                    .map(|c| c.currency.as_str())
+                    .unwrap_or("USD")
+            ));
+            out.push_str(&format!(
+                "Models: rules {}, inference {}, readiness {}, strategy {}, target-fit {}, cost {}\n",
+                c.versions.rules_version,
+                c.versions.inference_version,
+                c.versions.readiness_version,
+                c.versions.strategy_version,
+                c.versions.target_fit_version,
+                c.versions.cost_model_version,
+            ));
+            terminal_safe(&out)
+        }
+    }
+}
+
+/// Render `orbyn targets recommend`.
+pub fn targets_recommend(r: &TargetRecommendation, format: Format) -> String {
+    let c = &r.comparison;
+    match format {
+        Format::Json => json(r),
+        Format::Csv => {
+            let mut out = String::from("role,provider,fit,total_monthly,currency\n");
+            for (role, idx) in [
+                ("recommended", r.recommended),
+                ("alternative", r.alternative),
+            ] {
+                if let Some(i) = idx {
+                    let fit = &c.fits[i];
+                    let cost = &c.costs[i];
+                    out.push_str(&format!(
+                        "{},{},{},{},{}\n",
+                        role,
+                        csv(&fit.provider),
+                        fit.score.map(|s| s.to_string()).unwrap_or_default(),
+                        cost.monthly_total
+                            .map(|v| format!("{v:.2}"))
+                            .unwrap_or_default(),
+                        csv(&cost.currency),
+                    ));
+                }
+            }
+            out
+        }
+        Format::Table => {
+            let Some(rec) = r.recommended else {
+                return format!(
+                    "No recommendation for {}: {}\n",
+                    c.application_name,
+                    r.why
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("no provider fit")
+                );
+            };
+            let rec_fit = &c.fits[rec];
+            let mut out = format!(
+                "Recommendation: {} -> {} (fit {}/100)\n",
+                c.application_name,
+                rec_fit.provider,
+                rec_fit
+                    .score
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "n/c".into())
+            );
+            if let Some(alt) = r.alternative {
+                let alt_fit = &c.fits[alt];
+                out.push_str(&format!(
+                    "Alternative: {} (fit {}/100)\n",
+                    alt_fit.provider,
+                    alt_fit
+                        .score
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "n/c".into())
+                ));
+            }
+            out.push_str("\nWhy:\n");
+            for line in &r.why {
+                out.push_str(&format!("  {line}\n"));
+            }
+            out.push_str(
+                "\nPrices (curated list prices — information, never the deciding factor):\n",
+            );
+            for (i, (fit, cost)) in c.fits.iter().zip(c.costs.iter()).enumerate() {
+                let marker = if Some(i) == r.recommended { "->" } else { "  " };
+                let total = cost
+                    .monthly_total
+                    .map(|v| format!("{v:.2} {}", cost.currency))
+                    .unwrap_or_else(|| "not calculated".into());
+                out.push_str(&format!(
+                    "{marker} {}: {total}/mo ({} confidence)\n",
+                    fit.provider, cost.confidence
+                ));
+            }
+            terminal_safe(&out)
+        }
+    }
 }
 
 /// Render the assessment rule catalog (`orbyn assess --rules`).

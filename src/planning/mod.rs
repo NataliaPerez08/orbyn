@@ -31,6 +31,28 @@ pub struct PlanInput<'a> {
 }
 
 impl PlanInput<'_> {
+    /// Assemble from an application, its members and the assessment
+    /// snapshot — the one construction path every caller shares.
+    pub fn from_snapshot<'a>(
+        application: &'a Application,
+        members: &'a [ApplicationMember],
+        input: &'a crate::assessment::AssessmentInput,
+        report: &'a crate::assessment::AssessmentReport,
+    ) -> PlanInput<'a> {
+        PlanInput {
+            application,
+            members,
+            assets: &input.assets,
+            services: &input.services,
+            dependencies: &input.dependencies,
+            connections: &input.connections,
+            capacities: &input.capacities,
+            findings: &report.findings,
+            asset_scores: &report.asset_scores,
+            metric_windows: &input.metric_windows,
+        }
+    }
+
     /// The assets of the application's active members, in member order.
     pub fn member_assets(&self) -> Vec<&Asset> {
         let by_id = |id: &str| self.assets.iter().find(|a| a.id == id);

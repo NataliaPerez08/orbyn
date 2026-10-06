@@ -179,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
             application,
             target,
         } => commands::planning::bundle(&config, application, target).await?,
+        Command::Targets { action } => commands::targets::targets(&config, action).await?,
     }
 
     Ok(())

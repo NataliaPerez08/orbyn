@@ -444,6 +444,14 @@ pub(crate) enum Command {
         target: Option<PlanTarget>,
     },
 
+    /// Target and cost intelligence: compare every provider catalog for
+    /// an application, or get a recommendation with the reasoning
+    /// exposed. Price never automatically determines the recommendation.
+    Targets {
+        #[command(subcommand)]
+        action: Option<TargetsAction>,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
@@ -462,6 +470,27 @@ pub(crate) enum PlanTarget {
     Gcp,
     Huawei,
     Openstack,
+}
+
+/// Sub-actions of `orbyn targets`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum TargetsAction {
+    /// Every catalog provider's fit, monthly baseline and model
+    /// versions for one application.
+    Compare {
+        /// Application name or ID.
+        application: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+    /// The recommended provider plus an alternative, with the
+    /// "why X instead of Y" evidence.
+    Recommend {
+        /// Application name or ID.
+        application: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
 }
 
 /// Shell backends supported by `orbyn completions`.
@@ -989,6 +1018,7 @@ mod tests {
             "waves",
             "plan",
             "bundle",
+            "targets",
             "completions",
         ];
         for name in expected {
