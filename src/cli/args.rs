@@ -354,6 +354,13 @@ pub(crate) enum Command {
         /// Restrict the view to edges touching this asset (by ID or IP).
         #[arg(long)]
         asset: Option<String>,
+        /// Restrict the view to edges touching this application's members.
+        #[arg(long, conflicts_with_all = ["asset", "applications"])]
+        application: Option<String>,
+        /// Application-level graph: nodes are applications, edges are
+        /// dependency edges crossing application boundaries.
+        #[arg(long, conflicts_with_all = ["asset", "application"])]
+        applications: bool,
     },
 
     /// Discover, inspect and curate applications: groups of assets that

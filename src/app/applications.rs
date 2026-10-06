@@ -2,14 +2,14 @@
 //! read paths behind `orbyn applications`. Mutating operations record
 //! audit events around the store changes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 
 use orbyn::applications::{InferenceInput, InferredMember};
 use orbyn::domain::{AppSource, Application, ApplicationMember};
-use orbyn::output::{ApplicationDetail, ApplicationSummary};
+use orbyn::output::{ApplicationDetail, ApplicationEdge, ApplicationSummary};
 use orbyn::store::Store;
 
 use crate::app::inventory::resolve_asset;
@@ -288,6 +288,41 @@ pub(crate) async fn remove(store: &dyn Store, application: String, asset: String
     }
     .await;
     finish_audit_result(store, audit, result).await
+}
+
+/// Aggregate dependency edges crossing application boundaries into
+/// application-to-application edges. Edges inside one application or
+/// touching unassigned assets are not application edges.
+pub(crate) async fn application_edges(store: &dyn Store) -> Result<Vec<ApplicationEdge>> {
+    let mut owner: HashMap<String, String> = HashMap::new();
+    for application in store.list_applications().await? {
+        for member in active_members(store, &application.id).await? {
+            // ponytail: an asset in two applications counts for the
+            // lexicographically last name; per-edge attribution if dual
+            // membership shows up in practice.
+            owner.insert(member.asset_id, application.name.clone());
+        }
+    }
+    let mut counts: HashMap<(String, String), usize> = HashMap::new();
+    for d in store.list_dependencies().await? {
+        if let (Some(source), Some(target)) =
+            (owner.get(&d.source_asset_id), owner.get(&d.target_asset_id))
+        {
+            if source != target {
+                *counts.entry((source.clone(), target.clone())).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut edges: Vec<ApplicationEdge> = counts
+        .into_iter()
+        .map(|((source, target), edges)| ApplicationEdge {
+            source,
+            target,
+            edges,
+        })
+        .collect();
+    edges.sort_by(|a, b| (&a.source, &a.target).cmp(&(&b.source, &b.target)));
+    Ok(edges)
 }
 
 /// Persist inferred members as store rows.

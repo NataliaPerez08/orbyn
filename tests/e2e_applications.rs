@@ -75,3 +75,31 @@ fn applications_discover_show_explain_and_manual_precedence() {
     let out = run_fail(orbyn(&dir).args(["applications", "show", "nope"]));
     assert!(out.contains("no application matches 'nope'"), "{out}");
 }
+
+#[test]
+fn graph_application_and_applications_views() {
+    let dir = TempDir::new("graph-applications");
+    seed(&dir);
+    run_ok_combined(orbyn(&dir).args(["applications", "discover"]));
+
+    // --application scopes the graph to edges touching the members.
+    let out = run_ok(orbyn(&dir).args(["graph", "--application", "frontend", "--format", "csv"]));
+    assert!(out.contains("10-0-0-2,10-0-0-4,tcp,5432"), "{out}");
+    assert!(out.contains("10-0-0-3,10-0-0-4,tcp,5432"), "{out}");
+
+    // A second application makes an edge cross a boundary.
+    run_ok_combined(orbyn(&dir).args(["applications", "remove", "frontend", "10.0.0.3"]));
+    run_ok_combined(orbyn(&dir).args(["applications", "create", "payments"]));
+    run_ok_combined(orbyn(&dir).args(["applications", "add", "payments", "10.0.0.3"]));
+
+    let out = run_ok(orbyn(&dir).args(["graph", "--applications", "--format", "csv"]));
+    assert!(out.contains("payments,frontend,1"), "{out}");
+    let out = run_ok(orbyn(&dir).args(["graph", "--applications", "--mermaid"]));
+    assert!(out.starts_with("graph TD"), "{out}");
+    assert!(out.contains("payments"), "{out}");
+
+    // Unknown applications and flag conflicts fail cleanly.
+    let out = run_fail(orbyn(&dir).args(["graph", "--application", "nope"]));
+    assert!(out.contains("no application matches 'nope'"), "{out}");
+    run_fail(orbyn(&dir).args(["graph", "--application", "frontend", "--asset", "10.0.0.2"]));
+}

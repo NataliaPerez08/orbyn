@@ -1061,6 +1061,73 @@ fn members_csv(detail: &ApplicationDetail) -> String {
     out
 }
 
+/// A dependency edge between two applications: the asset-level edges
+/// crossing the boundary, aggregated into one application edge.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApplicationEdge {
+    pub source: String,
+    pub target: String,
+    pub edges: usize,
+}
+
+/// Render the application-level graph.
+pub fn application_graph(edges: &[ApplicationEdge], format: Format) -> String {
+    match format {
+        Format::Json => json(edges),
+        Format::Csv => {
+            let mut out = String::from("source,target,edges\n");
+            for e in edges {
+                out.push_str(&format!(
+                    "{},{},{}\n",
+                    csv(&e.source),
+                    csv(&e.target),
+                    e.edges
+                ));
+            }
+            out
+        }
+        Format::Table => {
+            if edges.is_empty() {
+                return "No application dependency edges. Run `orbyn applications discover`.\n"
+                    .to_string();
+            }
+            let mut table = table(&["Source Application", "Target Application", "Edges"]);
+            for e in edges {
+                table.add_row(vec![
+                    Cell::new(&e.source),
+                    Cell::new(&e.target),
+                    Cell::new(e.edges.to_string()),
+                ]);
+            }
+            render_table(table)
+        }
+    }
+}
+
+/// Render the application-level graph as a Mermaid flowchart.
+pub fn application_mermaid(edges: &[ApplicationEdge]) -> String {
+    let mut out = String::from("graph TD\n");
+    if edges.is_empty() {
+        return out;
+    }
+    let label = |name: &str| name.replace(['"', '[', ']', '\n', '\r'], "_");
+    for e in edges {
+        let count = if e.edges == 1 {
+            "1 edge".to_string()
+        } else {
+            format!("{} edges", e.edges)
+        };
+        out.push_str(&format!(
+            "  {}[\"{}\"] -->|{count}| {}[\"{}\"]\n",
+            mermaid_node_id(&e.source),
+            label(&e.source),
+            mermaid_node_id(&e.target),
+            label(&e.target),
+        ));
+    }
+    out
+}
+
 /// Render the active connections observed on an asset.
 pub fn connections(conns: &[Connection], format: Format) -> String {
     match format {
