@@ -1943,6 +1943,37 @@ pub fn targets_recommend(r: &TargetRecommendation, format: Format) -> String {
     }
 }
 
+/// Render `orbyn catalog update`: the embedded catalog status. Catalogs
+/// are bundled at build time (offline default), so this reports the
+/// pinned versions rather than pretending to fetch new ones.
+pub fn catalog_status(catalogs: &[crate::targets::TargetCatalog]) -> String {
+    let mut t = table(&[
+        "Provider",
+        "Region",
+        "Catalog version",
+        "Retrieved",
+        "SKUs",
+        "Prices",
+    ]);
+    for c in catalogs {
+        t.add_row(vec![
+            Cell::new(&c.provider),
+            Cell::new(&c.region),
+            Cell::new(&c.catalog_version),
+            Cell::new(&c.retrieved_at),
+            Cell::new(c.skus.len()),
+            Cell::new(c.prices.len()),
+        ]);
+    }
+    let mut out = String::from(
+        "Catalogs are embedded at build time (offline default); \
+         online refresh is not available in this build.\n\n",
+    );
+    out.push_str(&render_table(t));
+    out.push_str("\nPlans and comparisons pin the catalog version they used.\n");
+    terminal_safe(&out)
+}
+
 /// Render the assessment rule catalog (`orbyn assess --rules`).
 pub fn rules_catalog(rules: &[Rule], version: &str) -> String {
     let mut out = format!("Rules version: {version}\n\n");

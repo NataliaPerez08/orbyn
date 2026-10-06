@@ -78,3 +78,13 @@ fn recommend_explains_and_never_decides_on_price() {
     let out = run_fail(orbyn(&dir).args(["targets", "compare", "nope"]));
     assert!(out.contains("no application matches 'nope'"), "{out}");
 }
+
+#[test]
+fn catalog_update_reports_embedded_versions() {
+    let dir = TempDir::new("catalog");
+    let out = run_ok(orbyn(&dir).args(["catalog", "update"]));
+    assert!(out.contains("aws-catalog/2026-10"), "{out}");
+    assert!(out.contains("azure-catalog/2026-10"), "{out}");
+    assert!(out.contains("gcp-catalog/2026-10"), "{out}");
+    assert!(out.contains("embedded at build time"), "{out}");
+}

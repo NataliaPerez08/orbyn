@@ -180,6 +180,7 @@ async fn main() -> anyhow::Result<()> {
             target,
         } => commands::planning::bundle(&config, application, target).await?,
         Command::Targets { action } => commands::targets::targets(&config, action).await?,
+        Command::Catalog { action } => commands::targets::catalog(action)?,
     }
 
     Ok(())

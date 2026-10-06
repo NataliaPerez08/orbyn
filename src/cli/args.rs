@@ -452,6 +452,12 @@ pub(crate) enum Command {
         action: Option<TargetsAction>,
     },
 
+    /// Manage the provider catalogs (offline default).
+    Catalog {
+        #[command(subcommand)]
+        action: Option<CatalogAction>,
+    },
+
     /// Generate a shell completion script (bash, zsh, or fish).
     Completions {
         /// Target shell.
@@ -491,6 +497,15 @@ pub(crate) enum TargetsAction {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
     },
+}
+
+/// Sub-actions of `orbyn catalog`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum CatalogAction {
+    /// Report the embedded catalog versions. Catalogs are bundled at
+    /// build time (offline default); online refresh requires a pricing
+    /// source and is not available in this build.
+    Update,
 }
 
 /// Shell backends supported by `orbyn completions`.
@@ -1019,6 +1034,7 @@ mod tests {
             "plan",
             "bundle",
             "targets",
+            "catalog",
             "completions",
         ];
         for name in expected {

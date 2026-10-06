@@ -1,12 +1,12 @@
-//! Handler for `orbyn targets compare|recommend`. Read-only workflows;
-//! the logic lives in `app::targets`.
+//! Handlers for `orbyn targets compare|recommend` and `orbyn catalog`.
+//! Read-only workflows; the logic lives in `app::targets`.
 
 use anyhow::{anyhow, Result};
 
 use orbyn::config::Config;
 
 use crate::app::open_store;
-use crate::cli::args::TargetsAction;
+use crate::cli::args::{CatalogAction, TargetsAction};
 
 /// Handle `orbyn targets`.
 pub(crate) async fn targets(config: &Config, action: Option<TargetsAction>) -> Result<()> {
@@ -33,4 +33,17 @@ pub(crate) async fn targets(config: &Config, action: Option<TargetsAction>) -> R
         }
     }
     Ok(())
+}
+
+/// Handle `orbyn catalog update`: report the embedded catalog status.
+pub(crate) fn catalog(action: Option<CatalogAction>) -> Result<()> {
+    match action {
+        Some(CatalogAction::Update) | None => {
+            print!(
+                "{}",
+                orbyn::output::catalog_status(orbyn::targets::catalogs())
+            );
+            Ok(())
+        }
+    }
 }
