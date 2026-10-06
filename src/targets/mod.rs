@@ -13,6 +13,7 @@
 
 use std::sync::OnceLock;
 
+pub mod cost;
 pub mod matching;
 
 /// One instance type: capability data only, never a price.

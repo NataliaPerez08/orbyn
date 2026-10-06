@@ -17,7 +17,7 @@ use super::{catalog, TargetCatalog};
 pub const TARGET_FIT_VERSION: &str = "target-fit/v1";
 
 /// Database ports: workloads that map to a managed database service.
-const DB_PORTS: [u16; 5] = [3306, 5432, 1433, 1521, 27017];
+pub(crate) const DB_PORTS: [u16; 5] = [3306, 5432, 1433, 1521, 27017];
 
 /// One reason a fit input moved (or held) the score.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
