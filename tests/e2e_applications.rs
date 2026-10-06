@@ -1,6 +1,8 @@
 //! End-to-end coverage for `orbyn applications`: inference discovery,
 //! the read paths, and the manual-precedence guarantees.
 
+#![cfg(unix)]
+
 mod common;
 
 use common::{import_json, orbyn, run_fail, run_ok, run_ok_combined, TempDir};

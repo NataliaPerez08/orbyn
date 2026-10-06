@@ -1,6 +1,8 @@
 //! End-to-end coverage for `orbyn plan`: readiness, strategy, targets,
 //! blockers, wave assignment and the `--all`/`--explain`/`--target` modes.
 
+#![cfg(unix)]
+
 mod common;
 
 use common::{import_json, orbyn, run_fail, run_ok, run_ok_combined, TempDir};

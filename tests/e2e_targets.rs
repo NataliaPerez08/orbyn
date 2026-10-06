@@ -2,6 +2,8 @@
 //! scoring, honest not-calculated components, version stamps and the
 //! price-never-decides recommendation.
 
+#![cfg(unix)]
+
 mod common;
 
 use common::{import_json, orbyn, run_fail, run_ok, run_ok_combined, TempDir};
