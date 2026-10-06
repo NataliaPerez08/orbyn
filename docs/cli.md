@@ -158,6 +158,9 @@ inference.
 | `orbyn plan <application> [--target aws\|azure\|gcp\|huawei\|openstack] [--explain] [--format ...]` | Migration plan for one application: readiness, strategy, targets, blockers, assumptions and wave — persisted as an audited artifact |
 | `orbyn plan --all [--target ...] [--format ...]` | Plan every application against one shared wave plan |
 | `orbyn bundle <application> [--target ...]` | Write a self-contained migration handoff directory (`<app>-migration/`); read-only |
+| `orbyn targets compare <application> [--format ...]` | Every provider catalog's fit score, monthly baseline and model versions for one application |
+| `orbyn targets recommend <application> [--format ...]` | Recommended provider plus an alternative, with the "why X instead of Y" evidence |
+| `orbyn catalog update` | Report the embedded catalog versions (offline default) |
 
 `sku-match` keeps provider catalogs separate from the assessment: feed it the
 baseline suggested by an `rs.*` finding (e.g. "4 cores, 6144 MB") to see which
@@ -186,6 +189,26 @@ full provenance (rule versions, snapshot reference) and audited.
 `migration-plan.json`/`md` and a `manifest.json` recording every rule version,
 so the bundle is reproducible and auditable. Generation is read-only — nothing
 is persisted or audited.
+
+`targets compare` scores every provider catalog against the application: a
+fit score (0–100) built from the roadmap inputs — capacity fit, managed-service
+compatibility, architecture, migration complexity, dependency compatibility,
+region availability, pricing completeness, data confidence — each input
+stating its delta and reason, plus the estimated monthly baseline. Capability
+data and pricing data live in separate versioned catalog files
+(`data/catalogs/`, embedded at build time); every component is labeled
+`known | estimated | not_calculated` and an unknown component never silently
+becomes zero. `n/c` marks what could not be calculated. Prices are curated
+on-demand list prices — estimates, never quotes.
+
+`targets recommend` picks the best fit and names an alternative, explaining
+the difference. Price never automatically determines the recommendation:
+only fit-relevant inputs do, and prices are reported as information.
+
+`catalog update` reports the embedded catalog versions. Catalogs are bundled
+at build time (local-first); a live pricing source would arrive behind the
+same catalog shape, and plans pin the catalog version they used so stale
+pricing is never used silently.
 
 ## Import and export
 
@@ -247,6 +270,8 @@ orbyn applications explain frontend
 orbyn assess --application frontend
 orbyn waves
 orbyn plan frontend --target aws --explain
+orbyn targets compare frontend
+orbyn targets recommend frontend
 orbyn bundle frontend --target aws
 ```
 

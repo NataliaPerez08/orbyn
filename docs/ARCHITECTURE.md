@@ -37,6 +37,7 @@ src/
 │   ├── assessment.rs     # assessment input assembly
 │   ├── applications.rs   # application discovery orchestration
 │   ├── planning.rs       # plan/bundle workflows
+│   ├── targets.rs        # compare/recommend workflows
 │   ├── discovery.rs      # bounded-pool discovery runner
 │   └── dependencies.rs   # dependency curation (add/confirm/remove, DNS evidence)
 ├── lib.rs                # library surface
@@ -69,9 +70,12 @@ src/
 ├── assessment/           # migration assessment engine
 │   ├── rules.rs          # rule catalog + evaluators (incl. rs.* right-sizing rules)
 │   └── grouping.rs       # application grouping (union-find)
-├── sku/                  # right-sizing SKU matching against static provider catalogs
+├── sku/                  # right-sizing SKU matching (thin wrapper over the target catalogs)
 ├── applications/         # application inference engine (pure function over the snapshot)
 ├── planning/             # readiness + strategy models (pure functions over the snapshot)
+├── targets/              # provider-neutral catalogs, fit scoring, cost engine
+│   ├── matching.rs       # per-asset SKU fits + application-level fit score
+│   └── cost.rs           # monthly baseline with known/estimated/not_calculated labels
 ├── waves/                # migration wave planning (pure function over the assessment)
 └── output/               # table / json / csv rendering
 ```
@@ -332,14 +336,47 @@ migration plans:
   `migration-plan`, `manifest` with every rule version) — read-only, so
   generation never mutates the inventory.
 
-### 8. CLI
+### 8. Target and cost intelligence
+
+v1.3 answers "where should this workload run, on what, and what will it
+cost" without vendor lock-in:
+
+- `src/targets/` holds the provider-neutral catalog and models. Capability
+  data (`TargetSku`) and pricing data (`TargetPrice`) are strictly
+  separate and join on (provider, region, sku). Catalogs are versioned
+  local files under `data/catalogs/` (metadata: provider, region,
+  `retrieved_at`, `catalog_version`, source, currency), embedded at build
+  time so the binary stays single-file and test runs deterministic. A new
+  provider arrives as catalog data, never as engine code — the core
+  domain contains no provider-specific assumptions.
+- `matching.rs` computes per-asset SKU fits and the application-level fit
+  score (0–100) from the roadmap inputs — capacity fit, managed-service
+  compatibility, architecture, migration complexity, dependency
+  compatibility, region availability, pricing completeness, data
+  confidence — each input emitting `{input, delta, detail}` so a fit is
+  never a bare number (`target-fit/v1`). Strategies without a target
+  (retain/retire/unknown) are NOT_CALCULATED, never guessed.
+- `cost.rs` estimates the monthly baseline: compute (smallest-fit
+  instances at curated list prices × 730 h), storage and managed
+  database. Every component is labeled `known | estimated |
+  not_calculated`; an unknown component never silently becomes zero, and
+  cost confidence caps at Medium while prices are curated
+  (`cost/v1`).
+- `orbyn targets compare` shows every provider side by side with model
+  versions stamped; `orbyn targets recommend` picks the best fit and
+  names an alternative with the "why X instead of Y" evidence — price
+  never automatically determines the recommendation. Both are read-only.
+- `orbyn catalog update` reports the embedded catalog versions (offline
+  default); plans and comparisons pin the catalog version they used.
+
+### 9. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
 `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`,
 `connections`, `jobs`, `annotate`, `import`, `export`, `graph`, `deps`,
-`assess`, `applications`, `waves`, `plan`, `bundle`) fetches data through
-the `Store` trait, computes results, and delegates rendering to
-`src/output/`.
+`assess`, `applications`, `waves`, `plan`, `bundle`, `targets`, `catalog`)
+fetches data through the `Store` trait, computes results, and delegates
+rendering to `src/output/`.
 
 Inventory enrichment is a read/write CLI surface:
 
