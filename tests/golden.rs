@@ -145,12 +145,28 @@ fn normalized_applications(json: &str) -> String {
     serde_json::to_string_pretty(&v).expect("serialize applications")
 }
 
+/// Strip the per-run plan identity (uuid, timestamps) so the plan
+/// snapshot stays deterministic; readiness, strategy, targets, blockers
+/// and wave are pure functions of the inventory.
+#[cfg(unix)]
+fn normalized_plan(json: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(json).expect("plan json");
+    if let Some(obj) = v.get_mut("plan").and_then(|p| p.as_object_mut()) {
+        obj.remove("id");
+        obj.remove("created_at");
+        if let Some(prov) = obj.get_mut("provenance").and_then(|p| p.as_object_mut()) {
+            prov.remove("last_seen");
+        }
+    }
+    serde_json::to_string_pretty(&v).expect("serialize plan")
+}
+
 /// Import the inventory, add two deterministic manual edges (so the golden
 /// output exercises the dependency graph and application grouping),
 /// discover applications, and return the graph / assessment / export /
-/// application-explain snapshots.
+/// application-explain / migration-plan snapshots.
 #[cfg(unix)]
-fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String) {
+fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String, String) {
     let file = dir.path().join("inventory.json");
     std::fs::write(&file, inventory).expect("write inventory");
     run_ok(
@@ -177,7 +193,16 @@ fn snapshot(dir: &TempDir, inventory: &str) -> (String, String, String, String) 
     ])));
     let assess = run_ok(orbyn(dir).args(["assess", "--format", "json"]));
     let export = normalized_export(&run_ok(orbyn(dir).args(["export", "--format", "csv"])));
-    (graph, assess, export, explain)
+    // Last: `plan` persists an artifact, and the snapshots above must not
+    // see it.
+    let plan = normalized_plan(&run_ok(orbyn(dir).args([
+        "plan",
+        &name,
+        "--explain",
+        "--format",
+        "json",
+    ])));
+    (graph, assess, export, explain, plan)
 }
 
 /// Run one golden dataset: compare against committed files, or regenerate them
@@ -192,13 +217,14 @@ fn run_golden(size: &str, count: usize) {
     if update {
         std::fs::write(base.join("inventory.json"), &inventory).expect("write inventory fixture");
     }
-    let (graph, assess, export, explain) = snapshot(&dir, &inventory);
+    let (graph, assess, export, explain, plan) = snapshot(&dir, &inventory);
 
     if update {
         std::fs::write(base.join("graph.csv"), &graph).expect("write graph golden");
         std::fs::write(base.join("assess.json"), &assess).expect("write assess golden");
         std::fs::write(base.join("export.csv"), &export).expect("write export golden");
         std::fs::write(base.join("explain.json"), &explain).expect("write explain golden");
+        std::fs::write(base.join("plan.json"), &plan).expect("write plan golden");
         return;
     }
     let expect_graph = std::fs::read_to_string(base.join("graph.csv")).expect("graph golden");
@@ -206,6 +232,7 @@ fn run_golden(size: &str, count: usize) {
     let expect_export = std::fs::read_to_string(base.join("export.csv")).expect("export golden");
     let expect_explain =
         std::fs::read_to_string(base.join("explain.json")).expect("explain golden");
+    let expect_plan = std::fs::read_to_string(base.join("plan.json")).expect("plan golden");
     assert_eq!(graph, expect_graph, "dependency graph drift for {size}");
     assert_eq!(assess, expect_assess, "assessment drift for {size}");
     assert_eq!(export, expect_export, "export drift for {size}");
@@ -213,6 +240,7 @@ fn run_golden(size: &str, count: usize) {
         explain, expect_explain,
         "application explain drift for {size}"
     );
+    assert_eq!(plan, expect_plan, "migration plan drift for {size}");
 }
 
 #[cfg(unix)]

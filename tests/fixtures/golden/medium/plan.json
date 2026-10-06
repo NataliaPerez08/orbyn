@@ -1,0 +1,127 @@
+{
+  "application_name": "host",
+  "plan": {
+    "application_id": "app-ecbeb1befd48f7fc",
+    "assumptions": [
+      {
+        "assumption": "sizing baseline",
+        "detail": "192-168-0-1 has no capacity data; no sizing baseline"
+      },
+      {
+        "assumption": "sizing baseline",
+        "detail": "192-168-0-2 has no capacity data; no sizing baseline"
+      },
+      {
+        "assumption": "sizing baseline",
+        "detail": "192-168-0-3 has no capacity data; no sizing baseline"
+      }
+    ],
+    "blockers": [
+      {
+        "evidence": [
+          "192-168-0-1: no capacity data",
+          "192-168-0-2: no capacity data",
+          "192-168-0-3: no capacity data"
+        ],
+        "factor": "capacity-information",
+        "message": "missing capacity data; no sizing baseline",
+        "severity": "info"
+      },
+      {
+        "evidence": [
+          "192-168-0-1: no utilization samples",
+          "192-168-0-2: no utilization samples",
+          "192-168-0-3: no utilization samples"
+        ],
+        "factor": "metrics-window-quality",
+        "message": "utilization samples missing or weak; right-sizing unverifiable",
+        "severity": "info"
+      },
+      {
+        "evidence": [
+          "operating system is at or near end of vendor support; in-place upgrade or re-platforming is likely required before migration"
+        ],
+        "factor": "unsupported-software",
+        "message": "EOL software needs an upgrade path",
+        "severity": "warning"
+      }
+    ],
+    "provenance": {
+      "assets": 100,
+      "inference_version": "application-inference/v1",
+      "readiness_version": "readiness/v1",
+      "rules_version": "0.8.0",
+      "sku_catalog_version": "sku-catalog/v1",
+      "strategy_version": "strategy/v1"
+    },
+    "readiness": 71,
+    "readiness_factors": [
+      {
+        "delta": -12,
+        "evidence": [
+          "192-168-0-1: no capacity data",
+          "192-168-0-2: no capacity data",
+          "192-168-0-3: no capacity data"
+        ],
+        "factor": "capacity-information"
+      },
+      {
+        "delta": -12,
+        "evidence": [
+          "192-168-0-1: no utilization samples",
+          "192-168-0-2: no utilization samples",
+          "192-168-0-3: no utilization samples"
+        ],
+        "factor": "metrics-window-quality"
+      },
+      {
+        "delta": -5,
+        "evidence": [
+          "operating system is at or near end of vendor support; in-place upgrade or re-platforming is likely required before migration"
+        ],
+        "factor": "unsupported-software"
+      }
+    ],
+    "recommendation": {
+      "alternatives": [
+        "rehost"
+      ],
+      "confidence": 0.6,
+      "evidence": [
+        "network members: 192-168-0-1"
+      ],
+      "rationale": "network infrastructure is typically retained, not migrated",
+      "strategy": "retain"
+    },
+    "targets": [
+      {
+        "asset_id": "192-168-0-1",
+        "cores": null,
+        "instance_type": null,
+        "provider": null,
+        "ram_mb": null
+      },
+      {
+        "asset_id": "192-168-0-2",
+        "cores": null,
+        "instance_type": null,
+        "provider": null,
+        "ram_mb": null
+      },
+      {
+        "asset_id": "192-168-0-3",
+        "cores": null,
+        "instance_type": null,
+        "provider": null,
+        "ram_mb": null
+      }
+    ],
+    "wave": 2
+  },
+  "wave_reasons": [
+    "production environment env-0",
+    "criticality low",
+    "complexity low (score 2/100)",
+    "member of host (migrates as one unit)"
+  ]
+}
