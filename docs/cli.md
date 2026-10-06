@@ -126,17 +126,33 @@ orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
 
 | Command | Purpose |
 | --- | --- |
-| `orbyn graph [--format ...] [--mermaid] [--asset <id>]` | Labeled dependency graph; `--mermaid` exports a flowchart (solid = confirmed) |
+| `orbyn graph [--format ...] [--mermaid] [--asset <id>] [--application <name>] [--applications]` | Labeled dependency graph; `--mermaid` exports a flowchart (solid = confirmed); `--application` scopes to an application's members, `--applications` renders the application-level graph |
 | `orbyn deps add <src> <tgt> [--proto tcp --port N]` | Add a manual dependency |
 | `orbyn deps confirm <src> <tgt> [--proto --port]` | Confirm observed edges |
 | `orbyn deps remove <src> <tgt> [--proto --port]` | Delete edges |
 | `orbyn deps dns` | Derive relationship edges from DNS evidence |
 
+## Applications
+
+| Command | Purpose |
+| --- | --- |
+| `orbyn applications discover [--format ...]` | Infer applications from dependencies and evidence; re-runs refresh and prune |
+| `orbyn applications [list] [--format ...]` | List applications |
+| `orbyn applications show <name-or-id> [--format ...]` | One application with its members |
+| `orbyn applications explain <name-or-id> [--format ...]` | Per-member evidence records, confidence and the inference model version |
+| `orbyn applications create <name>` | Create an empty manual application |
+| `orbyn applications add <app> <asset>` | Manually add an asset (upgrades an inferred member to manual) |
+| `orbyn applications remove <app> <asset>` | Remove a member (inferred members are tombstoned so discovery cannot re-add them) |
+
+Discovery matches on member sets: unchanged evidence refreshes the same
+applications, and manual memberships or removals always win over
+inference.
+
 ## Assessment
 
 | Command | Purpose |
 | --- | --- |
-| `orbyn assess [--format ...] [--rules]` | Migration assessment report / rule catalog |
+| `orbyn assess [--format ...] [--rules] [--application <name>]` | Migration assessment report / rule catalog / application rollup |
 | `orbyn sku-match --provider aws\|azure\|gcp --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
 | `orbyn waves [--format ...] [--pin <asset>=<wave>]... [--exclude <asset>]...` | Ordered migration waves (low risk first) with exposed reasoning |
 
@@ -146,7 +162,9 @@ provider instance types satisfy it. The catalog is a curated subset; a baseline
 with no fit reports so rather than guessing. See [Cloud SKU matching](sku.md).
 
 `waves` scores assets into three risk bands (low/medium/high), keeps application
-groups together, and honors manual `--pin`/`--exclude` constraints. See
+groups together, and honors manual `--pin`/`--exclude` constraints. When
+applications have been discovered it plans on those persisted units and warns
+when an application in an earlier wave depends on one in a later wave. See
 [Migration waves](waves.md).
 
 ## Import and export
@@ -202,7 +220,11 @@ orbyn discover --target 10.0.0.20 --collector winrm --user administrator \
 orbyn assets
 orbyn asset 10.0.0.10
 orbyn capacity 10.0.0.10
-orbyn assess
+
+# infer applications, inspect the reasoning, plan the migration
+orbyn applications discover
+orbyn applications explain frontend
+orbyn assess --application frontend
 orbyn waves
 ```
 

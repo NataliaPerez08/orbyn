@@ -41,6 +41,18 @@ Assets connected by runtime/manual dependency edges form an application group
 one wave, so you never split an application across migrations. The output says
 `member of app-1 (migrates as one unit)`.
 
+When applications have been discovered (`orbyn applications discover`) or
+created manually, those persisted applications replace the ephemeral groups as
+planning units — the output then says `member of frontend`, using the
+application's real name.
+
+## Cross-wave dependency warnings
+
+When one application in an earlier wave depends on an application in a later
+wave, the plan warns: `wave ordering: 'payments' (wave 2) depends on
+'frontend' (wave 3)`. Migrate the dependency first, or move both applications
+into the same wave with `--pin`.
+
 ## Manual constraints
 
 - `--pin <asset>=<wave>` forces an asset — and its whole group — into a wave

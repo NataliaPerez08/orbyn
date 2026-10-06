@@ -263,7 +263,39 @@ dotted in Mermaid output. Raw connection observations are persisted in
 `asset_connections` so the evidence behind each edge stays inspectable
 (`orbyn connections <id-or-ip>`).
 
-### 6. CLI
+### 6. Applications
+
+Application intelligence (v1.1) turns the dependency graph into named,
+persisted applications:
+
+- `src/applications/` is the inference engine — a pure function over an
+  inventory snapshot (assets, dependencies, connection evidence). It
+  reuses the assessment layer's union-find grouping, then scores every
+  membership with noisy-OR combined evidence weights (`weights.rs`):
+  manual/runtime edges, known service combinations, shared backends,
+  owner/environment/tag matches and subnet locality. Each membership
+  carries its evidence records and a confidence; the engine version
+  (`application-inference/v1`) is stamped into `explain` output.
+- Persistence (migration 0010): `applications` and `application_members`
+  in both dialects. Inferred rows are managed by discovery; manual rows
+  and exclusion tombstones survive re-discovery (manual precedence).
+  `asset_connections.observation_count` accumulates how often a
+  connection was observed.
+- `orbyn applications discover` matches candidates to stored
+  applications by member set: unchanged evidence refreshes the same
+  entities, stale applications are removed, and assets the user has
+  manually placed or excluded are never re-inferred.
+- `graph --application` scopes the edge view to an application's
+  members; `graph --applications` renders the application-level graph
+  (edges crossing boundaries, aggregated per application pair).
+- `assess --application` rolls the unchanged rule engine's findings up
+  to one application: complexity band, dependency counts, hubs, external
+  coupling and right-sizing readiness.
+- `waves` plans on persisted applications when present (ephemeral groups
+  otherwise) and warns when an application in an earlier wave depends on
+  one in a later wave.
+
+### 7. CLI
 
 The command line is the interface. Each subcommand (`discover`, `assets`,
 `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`,
