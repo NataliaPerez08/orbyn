@@ -123,3 +123,30 @@ fn graph_application_and_applications_views() {
     assert!(out.contains("no application matches 'nope'"), "{out}");
     run_fail(orbyn(&dir).args(["graph", "--application", "frontend", "--asset", "10.0.0.2"]));
 }
+
+#[test]
+fn waves_plan_on_persisted_applications() {
+    let dir = TempDir::new("waves-applications");
+    seed(&dir);
+
+    // Before discovery the planner falls back to ephemeral groups.
+    let out = run_ok(orbyn(&dir).args(["waves"]));
+    assert!(out.contains("member of app-1"), "{out}");
+
+    // After discovery the units carry the persisted application names.
+    run_ok_combined(orbyn(&dir).args(["applications", "discover"]));
+    let out = run_ok(orbyn(&dir).args(["waves"]));
+    assert!(out.contains("member of frontend"), "{out}");
+
+    // Pinning one member moves the whole application, and the payments
+    // -> frontend edge crossing into the later wave warns.
+    run_ok_combined(orbyn(&dir).args(["applications", "remove", "frontend", "10.0.0.3"]));
+    run_ok_combined(orbyn(&dir).args(["applications", "create", "payments"]));
+    run_ok_combined(orbyn(&dir).args(["applications", "add", "payments", "10.0.0.3"]));
+    let out = run_ok(orbyn(&dir).args(["waves", "--pin", "10-0-0-4=3"]));
+    assert!(out.contains("pinned to wave 3 via --pin"), "{out}");
+    assert!(
+        out.contains("wave ordering: 'payments' (wave 2) depends on 'frontend' (wave 3)"),
+        "{out}"
+    );
+}

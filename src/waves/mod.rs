@@ -100,6 +100,12 @@ pub fn plan_waves(
             units.push((asset.id.as_str(), vec![asset.id.as_str()]));
         }
     }
+    let mut asset_unit: HashMap<&str, &str> = HashMap::new();
+    for (unit_id, members) in &units {
+        for m in members {
+            asset_unit.insert(m, unit_id);
+        }
+    }
 
     let unit_score: HashMap<&str, u8> = units
         .iter()
@@ -115,7 +121,7 @@ pub fn plan_waves(
 
     let known: std::collections::HashSet<&str> =
         input.assets.iter().map(|a| a.id.as_str()).collect();
-    let warnings: Vec<String> = pins
+    let mut warnings: Vec<String> = pins
         .iter()
         .filter(|(id, _)| !known.contains(id.as_str()))
         .map(|(id, _)| format!("pin ignored: {id} is not in the inventory"))
@@ -136,6 +142,7 @@ pub fn plan_waves(
             .then_with(|| a_id.cmp(b_id))
     });
 
+    let mut unit_wave: HashMap<&str, usize> = HashMap::new();
     for (unit_id, members) in sorted {
         let remaining: Vec<&str> = members
             .iter()
@@ -155,6 +162,7 @@ pub fn plan_waves(
                 break;
             }
         }
+        unit_wave.insert(unit_id, idx);
 
         for m in remaining {
             let mut wa = asset_meta[m].clone();
@@ -168,6 +176,33 @@ pub fn plan_waves(
             waves[idx - 1].assets.push(wa);
         }
     }
+
+    // Cross-wave inter-application dependencies: a unit migrating early
+    // that depends on a unit migrating later is an ordering risk.
+    let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
+    let mut ordering: Vec<String> = Vec::new();
+    for d in &input.dependencies {
+        let (Some(src), Some(dst)) = (
+            asset_unit.get(d.source_asset_id.as_str()),
+            asset_unit.get(d.target_asset_id.as_str()),
+        ) else {
+            continue;
+        };
+        if src == dst || !group_ids.contains(src) || !group_ids.contains(dst) {
+            continue;
+        }
+        let (Some(&src_wave), Some(&dst_wave)) = (unit_wave.get(src), unit_wave.get(dst)) else {
+            continue;
+        };
+        if src_wave < dst_wave && seen.insert((*src, *dst)) {
+            ordering.push(format!(
+                "wave ordering: '{src}' (wave {src_wave}) depends on '{dst}' (wave {dst_wave}); \
+                 migrate the dependency first or move both together"
+            ));
+        }
+    }
+    ordering.sort();
+    warnings.extend(ordering);
 
     for wave in &mut waves {
         wave.assets.sort_by(|a, b| {
@@ -601,6 +636,65 @@ mod tests {
             wa.reasons.iter().any(|r| r.contains("unconfirmed")),
             "{:?}",
             wa.reasons
+        );
+    }
+
+    #[test]
+    fn cross_wave_application_dependency_warns_on_reversed_order() {
+        let a1 = asset("a1", Some("dev"), Some(Criticality::Low));
+        let b1 = asset("b1", Some("prod"), Some(Criticality::Critical));
+        let dep = |src: &str, dst: &str| Dependency {
+            source_asset_id: src.into(),
+            target_asset_id: dst.into(),
+            proto: "tcp".into(),
+            port: 5432,
+            evidence_source: "manual".into(),
+            confidence: 1.0,
+            confirmed: true,
+        };
+        let groups = vec![
+            ApplicationGroup {
+                id: "app-a".into(),
+                asset_ids: vec!["a1".into()],
+                edge_count: 0,
+            },
+            ApplicationGroup {
+                id: "app-b".into(),
+                asset_ids: vec!["b1".into()],
+                edge_count: 0,
+            },
+        ];
+        let input = |deps: Vec<Dependency>| AssessmentInput {
+            assets: vec![a1.clone(), b1.clone()],
+            dependencies: deps,
+            ..Default::default()
+        };
+        // a1 lands in wave 1, b1 (prod + critical + complexity 60) in
+        // wave 3: a dependent migrating before its dependency warns.
+        let p = plan_waves(
+            &report(&[a1.clone(), b1.clone()], groups.clone(), &[("b1", 60)]),
+            &input(vec![dep("a1", "b1")]),
+            &[],
+            &[],
+        );
+        assert!(
+            p.warnings
+                .iter()
+                .any(|w| w.contains("'app-a' (wave 1)") && w.contains("'app-b' (wave 3)")),
+            "{:?}",
+            p.warnings
+        );
+        // The reverse direction is dependencies-first: no warning.
+        let p = plan_waves(
+            &report(&[a1.clone(), b1.clone()], groups, &[("b1", 60)]),
+            &input(vec![dep("b1", "a1")]),
+            &[],
+            &[],
+        );
+        assert!(
+            !p.warnings.iter().any(|w| w.contains("wave ordering")),
+            "{:?}",
+            p.warnings
         );
     }
 

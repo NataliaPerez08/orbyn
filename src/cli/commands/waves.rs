@@ -17,7 +17,13 @@ pub(crate) async fn waves(
 ) -> Result<()> {
     let store = open_store(config).await?;
     let input = assessment_input(store.as_ref()).await?;
-    let report = run_assessment(&input);
+    let mut report = run_assessment(&input);
+    // Persisted applications are the planning units when present;
+    // otherwise the ephemeral groups the engine computed are used.
+    let persisted = crate::app::applications::wave_units(store.as_ref()).await?;
+    if !persisted.is_empty() {
+        report.application_groups = persisted;
+    }
     print!(
         "{}",
         orbyn::waves::render(&report, &input, &pins, &excludes, format)

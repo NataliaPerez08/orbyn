@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 
 use orbyn::applications::{InferenceInput, InferredMember};
-use orbyn::assessment::{AssetScore, Finding, Severity};
+use orbyn::assessment::{ApplicationGroup, AssetScore, Finding, Severity};
 use orbyn::domain::{AppSource, Application, ApplicationMember};
 use orbyn::output::{
     ApplicationAssessment, ApplicationDetail, ApplicationEdge, ApplicationSummary,
@@ -418,6 +418,29 @@ pub(crate) async fn assess(store: &dyn Store, key: &str) -> Result<ApplicationAs
         findings,
         asset_scores,
     })
+}
+
+/// Persisted applications as wave-planning units; empty when nothing has
+/// been discovered or created yet (the planner then falls back to the
+/// ephemeral groups the assessment engine computes).
+pub(crate) async fn wave_units(store: &dyn Store) -> Result<Vec<ApplicationGroup>> {
+    let mut units = Vec::new();
+    for application in store.list_applications().await? {
+        let asset_ids: Vec<String> = active_members(store, &application.id)
+            .await?
+            .into_iter()
+            .map(|m| m.asset_id)
+            .collect();
+        if asset_ids.is_empty() {
+            continue;
+        }
+        units.push(ApplicationGroup {
+            id: application.name,
+            asset_ids,
+            edge_count: 0,
+        });
+    }
+    Ok(units)
 }
 
 /// Persist inferred members as store rows.
