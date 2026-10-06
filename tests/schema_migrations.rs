@@ -61,6 +61,7 @@ async fn migrations_create_all_expected_tables() {
         "audit_events",
         "applications",
         "application_members",
+        "migration_plans",
         "_sqlx_migrations",
     ] {
         assert!(
@@ -85,6 +86,7 @@ async fn migrations_create_expected_indexes() {
         "idx_dependencies_target",
         "idx_audit_events_started",
         "idx_application_members_asset",
+        "idx_migration_plans_application",
     ] {
         assert!(
             indexes.iter().any(|i| i == expected),
@@ -163,7 +165,7 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .await
         .expect("count applied migrations");
     assert_eq!(
-        migration_count, 10,
+        migration_count, 11,
         "all current migrations must be applied"
     );
     assert!(table_names(&upgraded)
@@ -390,6 +392,118 @@ async fn applications_support_manual_precedence_and_tombstones() {
         .unwrap()
         .is_empty());
     assert!(store.get_application("inf-1").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn plans_round_trip_through_json_columns() {
+    use orbyn::domain::{
+        BlockerSeverity, MigrationAssumption, MigrationBlocker, MigrationPlan,
+        MigrationRecommendation, MigrationStrategy, MigrationTarget, PlanProvenance,
+        ReadinessFactor,
+    };
+
+    let store = open("schema-plans").await;
+    let now = chrono::Utc::now();
+
+    let asset = Asset {
+        id: "plan-asset-1".into(),
+        ip: "10.0.0.71".parse().unwrap(),
+        hostname: None,
+        device_class: None,
+        os_name: None,
+        os_version: None,
+        sys_descr: None,
+        environment: None,
+        owner: None,
+        criticality: None,
+        tags: Vec::new(),
+        first_seen: now,
+        last_seen: now,
+    };
+    store
+        .store_observation(Observation::Asset(asset))
+        .await
+        .expect("store asset");
+    store
+        .create_application(orbyn::domain::Application {
+            id: "plan-app-1".into(),
+            name: "billing".into(),
+            source: orbyn::domain::AppSource::Manual,
+            confidence: 1.0,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("create application");
+
+    let plan = MigrationPlan {
+        id: "plan-1".into(),
+        application_id: "plan-app-1".into(),
+        created_at: now,
+        provenance: PlanProvenance {
+            assets: 1,
+            last_seen: now,
+            rules_version: "0.8.0".into(),
+            inference_version: "application-inference/v1".into(),
+            readiness_version: "readiness/v1".into(),
+            strategy_version: "strategy/v1".into(),
+            sku_catalog_version: "sku-catalog/v1".into(),
+        },
+        readiness: 72,
+        readiness_factors: vec![ReadinessFactor {
+            factor: "inventory-completeness".into(),
+            delta: -12,
+            evidence: vec!["2 of 3 assets miss OS metadata".into()],
+        }],
+        recommendation: MigrationRecommendation {
+            strategy: MigrationStrategy::Rehost,
+            confidence: 0.8,
+            rationale: "standard x86 servers, no blockers".into(),
+            evidence: vec!["no exotic hardware".into()],
+            alternatives: vec![MigrationStrategy::Replatform],
+        },
+        wave: Some(2),
+        targets: vec![MigrationTarget {
+            asset_id: "plan-asset-1".into(),
+            cores: Some(4),
+            ram_mb: Some(8192),
+            provider: Some("aws".into()),
+            instance_type: Some("m5.xlarge".into()),
+        }],
+        blockers: vec![MigrationBlocker {
+            severity: BlockerSeverity::Warning,
+            factor: "unconfirmed-dependencies".into(),
+            message: "2 unconfirmed edges".into(),
+            evidence: vec!["plan-asset-1 -> 10.0.0.99:5432".into()],
+        }],
+        assumptions: vec![MigrationAssumption {
+            assumption: "metrics window".into(),
+            detail: "no samples; sizing from capacity allocation".into(),
+        }],
+    };
+    store.save_plan(plan.clone()).await.expect("save plan");
+
+    let fetched = store.get_plan("plan-1").await.unwrap().expect("plan");
+    assert_eq!(fetched, plan, "plan must round-trip exactly");
+
+    // A second plan for another application: list filters and orders
+    // newest first.
+    let mut other = plan;
+    other.id = "plan-2".into();
+    other.application_id = "plan-app-1".into();
+    other.readiness = 10;
+    other.wave = None;
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    other.created_at = chrono::Utc::now();
+    store.save_plan(other).await.expect("save second plan");
+
+    let all = store.list_plans(None).await.unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].id, "plan-2", "newest first");
+    let for_app = store.list_plans(Some("plan-app-1")).await.unwrap();
+    assert_eq!(for_app.len(), 2);
+    assert!(store.list_plans(Some("nope")).await.unwrap().is_empty());
+    assert!(store.get_plan("missing").await.unwrap().is_none());
 }
 
 #[tokio::test]

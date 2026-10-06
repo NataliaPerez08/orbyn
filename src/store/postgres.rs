@@ -18,9 +18,9 @@ use sqlx::{PgPool, Row};
 
 use crate::domain::Observation;
 use crate::store::rows::{
-    status_as_str, ApplicationMemberRow, ApplicationRow, AssetRow, AuditEventRow, CapacityRow,
-    ConnectionRow, DependencyEvidenceRow, DependencyRow, FilesystemRow, InterfaceRow, JobRow,
-    MetricSampleRow, RunningServiceRow, ServiceRow,
+    json_str, status_as_str, ApplicationMemberRow, ApplicationRow, AssetRow, AuditEventRow,
+    CapacityRow, ConnectionRow, DependencyEvidenceRow, DependencyRow, FilesystemRow, InterfaceRow,
+    JobRow, MetricSampleRow, MigrationPlanRow, RunningServiceRow, ServiceRow,
 };
 use crate::store::traits::{AnnotationField, AssetAnnotations};
 
@@ -946,6 +946,62 @@ impl crate::store::traits::Store for PostgresStore {
             .into_iter()
             .map(DependencyEvidenceRow::into_evidence)
             .collect())
+    }
+
+    // Migration plans (v1.2): append-only artifacts.
+
+    async fn save_plan(&self, plan: crate::domain::MigrationPlan) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO migration_plans \
+             (id, application_id, created_at, provenance, readiness, readiness_factors, \
+              recommendation, wave, targets, blockers, assumptions) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(&plan.id)
+        .bind(&plan.application_id)
+        .bind(plan.created_at.to_rfc3339())
+        .bind(json_str(&plan.provenance)?)
+        .bind(plan.readiness as i64)
+        .bind(json_str(&plan.readiness_factors)?)
+        .bind(json_str(&plan.recommendation)?)
+        .bind(plan.wave.map(|w| w as i64))
+        .bind(json_str(&plan.targets)?)
+        .bind(json_str(&plan.blockers)?)
+        .bind(json_str(&plan.assumptions)?)
+        .execute(&self.pool)
+        .await
+        .context("saving migration plan")?;
+        Ok(())
+    }
+
+    async fn list_plans(
+        &self,
+        application_id: Option<&str>,
+    ) -> Result<Vec<crate::domain::MigrationPlan>> {
+        let rows = sqlx::query_as::<_, MigrationPlanRow>(
+            "SELECT id, application_id, created_at, provenance, readiness, readiness_factors, \
+                    recommendation, wave, targets, blockers, assumptions \
+             FROM migration_plans WHERE ($1::TEXT IS NULL OR application_id = $1) \
+             ORDER BY created_at DESC, id DESC",
+        )
+        .bind(application_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("listing migration plans")?;
+        rows.into_iter().map(MigrationPlanRow::into_plan).collect()
+    }
+
+    async fn get_plan(&self, id: &str) -> Result<Option<crate::domain::MigrationPlan>> {
+        let row = sqlx::query_as::<_, MigrationPlanRow>(
+            "SELECT id, application_id, created_at, provenance, readiness, readiness_factors, \
+                    recommendation, wave, targets, blockers, assumptions \
+             FROM migration_plans WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching migration plan")?;
+        row.map(MigrationPlanRow::into_plan).transpose()
     }
 
     async fn list_running_services(

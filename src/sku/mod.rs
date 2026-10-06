@@ -14,6 +14,10 @@ use std::fmt;
 
 use crate::output::Format;
 
+/// Version of the curated catalogs; bumped when the catalogs change so
+/// plan provenance stays meaningful.
+pub const CATALOG_VERSION: &str = "sku-catalog/v1";
+
 /// An instance type in a curated catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Sku {

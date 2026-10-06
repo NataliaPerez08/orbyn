@@ -331,6 +331,146 @@ pub struct DependencyEvidence {
     pub observations: u32,
 }
 
+/// The recommended migration strategy for an application (v1.2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MigrationStrategy {
+    Rehost,
+    Replatform,
+    Refactor,
+    Retain,
+    Retire,
+    /// Evidence is insufficient for any decision; never fabricated.
+    Unknown,
+}
+
+impl MigrationStrategy {
+    /// The canonical stored/rendered string for this strategy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rehost => "rehost",
+            Self::Replatform => "replatform",
+            Self::Refactor => "refactor",
+            Self::Retain => "retain",
+            Self::Retire => "retire",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for MigrationStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Severity of a migration blocker (v1.2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum BlockerSeverity {
+    Info,
+    Warning,
+    Blocker,
+}
+
+impl BlockerSeverity {
+    /// The canonical stored/rendered string for this severity.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Blocker => "blocker",
+        }
+    }
+}
+
+/// One readiness factor's contribution (v1.2): what moved the readiness
+/// score and the evidence behind it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReadinessFactor {
+    /// Factor kind, e.g. `inventory-completeness`.
+    pub factor: String,
+    /// Points subtracted from the 100 baseline.
+    pub delta: i8,
+    pub evidence: Vec<String>,
+}
+
+/// The strategy decision inside a migration plan (v1.2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MigrationRecommendation {
+    pub strategy: MigrationStrategy,
+    /// 0.0-1.0; how strongly the evidence supports the strategy.
+    pub confidence: f32,
+    pub rationale: String,
+    pub evidence: Vec<String>,
+    /// Strategies considered but not chosen.
+    pub alternatives: Vec<MigrationStrategy>,
+}
+
+/// A condition to resolve before or during migration (v1.2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MigrationBlocker {
+    pub severity: BlockerSeverity,
+    /// Factor kind, e.g. `unconfirmed-dependencies`.
+    pub factor: String,
+    pub message: String,
+    pub evidence: Vec<String>,
+}
+
+/// Something the plan takes for granted because evidence is missing (v1.2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MigrationAssumption {
+    pub assumption: String,
+    pub detail: String,
+}
+
+/// Recommended landing configuration for one member asset (v1.2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MigrationTarget {
+    pub asset_id: String,
+    /// Right-sized vCPU baseline, when capacity/metrics are known.
+    pub cores: Option<u32>,
+    /// Right-sized RAM baseline (MiB), when capacity/metrics are known.
+    pub ram_mb: Option<u64>,
+    /// Requested provider label (`--target`), when given.
+    pub provider: Option<String>,
+    /// Matched instance type for the provider, when a fit exists.
+    pub instance_type: Option<String>,
+}
+
+/// Versions and inventory snapshot reference a plan was produced from
+/// (v1.2), so a plan is a reproducible artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlanProvenance {
+    /// Inventory snapshot reference: asset count and freshest observation.
+    pub assets: usize,
+    pub last_seen: DateTime<Utc>,
+    pub rules_version: String,
+    pub inference_version: String,
+    pub readiness_version: String,
+    pub strategy_version: String,
+    pub sku_catalog_version: String,
+}
+
+/// A migration plan for one application (v1.2): readiness, strategy,
+/// targets, blockers and assumptions, with the provenance to reproduce it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MigrationPlan {
+    pub id: String,
+    pub application_id: String,
+    pub created_at: DateTime<Utc>,
+    pub provenance: PlanProvenance,
+    /// 0-100: how ready the application is to migrate (not complexity).
+    pub readiness: u8,
+    pub readiness_factors: Vec<ReadinessFactor>,
+    pub recommendation: MigrationRecommendation,
+    /// Recommended wave (1-3) from wave planning, when computed.
+    pub wave: Option<u8>,
+    pub targets: Vec<MigrationTarget>,
+    pub blockers: Vec<MigrationBlocker>,
+    pub assumptions: Vec<MigrationAssumption>,
+}
+
 /// Hardware/virtual machine allocation for a single asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capacity {

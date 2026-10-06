@@ -6,10 +6,12 @@
 
 use sqlx::FromRow;
 
+use anyhow::Context;
+
 use crate::domain::{
     AppSource, Application, ApplicationEvidence, ApplicationMember, Asset, AuditEvent, Capacity,
     Connection, Criticality, Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface,
-    JobStatus, MetricSample, RunningService, Service,
+    JobStatus, MetricSample, MigrationPlan, RunningService, Service,
 };
 
 #[derive(Debug, FromRow)]
@@ -324,6 +326,49 @@ impl ApplicationMemberRow {
                 .unwrap_or_default(),
             is_excluded: self.is_excluded,
         }
+    }
+}
+
+/// Serialize a migration-plan detail column for binding.
+pub(crate) fn json_str<T: serde::Serialize>(value: &T) -> anyhow::Result<String> {
+    serde_json::to_string(value).context("serializing plan detail")
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct MigrationPlanRow {
+    pub id: String,
+    pub application_id: String,
+    pub created_at: String,
+    pub provenance: String,
+    pub readiness: i64,
+    pub readiness_factors: String,
+    pub recommendation: String,
+    pub wave: Option<i64>,
+    pub targets: String,
+    pub blockers: String,
+    pub assumptions: String,
+}
+
+impl MigrationPlanRow {
+    /// Decode a plan; corrupt detail JSON is an error, not a silent
+    /// default — a plan is a reproducible artifact.
+    pub fn into_plan(self) -> anyhow::Result<MigrationPlan> {
+        fn json<T: serde::de::DeserializeOwned>(raw: &str, column: &str) -> anyhow::Result<T> {
+            serde_json::from_str(raw).with_context(|| format!("corrupt {column} JSON"))
+        }
+        Ok(MigrationPlan {
+            id: self.id,
+            application_id: self.application_id,
+            created_at: parse_ts(&self.created_at),
+            provenance: json(&self.provenance, "provenance")?,
+            readiness: self.readiness as u8,
+            readiness_factors: json(&self.readiness_factors, "readiness_factors")?,
+            recommendation: json(&self.recommendation, "recommendation")?,
+            wave: self.wave.map(|w| w as u8),
+            targets: json(&self.targets, "targets")?,
+            blockers: json(&self.blockers, "blockers")?,
+            assumptions: json(&self.assumptions, "assumptions")?,
+        })
     }
 }
 

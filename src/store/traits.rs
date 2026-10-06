@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use crate::domain::{
     Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection, Criticality,
     Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface, JobOutcome, JobStatus,
-    MetricSample, Observation, RunningService, Service,
+    MetricSample, MigrationPlan, Observation, RunningService, Service,
 };
 
 /// An annotation field that can be cleared with `orbyn annotate --unset`.
@@ -161,6 +161,18 @@ pub trait Store: Send + Sync {
     /// the inventory (only connections whose remote IP matches a known
     /// asset). Feeds the application inference engine.
     async fn list_dependency_evidence(&self) -> Result<Vec<DependencyEvidence>>;
+
+    // Migration plans (v1.2): append-only, reproducible artifacts. The
+    // scalar summary lives in columns, the detail in JSON.
+
+    /// Persist a migration plan (insert; re-planning appends a new row).
+    async fn save_plan(&self, plan: MigrationPlan) -> Result<()>;
+
+    /// Saved plans, newest first; filtered by application when given.
+    async fn list_plans(&self, application_id: Option<&str>) -> Result<Vec<MigrationPlan>>;
+
+    /// One saved plan by id.
+    async fn get_plan(&self, id: &str) -> Result<Option<MigrationPlan>>;
 
     /// Apply inventory annotation edits (environment/owner/criticality/tags).
     async fn annotate_asset(&self, id: &str, annotations: AssetAnnotations) -> Result<()>;
