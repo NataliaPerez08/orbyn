@@ -1,0 +1,83 @@
+{
+  "application": {
+    "confidence": 1.0,
+    "id": "app-ecbeb1befd48f7fc",
+    "name": "host",
+    "source": "inferred"
+  },
+  "inference_model": "application-inference/v1",
+  "members": [
+    {
+      "application_id": "app-ecbeb1befd48f7fc",
+      "asset_id": "192-168-0-1",
+      "confidence": 1.0,
+      "evidence": [
+        {
+          "description": "manual dependency: host-00002 -> host-00001",
+          "source": "manual-dependency",
+          "weight": 1.0
+        },
+        {
+          "description": "manual dependency: host-00003 -> host-00001",
+          "source": "manual-dependency",
+          "weight": 1.0
+        },
+        {
+          "description": "same subnet: 192.168.0.0/24",
+          "source": "same-subnet",
+          "weight": 0.1
+        }
+      ],
+      "is_excluded": false,
+      "source": "inferred"
+    },
+    {
+      "application_id": "app-ecbeb1befd48f7fc",
+      "asset_id": "192-168-0-2",
+      "confidence": 1.0,
+      "evidence": [
+        {
+          "description": "manual dependency: host-00002 -> host-00001",
+          "source": "manual-dependency",
+          "weight": 1.0
+        },
+        {
+          "description": "same subnet: 192.168.0.0/24",
+          "source": "same-subnet",
+          "weight": 0.1
+        },
+        {
+          "description": "shared dependency neighborhood: host-00001",
+          "source": "shared-backend",
+          "weight": 0.6
+        }
+      ],
+      "is_excluded": false,
+      "source": "inferred"
+    },
+    {
+      "application_id": "app-ecbeb1befd48f7fc",
+      "asset_id": "192-168-0-3",
+      "confidence": 1.0,
+      "evidence": [
+        {
+          "description": "manual dependency: host-00003 -> host-00001",
+          "source": "manual-dependency",
+          "weight": 1.0
+        },
+        {
+          "description": "same subnet: 192.168.0.0/24",
+          "source": "same-subnet",
+          "weight": 0.1
+        },
+        {
+          "description": "shared dependency neighborhood: host-00001",
+          "source": "shared-backend",
+          "weight": 0.6
+        }
+      ],
+      "is_excluded": false,
+      "source": "inferred"
+    }
+  ]
+}
