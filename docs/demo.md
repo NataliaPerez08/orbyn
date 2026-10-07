@@ -278,3 +278,7 @@ web-01 ansible_host=10.0.0.5
 
 These runs are reproducible: the JSON seed and collector stubs mirror the
 fixtures used by the automated suite, so what you see here is what CI checks.
+
+For demos you can run yourself — a predefined CSV estate, a Docker lab
+(planned), or a QEMU lab of real VMs — see
+[Demo environments](demo-environments.md).
