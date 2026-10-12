@@ -83,6 +83,7 @@ nav:
       - Security: security.md
       - Security policy: SECURITY.md
       - Architecture: ARCHITECTURE.md
+      - Architecture v2 (proposal): ARCHITECTURE_V2.md
       - Known issues: KnowIssues.md
       - Validation matrix: VALIDATION_MATRIX.md
       - Performance: PERFORMANCE.md
@@ -91,6 +92,8 @@ nav:
       - Roadmap v1.1-v1.3: "Orbyn — Roadmap v1.1 to v1.3.md"
       - Plugins: PLUGINS.md
       - Roadmap: ROADMAP.md
+      - Roadmap v2 (proposal): ROADMAP_V2.md
+      - Nmap replacement plan: NMAP_REPLACEMENT_PLAN.md
       - Contributing: CONTRIBUTING.md
   - Third-party notices: third-party.md
 
