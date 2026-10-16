@@ -75,7 +75,7 @@ break compatibility for no functional gain):
 
 ```text
 orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
-    [--rate-limit <n>] [--collector nmap|snmp|ssh|windows|winrm] \
+    [--rate-limit <n>] [--collector nmap|native|snmp|ssh|windows|winrm] \
     [--allow-large-cidr] [--user <u>] [--port <p>] [--identity-file <key>] \
     [--community <c>|-] [--snmp-version 1|2c] [--snmp-port 161] \
     [--winrm-password <p>|-] [--winrm-port 5986] [--winrm-insecure] \
@@ -85,7 +85,7 @@ orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
 | Flag | Default | Applies to | Purpose |
 | --- | --- | --- | --- |
 | `--target <cidr\|ip>` | *(required, repeatable)* | all | Scope to scan. Validated before anything runs |
-| `--collector <name>` | `nmap` | all | `nmap`, `snmp`, `ssh`, `windows`, `winrm` |
+| `--collector <name>` | `nmap` | all | `nmap`, `native`, `snmp`, `ssh`, `windows`, `winrm`. `native` is the built-in sweep: no external binary or privileges required, top-ports TCP (connect) + UDP (connected-datagram, conservative `open\|filtered` states), passive banners plus versioned HTTP/TLS fingerprint probes (`native-fingerprints/v1`, certs not verified), optional ICMP liveness prefetch (`ping`) and PTR hostnames (`dig`), both fail-open. Knobs: `ORBYN_NATIVE_CONNECT_TIMEOUT_MS`, `ORBYN_NATIVE_CONCURRENCY`, `ORBYN_NATIVE_MAX_HOSTS`, `ORBYN_NATIVE_LIVENESS`, `ORBYN_NATIVE_REVERSE_DNS`, `ORBYN_NATIVE_UDP`, `ORBYN_NATIVE_JITTER_MS`, `ORBYN_PING_BIN` (see [ADR-0001](ADR-0001-discovery-backend-contract.md) and the parity matrix in [NMAP_REPLACEMENT_PLAN.md](NMAP_REPLACEMENT_PLAN.md)) |
 | `--concurrency <n>` | `4` | all | Targets scanned in parallel (must be ≥ 1) |
 | `--rate-limit <n>` | *(none)* | all | Max target launches per second (must be ≥ 1) |
 | `--allow-large-cidr` | off | all | Widen the CIDR floor beyond IPv4 `/16` / IPv6 `/48` |
@@ -121,6 +121,15 @@ orbyn discover --target <cidr|ip> [--target ...] [--concurrency 4] \
 | Command | Purpose |
 | --- | --- |
 | `orbyn metrics <id-or-ip> [--samples N]` | Utilization window: span, avg/p95/p99/peak, confidence, right-sizing readiness |
+| `orbyn agent run [--interval-secs 60] [--once] [--duration-secs N] [--retention-hours 720] [--asset-ip <ip>] [--facts-interval-secs 3600]` | Local profiler agent: sample this host's CPU/RAM/swap/load into the database (Linux `/proc`; Windows via a read-only local PowerShell probe); `--once` is cron/timer friendly |
+| `orbyn agent report [--format table\|json\|html] [--asset-ip <ip>]` | The agent's observed window plus sample coverage (count, span, largest gap); HTML is a standalone static document |
+| `orbyn agent sync --url <ingest> --token <t> [--asset-ip <ip>]` | Ship buffered samples and facts to an ingest server (cursor-based, idempotent; token also via `ORBYN_SYNC_TOKEN`) |
+| `orbyn server run [--bind 127.0.0.1:7780]` | Single-tenant ingest server for remote agents (`POST /v1/ingest`, Bearer auth, sequential, loopback by default — ADR-0002 D3) |
+| `orbyn server enroll --asset-ip <ip>` | Mint an agent enrollment token; printed exactly once, only its SHA-256 hash is stored |
+| `orbyn server revoke <asset-id>` | Refuse an agent's future syncs; the agent keeps buffering locally |
+| `orbyn server list` | Enrollments with revocation state |
+
+See [agent.md](agent.md) for run modes, service setup and platform status.
 
 ## Dependencies and graph
 

@@ -1,0 +1,28 @@
+#cloud-config
+# legacy-01 — Debian 11 — a "legacy" box whose only job is holding a Redis
+# pub/sub subscription open to db-01 so Orbyn sees the dependency edge.
+users:
+  - name: deploy
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __LAB_KEY__
+ssh_pwauth: false
+package_update: true
+packages:
+  - redis-tools
+write_files:
+  - path: /etc/systemd/system/orbyn-legacy.service
+    content: |
+      [Unit]
+      Description=Orbyn demo legacy listener
+      After=network-online.target
+      [Service]
+      ExecStart=/usr/bin/redis-cli -h 192.0.2.13 -p 6379 pubsub subscribe orbyn-lab
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now orbyn-legacy

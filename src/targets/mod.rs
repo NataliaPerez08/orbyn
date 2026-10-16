@@ -30,6 +30,15 @@ pub struct TargetSku {
     pub capabilities: Vec<String>,
 }
 
+/// Block-storage list pricing for a provider's region: one curated
+/// general-purpose SSD tier, priced per GiB-month.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct StoragePricing {
+    pub sku: String,
+    /// List price per GiB-month.
+    pub gb_monthly_price: f64,
+}
+
 /// One price observation: pricing data only, never a capability.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TargetPrice {
@@ -71,6 +80,7 @@ struct CatalogFile {
     retrieved_at: String,
     source: String,
     currency: String,
+    storage: Option<StoragePricing>,
     skus: Vec<SkuRow>,
     prices: Vec<PriceRow>,
 }
@@ -84,6 +94,7 @@ pub struct TargetCatalog {
     pub retrieved_at: String,
     pub source: String,
     pub currency: String,
+    pub storage: Option<StoragePricing>,
     pub skus: Vec<TargetSku>,
     pub prices: Vec<TargetPrice>,
 }
@@ -139,6 +150,7 @@ fn parse(raw: &str) -> TargetCatalog {
         retrieved_at: f.retrieved_at,
         source: f.source,
         currency: f.currency,
+        storage: f.storage,
         skus,
         prices,
     }
@@ -170,6 +182,11 @@ mod tests {
         assert!(!aws.skus.is_empty());
         assert!(!aws.prices.is_empty());
         assert!(catalog("huawei").is_none());
+        for c in catalogs() {
+            let storage = c.storage.as_ref().expect("storage pricing");
+            assert!(storage.gb_monthly_price > 0.0, "{}", c.provider);
+            assert!(!storage.sku.is_empty());
+        }
     }
 
     #[test]

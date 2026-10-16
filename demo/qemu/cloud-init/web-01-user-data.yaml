@@ -1,0 +1,47 @@
+#cloud-config
+# web-01 — Ubuntu 24.04 — nginx reverse proxy in front of api-01.
+# The upstream keepalive pool holds persistent connections to api-01:8080 so
+# Orbyn's SSH collector sees them in `ss -tnp state established`.
+users:
+  - name: deploy
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __LAB_KEY__
+ssh_pwauth: false
+package_update: true
+packages:
+  - nginx
+  - curl
+write_files:
+  - path: /etc/nginx/sites-available/orbyn-demo
+    content: |
+      upstream orbyn_api {
+          server 192.0.2.12:8080;
+          keepalive 16;
+      }
+      server {
+          listen 80 default_server;
+          location / {
+              proxy_pass http://orbyn_api;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+          }
+      }
+  - path: /etc/systemd/system/orbyn-traffic.service
+    content: |
+      [Unit]
+      Description=Orbyn demo traffic generator
+      After=network-online.target
+      [Service]
+      ExecStart=/bin/sh -c 'while :; do curl -sf http://127.0.0.1/ >/dev/null; sleep 2; done'
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - ln -sf /etc/nginx/sites-available/orbyn-demo /etc/nginx/sites-enabled/orbyn-demo
+  - rm -f /etc/nginx/sites-enabled/default
+  - systemctl reload nginx
+  - systemctl daemon-reload
+  - systemctl enable --now orbyn-traffic

@@ -9,6 +9,7 @@ use clap::CommandFactory;
 
 use crate::cli::args::{Cli, Shell};
 
+pub(crate) mod agent;
 pub(crate) mod applications;
 pub(crate) mod assessment;
 pub(crate) mod audit;
@@ -19,6 +20,7 @@ pub(crate) mod integrations;
 pub(crate) mod inventory;
 pub(crate) mod metrics;
 pub(crate) mod planning;
+pub(crate) mod server;
 pub(crate) mod sku;
 pub(crate) mod targets;
 pub(crate) mod waves;

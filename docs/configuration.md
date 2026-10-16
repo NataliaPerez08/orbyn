@@ -9,8 +9,9 @@ cp .env.example .env
 ```
 
 !!! warning "`ORBYN_*_BIN` values are executed"
-    If `.env` sets `ORBYN_NMAP_BIN`, `ORBYN_SNMP_BIN`, `ORBYN_SSH_BIN` or
-    `ORBYN_CURL_BIN` to anything other than the built-in default, Orbyn prints
+    If `.env` sets `ORBYN_NMAP_BIN`, `ORBYN_SNMP_BIN`, `ORBYN_SSH_BIN`,
+    `ORBYN_PING_BIN` or `ORBYN_CURL_BIN` to anything other than the built-in
+    default, Orbyn prints
     `WARNING: .env configures ORBYN_…_BIN=…; Orbyn will execute that binary.`
     Make sure the path points at the tool you intend.
 
@@ -28,6 +29,15 @@ cp .env.example .env
 | `ORBYN_SSH_BIN` | `ssh` | `ssh` binary path (OpenSSH client) |
 | `ORBYN_CURL_BIN` | `curl` | `curl` binary path for API clients and WinRM transport |
 | `ORBYN_DIG_BIN` | `dig` | `dig` binary path for DNS evidence (optional) |
+| `ORBYN_PING_BIN` | `ping` | `ping` binary path for `native` liveness prefetch (optional, fail-open) |
+| `ORBYN_NATIVE_CONNECT_TIMEOUT_MS` | `1500` | Per-probe connect timeout for the `native` collector |
+| `ORBYN_NATIVE_CONCURRENCY` | `128` | Parallel probes for the `native` collector |
+| `ORBYN_NATIVE_MAX_HOSTS` | `65536` | CIDR expansion cap for the `native` collector |
+| `ORBYN_NATIVE_LIVENESS` | `1` | ICMP liveness prefetch before the `native` port sweep |
+| `ORBYN_NATIVE_REVERSE_DNS` | `1` | PTR hostnames for `native` results (fail-open) |
+| `ORBYN_NATIVE_UDP` | `1` | Top-ports UDP sweep (conservative `open\|filtered` states) |
+| `ORBYN_NATIVE_JITTER_MS` | `0` | Extra per-probe jitter for the `native` collector |
+| `ORBYN_SYNC_TOKEN` | *(unset)* | Agent sync token for `orbyn agent sync` (or `--token`; `-` for stdin) |
 | `ORBYN_WINRM_PASSWORD` | *(unset)* | WinRM Basic-auth password (or `--winrm-password`; `-` for stdin) |
 | `ORBYN_NETBOX_TOKEN` | *(unset)* | NetBox API token (or `--token`; `-` for stdin) |
 | `ORBYN_PROMETHEUS_TOKEN` | *(unset)* | Prometheus bearer token (or `--token`; `-` for stdin) |

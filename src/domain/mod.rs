@@ -471,6 +471,16 @@ pub struct MigrationPlan {
     pub assumptions: Vec<MigrationAssumption>,
 }
 
+/// An agent enrollment on the ingest server: which asset, when, and
+/// whether its token was revoked. The token hash itself is never
+/// exposed through this record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentEnrollment {
+    pub asset_id: String,
+    pub enrolled_at: DateTime<Utc>,
+    pub revoked: bool,
+}
+
 /// Hardware/virtual machine allocation for a single asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capacity {

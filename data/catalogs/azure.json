@@ -5,6 +5,7 @@
   "retrieved_at": "2026-10-01",
   "source": "curated on-demand list prices",
   "currency": "USD",
+  "storage": {"sku": "standard-ssd", "gb_monthly_price": 0.075},
   "skus": [
     {"sku": "Standard_B2s", "cpu": 2, "memory_mib": 4096, "architecture": "x86_64", "storage": null, "capabilities": ["burstable"]},
     {"sku": "Standard_B2ms", "cpu": 2, "memory_mib": 8192, "architecture": "x86_64", "storage": null, "capabilities": ["burstable"]},

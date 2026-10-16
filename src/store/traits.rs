@@ -2,9 +2,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::domain::{
-    Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection, Criticality,
-    Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface, JobOutcome, JobStatus,
-    MetricSample, MigrationPlan, Observation, RunningService, Service,
+    AgentEnrollment, Application, ApplicationMember, Asset, AuditEvent, Capacity, Connection,
+    Criticality, Dependency, DependencyEvidence, DiscoveryJob, Filesystem, Interface, JobOutcome,
+    JobStatus, MetricSample, MigrationPlan, Observation, RunningService, Service,
 };
 
 /// An annotation field that can be cleared with `orbyn annotate --unset`.
@@ -70,9 +70,46 @@ pub trait Store: Send + Sync {
     /// existing row is skipped, so re-importing the same window is
     /// idempotent. Returns the number of samples actually inserted.
     async fn insert_metric_samples(&self, samples: &[MetricSample]) -> Result<usize>;
+    /// Delete utilization samples older than `cutoff` (retention prune;
+    /// used by the local agent). Returns the number of rows removed.
+    async fn delete_metric_samples_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64>;
+    /// Samples strictly after `since` (all of them when `None`),
+    /// oldest first — the agent's sync cursor query.
+    async fn list_metric_samples_since(
+        &self,
+        asset_id: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        limit: usize,
+    ) -> Result<Vec<MetricSample>>;
     /// Active connections observed on an asset (dependency evidence).
     async fn list_connections(&self, asset_id: &str) -> Result<Vec<Connection>>;
     async fn list_dependencies(&self) -> Result<Vec<Dependency>>;
+
+    // v1.6 remote profiling: server-side enrollment and agent-side sync
+    // state. Tokens are hex SHA-256 hashes; plaintext is never stored.
+
+    /// Upsert an agent enrollment; re-enrolling replaces the token hash.
+    async fn upsert_agent_token(
+        &self,
+        asset_id: &str,
+        token_hash: &str,
+        enrolled_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()>;
+    /// Flip an agent's revoked flag. Returns false when no enrollment
+    /// exists for the asset.
+    async fn revoke_agent_token(&self, asset_id: &str) -> Result<bool>;
+    /// Does this (asset, token hash) pair name a live (non-revoked)
+    /// enrollment?
+    async fn agent_token_valid(&self, asset_id: &str, token_hash: &str) -> Result<bool>;
+    /// Every enrollment, newest first, without token hashes (CLI-safe).
+    async fn list_agent_tokens(&self) -> Result<Vec<AgentEnrollment>>;
+    /// Tiny key-value state (the agent's sync cursor).
+    async fn get_agent_state(&self, key: &str) -> Result<Option<String>>;
+    /// Insert or update a state value.
+    async fn set_agent_state(&self, key: &str, value: &str) -> Result<()>;
 
     // Bulk variants: whole-table reads in one query each, used by `assess`
     // and `export` so large inventories do not degrade into N+1 query loops.

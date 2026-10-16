@@ -202,3 +202,232 @@ fixtures plus end-to-end tests.
   provenance column remains a possible follow-up.)
 - [x] **P2** Add cloud adapter audit events and secret-redaction coverage.
 - [x] **P2** Keep vCenter deferred until transport and scope are defined.
+
+## v1.4 — Native discovery (ROADMAP_V2)
+
+Baseline and contracts come out of Sprint 0
+([BASELINE_AUDIT.md](BASELINE_AUDIT.md),
+[ADR-0001](ADR-0001-discovery-backend-contract.md)): the `Collector` trait is
+the backend contract, `--collector` is the selector, and the target parser
+with scope floors already exists.
+
+- [x] **P0** Ratify the discovery backend contract (ADR-0001; no new
+  abstraction — the existing `Collector` trait stands).
+- [x] **P0** Target parser with scope policy (shipped in v0.1; re-verified by
+  the audit).
+- [x] **P0** Native TCP-connect collector behind `Collector` (top-ports sweep,
+  bounded concurrency, connect timeout, basic banner grab, service naming,
+  CIDR expansion with a hard host cap; IPv6 ranges refused beyond the cap).
+  (`src/collectors/native.rs`.)
+- [x] **P0** `--collector native` selector wired through `discover`.
+- [x] **P1** ICMP liveness prefetch (system `ping`, multi-host targets only,
+  clean no-reply skips like nmap's default host discovery, errors fail open;
+  `ORBYN_NATIVE_LIVENESS=0` sweeps everything). ARP liveness stays deferred
+  (needs a raw-socket privilege story).
+- [x] **P1** Optional reverse DNS for discovered hosts (`dig +short -x` via the
+  shared `dns::resolve_ptr`, graceful without dig;
+  `ORBYN_NATIVE_REVERSE_DNS=0`).
+- [ ] **P1** Recorded lab comparison native-vs-nmap on an authorized network
+  (hosts found, ports found, services named, runtime) — gates any default
+  flip.
+- [x] **P2** Per-feature parity matrix published in the docs
+  (NMAP_REPLACEMENT_PLAN.md §6).
+- [x] **P2** Launch jitter knob (`ORBYN_NATIVE_JITTER_MS`, random 0..N pause
+  per host; fixed pacing stays with the job-level `--rate-limit`).
+
+## v1.5 — Local profiler & agent (ROADMAP_V2)
+
+- [x] **P0** Agent sampling loop (`orbyn agent run`, Linux: /proc/stat,
+  /proc/meminfo, /proc/loadavg; no subprocesses for sampling), `--once`
+  mode, graceful SIGINT/SIGTERM shutdown, restart-resilient append-only
+  samples. (`src/agent/mod.rs`.)
+- [x] **P0** Retention prune (`--retention-hours`, default 30d, on start +
+  hourly; `Store::delete_metric_samples_before` on SQLite and Postgres).
+- [x] **P0** Agent asset identity (`--asset-ip` or auto-detected local
+  address; ensures its asset row without clobbering discovered facts).
+- [x] **P1** HTML/JSON report with sample coverage
+  (`orbyn agent report --format html|json|table`; coverage = count, span,
+  largest gap).
+- [x] **P1** Facts cadence: filesystems (`df -kPT`) and connections
+  (`ss -tnp`) through the shared SSH-collector parsers, idempotent upserts
+  (`--facts-interval-secs`, `0` disables).
+- [x] **P1** systemd unit example and service documentation
+  (docs/agent.md).
+- [x] **P0** Windows sampling (PowerShell/WMI probes): one local
+  `powershell -NoProfile` metric probe per sample reusing the remote
+  collector's `cpu|total|free|page` parser; the facts cadence runs the
+  full read-only `WINDOWS_PROBE_SCRIPT` locally through
+  `parse_windows_probe`/`windows_observations`, dropping its snapshot
+  samples so only interval samples form the history. Compiled and
+  unit-tested on `windows-latest` CI.
+- [ ] **P1** 7-day recoverable-observation validation on live Linux and
+  Windows hosts (lab-gated).
+
+## v1.6 — Remote profiling & dependencies (ROADMAP_V2)
+
+Scope per ROADMAP_V2: agent enrollment, mTLS or short-lived credentials,
+buffer/retries and revocation; merge agent observations with the shipped
+agentless SSH/WinRM evidence and connection graph. Local-first,
+single-tenant — multi-tenancy is explicitly postponed (risk table).
+
+- [x] **P0** Minimal single-tenant ingest server (`orbyn server run`):
+  `POST /v1/ingest`, Bearer auth, hand-rolled HTTP/1.1 (Content-Length
+  only, chunked refused, head/body caps, sequential handling, loopback
+  bind by default). No framework, no new dependencies.
+  (`src/server/mod.rs`.)
+- [x] **P0** Enrollment: random UUID tokens minted by `orbyn server
+  enroll`, printed exactly once, stored as SHA-256 hashes only
+  (migration 0012, `agent_tokens`). Bearer-over-loopback-HTTP chosen
+  per ADR-0002 D3; mTLS revisited when ingest leaves the host.
+- [x] **P0** Agent sync (`orbyn agent sync`): cursor-based batches of
+  5 000 samples plus re-upserted fact snapshots; the local database is
+  the buffer (nothing is deleted until acknowledged); curl client with
+  the token streamed via stdin (`-H @-`, never on argv); one attempt
+  per run — the timer is the retry policy. (`src/agent/sync.rs`.)
+- [x] **P0** Revocation: `orbyn server revoke <asset-id>`; ingest
+  answers 403 (unknown and revoked indistinguishable); the agent keeps
+  buffering locally until re-enrolled. Verified mid-run in e2e.
+- [ ] **P1** Evidence merge: agent connections land in the same
+  connections table the SSH/WinRM collectors write, so the connection
+  graph covers both modes. Provenance (agent vs agentless) is not yet
+  recorded — needs a source column when someone actually needs to
+  filter by it.
+- [x] **P1** Transport security decision + docs: plain HTTP on
+  loopback with Bearer tokens per ADR-0002 D3 (local-first, no
+  at-rest encryption before remote ingest); documented in agent.md.
+- [ ] **P1** Exit criteria (lab-gated): three heterogeneous hosts
+  (Linux + Windows) observed through the server; connections backed by
+  evidence; revocation verified mid-run.
+
+## v1.7 — Native discovery II (ROADMAP_V2)
+
+- [x] **P0** Active service fingerprinting, versioned as
+  `native-fingerprints/v1` (`src/collectors/fingerprint.rs`): HTTP `GET`
+  probe on silent open ports (status line + `Server` header, capped
+  banners); TLS handshake via rustls (ring provider, already in the tree)
+  on known TLS ports with the post-handshake greeting peek (smtps/imaps/
+  pop3s) or HTTP `GET` inside the tunnel (https). Certificates are not
+  verified — identification, not authentication, nmap's posture; probes
+  are read-only and unprivileged. Evidence overrides the port table: a
+  parsed HTTP response renames the service `http`/`https`. Hermetic
+  tests: parser fixtures, fake HTTP listener, sync rustls test server
+  with a committed self-signed DER fixture.
+- [x] **P0** UDP top-ports sweep (the applicable half of SYN/UDP): 8
+  discovery-relevant ports (SNMP 161, DNS 53, NTP 123, NetBIOS-NS 137,
+  IKE 500, syslog 514, UPnP 1900, zeroconf 5353) via unprivileged
+  connected-datagram probes — response = `open`, ICMP unreachable =
+  closed (no observation), silence = `open|filtered`, never a bare
+  `open` from silence (plan §9). New capability: the nmap baseline is
+  TCP-only. Feeds SNMP enrichment with candidate hosts.
+  `ORBYN_NATIVE_UDP=0` disables.
+- [ ] **P2** SYN scanning — deferred: raw sockets need privileges, do
+  not port to Windows, and add nothing over TCP connect scan for
+  authorized inventory (nmap itself falls back to connect scan when
+  unprivileged). Revisit only with NMAP-010 lab data showing a need.
+- [ ] **P2** Traceroute / IPv6 ranges — deferred until a validated use
+  case exists (plan §5 wording).
+- [ ] **P1** `auto` collector mode — gated on NMAP-010 parity data.
+
+## v2.0 — Desktop & distributed platform (ROADMAP_V2)
+
+Scope per ROADMAP_V2: Tauri Desktop, multi-agent server, install and
+update, wizard UX. The Desktop MVP starts in parallel from v1.5; it does
+not wait for v2.0. Exit criteria: Windows install without a toolchain;
+CLI intact; full workflow with export.
+
+- [x] **P1** Tauri Desktop MVP: read-only Discover/Observe/Export views
+  (`desktop/`, standalone workspace like `fuzz/`). The desktop adds no
+  engine logic: every view drives the stable, e2e-tested CLI surface
+  (`discover`/`assets`/`agent report`/`export`) — one model, three
+  interfaces. Engine binary located via `ORBYN_BIN` → app sibling →
+  PATH; DB anchored in the user profile (`ORBYN_DB` wins). No editing
+  in the MVP — scope-creep mitigation from the risk table. CI builds
+  and tests it on Linux (webkit2gtk) and Windows (WebView2); a
+  frontend↔command contract test pins the invoke names.
+- [x] **P1** Wizard UX: the desktop is a four-step guided flow
+  (scope → discover → observe → export); steps unlock as reached,
+  first run starts at step 1, returning operators land on their
+  inventory, engine errors surface under plain-language lead lines
+  (cross-cutting DoD).
+- [ ] **P1** Windows installer without a toolchain (MSI/NSIS built in
+  CI); signed binaries where applicable; SBOM + dependency scanning
+  carried over from the CLI pipeline.
+  Progress: the engine ships as a Tauri sidecar next to the app
+  (sibling lookup, verified end-to-end via the local `.deb` bundle:
+  both binaries in `/usr/bin`, app boots stripped-env and finds the
+  engine); `desktop-installer` CI job builds the NSIS installer on
+  main pushes (first green run pending); `cargo deny` now covers the
+  desktop lockfile (MPL-2.0 + compile-time proc-macro-error allowances
+  documented in deny.toml). Decided per ADR-0003: NSIS only (D7 — no MSI
+  variant), installers upload as workflow artifacts on main pushes (D8,
+  step added to the `desktop-installer` job); signing waits on a
+  code-signing certificate (D8 revisit trigger). Remaining: a green
+  installer build.
+- [ ] **P0** CLI intact: desktop and server consume the same core APIs;
+  no CLI regressions (exit criterion, checked by the existing e2e
+  suites).
+- [ ] **P2** Updater: update notifications and a signed update path
+  (P2 per roadmap; keep an offline path — catalogs and prices update via
+  packages/versions). Decided per ADR-0003 D9: notifications-only,
+  offline-first — the app checks a version manifest and notifies; signed
+  auto-update only after D8's signing infrastructure exists.
+- [ ] **P2** Multi-agent server: harden the v1.6 ingest server —
+  aggregation TTL, quotas, and explicit sampling for connection
+  cardinality (risk table); multi-tenancy still postponed. Decided per
+  ADR-0003 D10: deferred until a real deployment shows the need
+  (measured-then-build).
+- [ ] **P1** Exit criteria (lab-gated): full workflow (discover →
+  observe → analyze → export) on a clean Windows machine with no
+  toolchain installed.
+
+## Intelligence track — catalog freshness (ROADMAP_V2 track C)
+
+Track C remainder after v1.3.0: catalog freshness. Every report already
+carries source, date, version, currency, and assumptions — keep that.
+
+- [ ] **P2** Online pricing APIs: versioned, cached, with offline
+  fallback to the embedded catalogs; missing prices stay
+  `not_calculated`, never silently zero.
+- [ ] **P2** Huawei Cloud / OpenStack catalog data completion (currently
+  the thinnest adapters).
+- [x] **P2** Storage costs: observed member filesystem capacity is
+  priced at each catalog's curated general-purpose SSD tier (aws gp3
+  $0.08, azure standard-ssd $0.075, gcp pd-balanced $0.10 per
+  GiB-month, 2026-10 curation); no disk sizing or no storage pricing
+  stays honestly `not_calculated`, never zero. The total sums
+  calculated components only and the reasons name what is missing.
+- [ ] **P2** Managed-database costs: database services are detected and
+  named in the cost report, but managed-service pricing is not in the
+  catalog — stays `not_calculated` until per-engine catalog data is
+  curated (RDS/Cloud SQL/Azure SQL tiers).
+
+## Pending decisions (ROADMAP_V2 — all closed, see ADR-0002 and ADR-0003)
+
+- [x] Officially supported operating systems and binary architectures:
+  Linux x64 + Windows x64 tier-1 (what CI proves); ARM64/macOS
+  best-effort.
+- [x] Scanner consent/scope model and raw-socket permissions:
+  unprivileged-only, permanent; explicit `--target`/`--scope-cidr` is the
+  consent record; SYN/ARP only if NMAP-010 data demands them.
+- [x] Retention policy, process-name/IP privacy, and local encryption:
+  30-day default, no at-rest encryption before v1.6 remote ingest lands
+  (local-first trust model, documented).
+- [x] Online pricing source and versioning: versioned catalog packages,
+  no live API calls at report time; `not_calculated` honesty preserved.
+- [x] Exact conditions for marking Nmap optional or removing it:
+  measured-then-default (NMAP-010 ≥ parity for Orbyn's profiles flips the
+  default; removal one regression-free minor release later).
+- [x] Desktop engine contract: subprocess over the stable CLI, no
+  engine code linked; the stable-command test pins the surface (ADR-0003
+  D6; revisit only when a view needs live streaming).
+- [x] Windows installer format: NSIS only; MSI revisited when an
+  enterprise deployment demands it (ADR-0003 D7).
+- [x] Installer distribution: workflow artifacts on main pushes now,
+  tagged GitHub Releases at the release milestone; signing waits on a
+  code-signing certificate, whose acquisition is the revisit trigger
+  (ADR-0003 D8).
+- [x] Updater: notifications-only, offline-first; signed auto-update
+  only after D8's signing infrastructure exists (ADR-0003 D9).
+- [x] Multi-agent server hardening: deferred until a real deployment
+  shows the need — measured-then-build (ADR-0003 D10); multi-tenancy
+  stays postponed.

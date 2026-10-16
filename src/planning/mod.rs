@@ -11,7 +11,7 @@ pub mod strategy;
 
 use crate::assessment::{AssetScore, AssetWindow, Finding};
 use crate::domain::{
-    Application, ApplicationMember, Asset, Capacity, Connection, Dependency, Service,
+    Application, ApplicationMember, Asset, Capacity, Connection, Dependency, Filesystem, Service,
 };
 
 /// The borrowed snapshot both planning models evaluate. Assembled by the
@@ -25,6 +25,7 @@ pub struct PlanInput<'a> {
     pub dependencies: &'a [Dependency],
     pub connections: &'a [Connection],
     pub capacities: &'a [Capacity],
+    pub filesystems: &'a [Filesystem],
     pub findings: &'a [Finding],
     pub asset_scores: &'a [AssetScore],
     pub metric_windows: &'a [AssetWindow],
@@ -47,6 +48,7 @@ impl PlanInput<'_> {
             dependencies: &input.dependencies,
             connections: &input.connections,
             capacities: &input.capacities,
+            filesystems: &input.filesystems,
             findings: &report.findings,
             asset_scores: &report.asset_scores,
             metric_windows: &input.metric_windows,
@@ -98,7 +100,7 @@ pub(crate) mod testkit {
     use crate::assessment::{AssetScore, AssetWindow, Finding, Severity};
     use crate::domain::{
         AppSource, Application, ApplicationMember, Asset, Capacity, Connection, Criticality,
-        Dependency, Service,
+        Dependency, Filesystem, Service,
     };
     use crate::metrics::{SampleConfidence, WindowStats};
 
@@ -112,6 +114,7 @@ pub(crate) mod testkit {
         pub dependencies: Vec<Dependency>,
         pub connections: Vec<Connection>,
         pub capacities: Vec<Capacity>,
+        pub filesystems: Vec<Filesystem>,
         pub findings: Vec<Finding>,
         pub asset_scores: Vec<AssetScore>,
         pub metric_windows: Vec<AssetWindow>,
@@ -127,6 +130,7 @@ pub(crate) mod testkit {
                 dependencies: &self.dependencies,
                 connections: &self.connections,
                 capacities: &self.capacities,
+                filesystems: &self.filesystems,
                 findings: &self.findings,
                 asset_scores: &self.asset_scores,
                 metric_windows: &self.metric_windows,
@@ -204,6 +208,18 @@ pub(crate) mod testkit {
             services,
             dependencies,
             connections: Vec::new(),
+            filesystems: (0..n)
+                .map(|i| Filesystem {
+                    asset_id: format!("a{i}"),
+                    device: Some("/dev/sda1".into()),
+                    mount: "/".into(),
+                    fs_type: Some("ext4".into()),
+                    size_kb: 100 * 1024 * 1024,
+                    used_kb: Some(30 * 1024 * 1024),
+                    available_kb: Some(70 * 1024 * 1024),
+                    used_pct: Some(30),
+                })
+                .collect(),
             capacities: (0..n)
                 .map(|i| Capacity {
                     asset_id: format!("a{i}"),

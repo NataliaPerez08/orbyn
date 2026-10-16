@@ -21,6 +21,8 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::resolve(cli.db.clone());
 
     match cli.command {
+        Command::Agent { action } => commands::agent::agent(&config, action).await?,
+        Command::Server { action } => commands::server::server(&config, action).await?,
         Command::Discover {
             target,
             format,

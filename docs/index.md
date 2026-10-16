@@ -13,7 +13,13 @@ single-binary CLI tool.
     metrics/right-sizing, cloud adapters, SKU matching, migration waves,
     application intelligence (v1.1), the migration planner with readiness,
     strategies, plans and bundles (v1.2), and target & cost intelligence
-    with multi-cloud comparison (v1.3).
+    with multi-cloud comparison (v1.3). In development towards v2.0
+    ([roadmap](ROADMAP_V2.md)): the built-in `native` discovery sweep
+    ([ADR-0001](ADR-0001-discovery-backend-contract.md)), the local profiling
+    agent with remote enrollment/sync ([agent.md](agent.md),
+    [ADR-0002](ADR-0002-platform-scope-privacy-pricing-nmap.md)), and the
+    Desktop app ([desktop.md](desktop.md),
+    [ADR-0003](ADR-0003-desktop-installer-updater-hardening.md)).
 
 ## Why Orbyn?
 
@@ -93,6 +99,8 @@ future option; the CLI is the interface that matters.
 | [Test environment runs](demo.md) | Real captured output from a scripted test environment |
 | [Demo environments](demo-environments.md) | Three ready-to-run demos: CSV estate, Docker lab (planned), QEMU lab |
 | [CLI reference](cli.md) | Every subcommand and flag, in one table |
+| [Local agent](agent.md) | Local profiling agent, reports and remote sync to an ingest server |
+| [Desktop app](desktop.md) | Tauri desktop app (MVP): discover, observe, export |
 | [Collectors](collectors/index.md) | How each discovery collector works and how to run it |
 | [Importers](importers/index.md) | NetBox, Prometheus, Zabbix, Proxmox and cloud importers |
 | [Configuration](configuration.md) | Environment variables, database backends, limits |

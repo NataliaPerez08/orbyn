@@ -19,7 +19,7 @@ const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 /// Hex-encode bytes in lowercase (`hex::encode` semantics, inlined so the
 /// signature path does not depend on the crate's formatting).
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(std::char::from_digit((byte >> 4) as u32, 16).unwrap());

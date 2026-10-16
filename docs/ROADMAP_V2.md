@@ -1,8 +1,25 @@
-# Orbyn — Technical Roadmap v1.1 → v2.0
+# Orbyn — Technical Roadmap v1.4 → v2.0
 
-**Status:** Proposal for review · **Date:** 2026-10-12 · **Stated baseline:** Orbyn v1.0.4 (to be confirmed against HEAD)
+**Status:** Proposal for review · **Date:** 2026-10-13 · **Baseline:** Orbyn v1.3.0 (verified against HEAD, tag `v1.3.0`)
 
-> This plan builds on the project's history and agreed goals; it is not an audit of the current repository. Before executing tasks, verify the code, Nmap commands, CI, licenses, and actually implemented features.
+> The baseline below is verified against HEAD. Before executing tasks, still verify Nmap invocations, CI, and licenses locally; this plan is not an audit of every code path.
+
+## Baseline: what v1.3.0 already ships
+
+Shipped and covered by deterministic fixtures and end-to-end tests:
+
+- Application intelligence, migration planner and target & cost intelligence (the v1.1–v1.3 capability milestones, release `v1.3.0`).
+- Right-sizing with observation windows and readiness/confidence; snapshot collector; Prometheus and Zabbix history importers.
+- Agentless host-level collection (SSH/WinRM), dependency evidence and the connection graph, waves, bundles, audit trail.
+- Cloud adapters (Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP, Azure) — offline fixture-tested; SKU matching over versioned embedded catalogs; multi-cloud compare/recommend where missing pricing is reported `not_calculated`, never silently zero.
+
+Not in the baseline (this roadmap's remaining work):
+
+- Native discovery: Nmap is still the only discovery adapter.
+- No resident agent, no enrollment/sync; historical metrics come only from importers and snapshots.
+- No Desktop or Server interface; the CLI is the only surface.
+
+Because releases `v1.0.x`–`v1.3.0` are taken, the remaining milestones are renumbered from **v1.4**.
 
 ## Vision
 
@@ -19,7 +36,7 @@
 
 ## Starting point: mandatory audit (Sprint 0, 1–2 weeks)
 
-1. Pin the commit SHA, version, platform matrix, and actual releases.
+1. Confirm the v1.3.0 baseline against HEAD: commit SHA, platform matrix, and actual releases.
 2. Inventory **every actual Nmap invocation**: arguments, profiles, output formats, permissions, scripts, parsing paths, and consumers.
 3. Identify existing crates, collectors, storage interfaces, API/CLI, and CI pipelines.
 4. Run tests, lint, Windows/Linux builds, and runs on an authorized lab network.
@@ -32,26 +49,23 @@
 
 | Milestone | Scope | Depends on | Verifiable exit criteria |
 |---|---|---|---|
-| **v1.1 — Core & Application Intelligence** | DiscoveryBackend contracts, entities/evidence; application grouping, confidence, and explanation | Sprint 0 | Nmap decoupled; fixtures pass through the common model; groupings with traceability |
-| **v1.2 — Native Discovery I** | Target parser, DNS, TCP connect, ICMP/ARP per platform, basic banners and services; rate limiting | v1.1 | Basic TCP discovery without Nmap; benchmarks and differences documented |
-| **v1.3 — Local Profiler & Agent** | Windows/systemd service, CPU/RAM/disk/processes/network, SQLite, duration and frequency, restarts | v1.1 | Recoverable 7-day observation; HTML/JSON report; sample coverage |
-| **v1.4 — Remote Profiling & Dependencies** | Agent enrollment, mTLS or short-lived credentials, buffer/retries; SSH/WinRM agentless; connection graph | v1.3 | Three heterogeneous hosts observed; connections backed by evidence; revocation verified |
-| **v1.5 — Native Discovery II** | SYN/UDP where applicable, service detection/versions, IPv6, traceroute, gradual fingerprinting | v1.2 | Parity matrix per feature actually used; documented Nmap fallback |
-| **v1.6 — Right-sizing & Migration Planner** | P50/P95/peaks, observation quality, headroom, applications and waves, reports | v1.4 | Every proposal includes data, assumptions, uncertainty, and constraints |
-| **v1.7 — Target & Cost Intelligence** | AWS/Azure/GCP/Huawei/OpenStack adapters, SKU matching, regions, costs, and freshness | v1.6 | Reproducible comparisons with catalog date/source and itemized costs |
-| **v2.0 — Desktop & Distributed Platform** | Tauri Desktop, multi-agent server, install and update, wizard UX | v1.3–v1.7 | Windows install without a toolchain; CLI intact; full workflow with export |
+| **v1.4 — Native Discovery I** | DiscoveryBackend contracts, target parser, DNS, TCP connect, ICMP/ARP per platform, basic banners and services; rate limiting | Sprint 0 | Nmap decoupled; fixtures pass through the common model; basic TCP discovery without Nmap; benchmarks and differences documented |
+| **v1.5 — Local Profiler & Agent** | Windows/systemd service, CPU/RAM/disk/processes/network, SQLite, duration and frequency, restarts | Sprint 0 | Recoverable 7-day observation; HTML/JSON report; sample coverage |
+| **v1.6 — Remote Profiling & Dependencies** | Agent enrollment, mTLS or short-lived credentials, buffer/retries and revocation; merge agent observations with the shipped agentless SSH/WinRM evidence and connection graph | v1.5 | Three heterogeneous hosts observed; connections backed by evidence; revocation verified |
+| **v1.7 — Native Discovery II** | SYN/UDP where applicable, service detection/versions, IPv6, traceroute, gradual fingerprinting | v1.4 | Parity matrix per feature actually used; documented Nmap fallback |
+| **v2.0 — Desktop & Distributed Platform** | Tauri Desktop, multi-agent server, install and update, wizard UX | v1.5–v1.7 | Windows install without a toolchain; CLI intact; full workflow with export |
 
-**Important:** the Desktop MVP starts in parallel from v1.3; it does not wait for v2.0. Versions are product milestones, not date promises.
+**Important:** the Desktop MVP starts in parallel from v1.5; it does not wait for v2.0. Versions are product milestones, not date promises.
 
 ## Four parallel tracks
 
 **A. Discovery:** abstraction → native TCP → ICMP/ARP → service fingerprints → SYN/UDP/IPv6 → Nmap retirement evaluation.
 
-**B. Observability:** local agent → time-series storage → remote agent → agentless SSH/WinRM → process/connection dependencies.
+**B. Observability:** local agent → agent time-series storage → remote enrollment/sync, merged with the shipped agentless SSH/WinRM probes and Prometheus/Zabbix importers.
 
-**C. Intelligence:** application grouping → evidence/confidence → right-sizing → waves → SKU/cost.
+**C. Intelligence:** shipped through v1.3.0 (grouping, evidence/confidence, right-sizing, waves, SKU/cost). Remaining: catalog freshness — online pricing APIs, Huawei/OpenStack catalog data, and managed-database costs (currently `not_calculated`; storage is priced from the catalog since the 2026-10 curation).
 
-**D. Experience:** stable CLI → Desktop MVP (Discover/Observe/Export) → dashboards → server and agent management.
+**D. Experience:** stable CLI (shipped) → Desktop MVP (Discover/Observe/Export) → dashboards → server and agent management.
 
 ## First 90 days plan (target, not commitment)
 
@@ -88,16 +102,20 @@
 
 ## First GitHub backlog
 
-**P0:** Nmap baseline; contracts ADR; XML/JSON fixtures; Windows/Linux CI; target parser; TCP connect; local service; metrics schema.
+**P0:** Nmap usage baseline; contracts ADR; XML/JSON fixtures; target parser; TCP connect; local agent service; agent metrics schema.
 
-**P1:** service detection; HTML reports; Tauri MVP; quality score; process→destination connections; secure enrollment; SSH/WinRM.
+**P1:** service detection; HTML reports; Tauri MVP; secure enrollment; agent→server sync.
 
-**P2:** SYN/UDP, OS fingerprints, provider adapters, cost comparison, updater, and multi-agent server.
+**P2:** SYN/UDP, OS fingerprints, online pricing/catalog freshness, updater, and multi-agent server.
 
 ## Pending decisions
 
-- Officially supported operating systems and binary architecture.
-- Scanner consent/scope model and raw-socket permissions.
-- Retention policy, process-name/IP privacy, and local encryption.
-- SKU source/versioning and pricing model.
-- Exact conditions for marking Nmap optional or removing it.
+All pending decisions are **closed** — see
+[ADR-0002](ADR-0002-platform-scope-privacy-pricing-nmap.md) (D1–D5:
+platforms, unprivileged-only scanning with explicit scope, 30-day
+retention without pre-v1.6 encryption, versioned pricing catalog
+packages, measured-then-default Nmap retirement) and
+[ADR-0003](ADR-0003-desktop-installer-updater-hardening.md) (D6–D10:
+desktop subprocess-over-CLI contract, NSIS-only installer, artifacts-
+now distribution with signing on cert availability, notifications-only
+updater, deferred multi-agent hardening).

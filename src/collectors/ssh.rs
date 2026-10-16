@@ -517,7 +517,7 @@ fn parse_meminfo(lines: &[String]) -> Option<u64> {
 }
 
 /// Parse `df -kPT` output into filesystem observations.
-fn parse_df(lines: &[String]) -> Vec<Filesystem> {
+pub(crate) fn parse_df(lines: &[String]) -> Vec<Filesystem> {
     let mut out = Vec::new();
     for line in lines {
         let trimmed = line.trim();
@@ -585,7 +585,7 @@ fn parse_systemctl(lines: &[String]) -> Vec<RunningService> {
 /// the `state established` filter) are skipped. Loopback remote endpoints
 /// and self-connections (remote == local address) are dropped: they never
 /// become dependency evidence.
-fn parse_connections(lines: &[String]) -> Vec<Connection> {
+pub(crate) fn parse_connections(lines: &[String]) -> Vec<Connection> {
     let mut out = Vec::new();
     for line in lines {
         let trimmed = line.trim();

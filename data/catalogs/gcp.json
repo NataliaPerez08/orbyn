@@ -5,6 +5,7 @@
   "retrieved_at": "2026-10-01",
   "source": "curated on-demand list prices",
   "currency": "USD",
+  "storage": {"sku": "pd-balanced", "gb_monthly_price": 0.1},
   "skus": [
     {"sku": "n1-standard-1", "cpu": 1, "memory_mib": 3840, "architecture": "x86_64", "storage": null, "capabilities": []},
     {"sku": "n1-standard-2", "cpu": 2, "memory_mib": 7680, "architecture": "x86_64", "storage": null, "capabilities": []},

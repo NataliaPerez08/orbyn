@@ -62,8 +62,14 @@ nav:
       - Installation: INSTALL.md
       - Quickstart: quickstart.md
       - Test environment runs: demo.md
+      - Demo environments: demo-environments.md
       - Proxmox over Tailscale: proxmox-tailscale.md
   - CLI reference: cli.md
+  - Local agent: agent.md
+  - Desktop app: desktop.md
+  - Decisions: ADR-0001-discovery-backend-contract.md
+  - Decisions: ADR-0002-platform-scope-privacy-pricing-nmap.md
+  - Decisions: ADR-0003-desktop-installer-updater-hardening.md
   - Collectors:
       - Overview: collectors/index.md
       - Nmap: collectors/nmap.md

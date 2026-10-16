@@ -309,7 +309,7 @@ pub fn parse_windows_probe(output: &str) -> WindowsHostFacts {
 /// Parse `###metric` lines of the shape `cpu_load|total_kb|free_kb|page_used_mb`.
 /// CPU load is the instantaneous average processor load percentage, so there
 /// are no load-average fields on Windows.
-fn parse_windows_metric_lines(lines: &[String]) -> Vec<SnapshotFacts> {
+pub(crate) fn parse_windows_metric_lines(lines: &[String]) -> Vec<SnapshotFacts> {
     let mut out = Vec::new();
     for line in lines {
         let line = line.trim();

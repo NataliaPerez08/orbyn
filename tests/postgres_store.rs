@@ -32,7 +32,7 @@ async fn locked_store() -> Option<(tokio::sync::MutexGuard<'static, ()>, Postgre
     sqlx::query(
         "TRUNCATE TABLE audit_events, discovery_jobs, metric_samples, asset_connections, \
          asset_running_services, asset_filesystems, asset_capacity, dependencies, \
-         asset_interfaces, services, assets CASCADE",
+         asset_interfaces, services, assets, agent_tokens, agent_state CASCADE",
     )
     .execute(store.pool())
     .await
@@ -614,4 +614,103 @@ async fn metric_samples_respect_limit_and_order() {
     // The two newest samples (+3 s and +4 s), oldest first.
     assert_eq!(recent[0].cpu_usage_percent, Some(40.0));
     assert_eq!(recent[1].cpu_usage_percent, Some(30.0));
+}
+
+#[tokio::test]
+async fn agent_enrollment_and_sync_state_round_trip() {
+    let Some((_guard, store)) = locked_store().await else {
+        eprintln!("skipping: ORBYN_PG_TEST_URL is not set");
+        return;
+    };
+    let id = unique_id("pg-agent");
+    store
+        .store_observations(vec![Observation::Asset(asset(&id, "10.216.0.9", None))])
+        .await
+        .unwrap();
+
+    // Enrollment: hash stored, validity follows the flag, re-enroll replaces.
+    let hash_a = format!("{:064x}", 1u8);
+    let hash_b = format!("{:064x}", 2u8);
+    store
+        .upsert_agent_token(&id, &hash_a, Utc::now())
+        .await
+        .unwrap();
+    assert!(store.agent_token_valid(&id, &hash_a).await.unwrap());
+    store
+        .upsert_agent_token(&id, &hash_b, Utc::now())
+        .await
+        .unwrap();
+    assert!(!store.agent_token_valid(&id, &hash_a).await.unwrap());
+    assert!(store.agent_token_valid(&id, &hash_b).await.unwrap());
+
+    let listed = store.list_agent_tokens().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].asset_id, id);
+    assert!(!listed[0].revoked);
+
+    // Sync cursor state: absent, then set, then replaced.
+    assert_eq!(store.get_agent_state("sync_cursor").await.unwrap(), None);
+    store.set_agent_state("sync_cursor", "t1").await.unwrap();
+    assert_eq!(
+        store
+            .get_agent_state("sync_cursor")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("t1")
+    );
+    store.set_agent_state("sync_cursor", "t2").await.unwrap();
+    assert_eq!(
+        store
+            .get_agent_state("sync_cursor")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("t2")
+    );
+
+    // Samples strictly after the cursor instant, oldest first.
+    let base = Utc::now();
+    let samples: Vec<Observation> = [1.0f64, 2.0, 3.0]
+        .iter()
+        .enumerate()
+        .map(|(i, cpu)| {
+            Observation::MetricSample(MetricSample {
+                asset_id: id.clone(),
+                sampled_at: base + chrono::Duration::seconds(i as i64),
+                cpu_usage_percent: Some(*cpu as f32),
+                ram_used_mb: None,
+                ram_available_mb: None,
+                swap_used_mb: None,
+                load_1m: None,
+                load_5m: None,
+                load_15m: None,
+            })
+        })
+        .collect();
+    store.store_observations(samples).await.unwrap();
+    let drained = store
+        .list_metric_samples_since(&id, Some(base - chrono::Duration::seconds(1)), 10)
+        .await
+        .unwrap();
+    assert_eq!(drained.len(), 3);
+    assert!(drained
+        .windows(2)
+        .all(|w| w[0].sampled_at <= w[1].sampled_at));
+    let rest = store
+        .list_metric_samples_since(&id, Some(base), 10)
+        .await
+        .unwrap();
+    assert_eq!(rest.len(), 2, "the boundary sample is already drained");
+
+    // Revocation: flips the flag, invalidates the pair, reports unknown assets.
+    assert!(store.revoke_agent_token(&id).await.unwrap());
+    assert!(!store.agent_token_valid(&id, &hash_b).await.unwrap());
+    assert!(store
+        .list_agent_tokens()
+        .await
+        .unwrap()
+        .iter()
+        .all(|e| e.revoked));
+    assert!(!store.revoke_agent_token("no-such-asset").await.unwrap());
 }

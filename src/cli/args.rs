@@ -37,6 +37,8 @@ pub(crate) struct Cli {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DiscoveryCollector {
     Nmap,
+    /// Built-in TCP-connect sweep (no external binary, no privileges).
+    Native,
     Snmp,
     Ssh,
     Windows,
@@ -80,8 +82,108 @@ impl From<UnsetField> for AnnotationField {
     }
 }
 
+/// Output formats for `orbyn agent report` (HTML applies only there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ReportFormat {
+    Table,
+    Json,
+    Html,
+}
+
+/// Subcommands of `orbyn agent`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum AgentAction {
+    /// Sample this host on an interval until stopped (Linux: /proc).
+    #[command(name = "run")]
+    Run {
+        /// Sampling interval in seconds.
+        #[arg(long, default_value_t = 60)]
+        interval_secs: u64,
+        /// Take a single sample and exit (cron/systemd-timer friendly).
+        #[arg(long)]
+        once: bool,
+        /// Stop after this many seconds (default: run until signalled).
+        #[arg(long)]
+        duration_secs: Option<u64>,
+        /// Delete samples older than this many hours (default: 720 = 30d).
+        #[arg(long, default_value_t = 720)]
+        retention_hours: u64,
+        /// Asset IP to record samples under. Default: auto-detected
+        /// local address (loopback when offline).
+        #[arg(long)]
+        asset_ip: Option<String>,
+        /// Refresh filesystem/connection facts every N seconds
+        /// (default: hourly; 0 disables).
+        #[arg(long, default_value_t = 3600)]
+        facts_interval_secs: u64,
+    },
+    /// Render the observed utilization window with sample coverage.
+    #[command(name = "report")]
+    Report {
+        /// Asset IP to report on (default: auto-detected local address).
+        #[arg(long)]
+        asset_ip: Option<String>,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Table)]
+        format: ReportFormat,
+    },
+    /// Ship buffered samples and facts to an ingest server.
+    #[command(name = "sync")]
+    Sync {
+        /// Ingest endpoint, e.g. http://127.0.0.1:7780/v1/ingest.
+        #[arg(long)]
+        url: String,
+        /// Enrollment token from `orbyn server enroll`.
+        #[arg(long, env = "ORBYN_SYNC_TOKEN")]
+        token: String,
+        /// Asset IP the local agent records under (default: auto-detected).
+        #[arg(long)]
+        asset_ip: Option<String>,
+    },
+}
+
+/// Subcommands of `orbyn server`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum ServerAction {
+    /// Serve the ingest endpoint until Ctrl-C.
+    #[command(name = "run")]
+    Run {
+        /// Address to bind (default 127.0.0.1:7780; binding beyond
+        /// loopback is a deliberate operator decision, see ADR-0002 D3).
+        #[arg(long, default_value = "127.0.0.1:7780")]
+        bind: String,
+    },
+    /// Enroll an agent host and print a token (shown exactly once).
+    #[command(name = "enroll")]
+    Enroll {
+        /// Asset IP of the host the agent runs on.
+        #[arg(long)]
+        asset_ip: String,
+    },
+    /// Revoke an agent's token; its syncs are refused from now on.
+    #[command(name = "revoke")]
+    Revoke {
+        /// Asset id of the enrolled agent (see `orbyn server list`).
+        asset_id: String,
+    },
+    /// List enrollments with their revocation state.
+    #[command(name = "list")]
+    List,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Local profiler agent: sample this host's CPU/RAM/swap/load into the
+    /// database (Linux), and report on the observed window.
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    /// Single-tenant ingest server for remote agents: enroll, serve, and
+    /// revoke (v1.6).
+    Server {
+        #[command(subcommand)]
+        action: ServerAction,
+    },
     /// Discover assets in CIDR ranges or IPs (Nmap) or collect hosts
     /// (SNMP walk, SSH Linux probe, Windows PowerShell probe over SSH,
     /// or Windows PowerShell over native WinRM).

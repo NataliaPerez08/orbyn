@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
 
-use crate::domain::Observation;
+use crate::domain::{AgentEnrollment, Observation};
 use crate::store::rows::{
     json_str, status_as_str, ApplicationMemberRow, ApplicationRow, AssetRow, AuditEventRow,
     CapacityRow, ConnectionRow, DependencyEvidenceRow, DependencyRow, FilesystemRow, InterfaceRow,
@@ -652,6 +652,136 @@ impl crate::store::traits::Store for PostgresStore {
         }
         tx.commit().await.context("committing transaction")?;
         Ok(inserted)
+    }
+
+    async fn delete_metric_samples_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM metric_samples WHERE sampled_at < $1")
+            .bind(cutoff.to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .context("pruning metric samples")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_metric_samples_since(
+        &self,
+        asset_id: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        limit: usize,
+    ) -> Result<Vec<crate::domain::MetricSample>> {
+        const SELECT_SINCE: &str = "SELECT asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                        ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m \
+                 FROM metric_samples WHERE asset_id = $1 AND sampled_at > $2 \
+                 ORDER BY sampled_at ASC LIMIT $3";
+        const SELECT_ALL: &str = "SELECT asset_id, sampled_at, cpu_usage_percent, ram_used_mb, \
+                        ram_available_mb, swap_used_mb, load_1m, load_5m, load_15m \
+                 FROM metric_samples WHERE asset_id = $1 \
+                 ORDER BY sampled_at ASC LIMIT $2";
+        let sql = match since {
+            Some(_) => SELECT_SINCE,
+            None => SELECT_ALL,
+        };
+        let mut query = sqlx::query_as::<_, MetricSampleRow>(sql).bind(asset_id);
+        if let Some(since) = since {
+            query = query.bind(since.to_rfc3339());
+        }
+        let rows = query
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .context("listing metric samples since cursor")?;
+        Ok(rows.into_iter().map(MetricSampleRow::into_sample).collect())
+    }
+
+    async fn upsert_agent_token(
+        &self,
+        asset_id: &str,
+        token_hash: &str,
+        enrolled_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO agent_tokens (asset_id, token_hash, enrolled_at, revoked) \
+             VALUES ($1, $2, $3, FALSE) \
+             ON CONFLICT(asset_id) DO UPDATE SET \
+             token_hash = excluded.token_hash, \
+             enrolled_at = excluded.enrolled_at, \
+             revoked = FALSE",
+        )
+        .bind(asset_id)
+        .bind(token_hash)
+        .bind(enrolled_at.to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .context("upserting agent token")?;
+        Ok(())
+    }
+
+    async fn revoke_agent_token(&self, asset_id: &str) -> Result<bool> {
+        let result = sqlx::query("UPDATE agent_tokens SET revoked = TRUE WHERE asset_id = $1")
+            .bind(asset_id)
+            .execute(&self.pool)
+            .await
+            .context("revoking agent token")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn agent_token_valid(&self, asset_id: &str, token_hash: &str) -> Result<bool> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT revoked FROM agent_tokens WHERE asset_id = $1 AND token_hash = $2",
+        )
+        .bind(asset_id)
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("checking agent token")?;
+        Ok(row.is_some_and(|(revoked,)| !revoked))
+    }
+
+    async fn list_agent_tokens(&self) -> Result<Vec<AgentEnrollment>> {
+        let rows: Vec<(String, String, bool)> = sqlx::query_as(
+            "SELECT asset_id, enrolled_at, revoked FROM agent_tokens \
+             ORDER BY enrolled_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing agent tokens")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(asset_id, enrolled_at, revoked)| {
+                Some(AgentEnrollment {
+                    asset_id,
+                    enrolled_at: chrono::DateTime::parse_from_rfc3339(&enrolled_at)
+                        .ok()?
+                        .with_timezone(&chrono::Utc),
+                    revoked,
+                })
+            })
+            .collect())
+    }
+
+    async fn get_agent_state(&self, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM agent_state WHERE key = $1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .context("reading agent state")?;
+        Ok(row.map(|(value,)| value))
+    }
+
+    async fn set_agent_state(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO agent_state (key, value) VALUES ($1, $2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await
+        .context("writing agent state")?;
+        Ok(())
     }
 
     async fn confirm_dependency(

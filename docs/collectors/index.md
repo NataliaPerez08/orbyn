@@ -12,6 +12,7 @@ environment.
 | `--collector` | Module | What it discovers | Needs |
 | --- | --- | --- | --- |
 | `nmap` *(default)* | `src/collectors/nmap.rs` | Hosts, open ports, service banners, OS guess, MAC/vendor | `nmap` |
+| `native` | `src/collectors/native.rs` | Built-in sweep: top-ports TCP (connect) + conservative UDP, passive banners, versioned HTTP/TLS fingerprints, optional ICMP liveness and PTR hostnames | *nothing* — no external binary or privileges |
 | `snmp` | `src/collectors/snmp.rs` | Hostname, OS/device class, interfaces (MAC, MTU, state) | `snmpwalk` (net-snmp) |
 | `ssh` | `src/collectors/ssh.rs` | Linux OS, capacity, filesystems, systemd units, connections, metrics | OpenSSH client |
 | `windows` | `src/collectors/windows.rs` | Windows OS, capacity, disks, services, connections, metrics — over OpenSSH | OpenSSH client + target OpenSSH Server |
@@ -52,8 +53,9 @@ orbyn discover --target 10.0.0.10 --collector ssh --user deploy --identity-file 
 !!! note "Single-host collectors"
     `snmp`, `ssh`, `windows` and `winrm` each collect **one host per
     `--target`**. A CIDR is rejected at scan time with
-    `target must be an IP address`. Only `nmap` accepts ranges; for the others,
-    loop over addresses yourself and rely on `--concurrency` / `--rate-limit`.
+    `target must be an IP address`. `nmap` and `native` accept ranges; for
+    the others, loop over addresses yourself and rely on `--concurrency` /
+    `--rate-limit`.
 
 ## Target validation
 

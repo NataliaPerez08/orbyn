@@ -62,9 +62,10 @@ pub struct CostEstimate {
 
 /// Estimate the monthly baseline for one provider from its fit.
 ///
-/// ponytail: confidence caps at Medium — compute is priced from curated
-/// list prices and storage/managed-database are not calculated; High is
-/// reserved for when every component is priced from a live source.
+/// ponytail: confidence caps at Medium — compute and storage are priced
+/// from curated list prices and managed-database is not calculated;
+/// High is reserved for when every component is priced from a live
+/// source.
 pub fn cost(fit: &ProviderFit, input: &PlanInput) -> CostEstimate {
     let currency = super::catalog(&fit.provider)
         .map(|c| c.currency.clone())
@@ -105,14 +106,46 @@ pub fn cost(fit: &ProviderFit, input: &PlanInput) -> CostEstimate {
         (Some(total), detail)
     };
 
-    // Storage: disk sizing is not part of the fit input and storage
-    // pricing is not in the catalog — never guessed.
-    let storage = CostComponent {
-        component: "storage",
-        label: CostLabel::NotCalculated,
-        monthly: None,
-        currency: currency.clone(),
-        detail: "storage sizing and storage pricing are not in the catalog; not calculated".into(),
+    // Storage: observed member filesystem capacity at the catalog's
+    // curated general-purpose SSD tier. No disk sizing or no storage
+    // pricing means not calculated — never guessed.
+    let member_filesystems: Vec<&crate::domain::Filesystem> = input
+        .filesystems
+        .iter()
+        .filter(|f| input.is_member(&f.asset_id))
+        .collect();
+    let disk_gib: f64 = member_filesystems
+        .iter()
+        .map(|f| f.size_kb as f64 / 1_048_576.0)
+        .sum();
+    let storage_pricing = super::catalog(&fit.provider).and_then(|c| c.storage.clone());
+    let storage = match (disk_gib > 0.0, &storage_pricing) {
+        (true, Some(pricing)) => CostComponent {
+            component: "storage",
+            label: CostLabel::Estimated,
+            monthly: Some(disk_gib * pricing.gb_monthly_price),
+            currency: currency.clone(),
+            detail: format!(
+                "{disk_gib:.0} GiB across {} filesystem(s) at {} list price ${}/GiB-month",
+                member_filesystems.len(),
+                pricing.sku,
+                pricing.gb_monthly_price
+            ),
+        },
+        (true, None) => CostComponent {
+            component: "storage",
+            label: CostLabel::NotCalculated,
+            monthly: None,
+            currency: currency.clone(),
+            detail: "storage pricing is not in the catalog; not calculated".into(),
+        },
+        (false, _) => CostComponent {
+            component: "storage",
+            label: CostLabel::NotCalculated,
+            monthly: None,
+            currency: currency.clone(),
+            detail: "no disk sizing observed on members; not calculated".into(),
+        },
     };
 
     // Managed database: detected workloads are named, but managed-service
@@ -152,12 +185,29 @@ pub fn cost(fit: &ProviderFit, input: &PlanInput) -> CostEstimate {
         detail: compute_detail,
     };
 
+    // The total sums the calculated components only; the reasons name
+    // everything that is missing.
+    let mut calculated: Vec<f64> = Vec::new();
+    if let Some(compute) = compute {
+        calculated.push(compute);
+    }
+    if let Some(storage) = storage.monthly {
+        calculated.push(storage);
+    }
+    let monthly_total = (!calculated.is_empty()).then(|| calculated.iter().sum::<f64>());
+
     let mut reasons = Vec::new();
-    if compute.is_some() {
+    if monthly_total.is_some() {
         reasons.push(
-            "total covers calculated components only; storage and managed database are not calculated"
+            "total covers calculated components only; managed database is not calculated"
                 .to_string(),
         );
+        if compute.is_none() {
+            reasons.push("compute is not calculated".to_string());
+        }
+        if storage.monthly.is_none() {
+            reasons.push("storage is not calculated".to_string());
+        }
         if unsized_members > 0 {
             reasons.push(format!(
                 "{unsized_members} member(s) without sizing data are excluded from compute"
@@ -173,7 +223,7 @@ pub fn cost(fit: &ProviderFit, input: &PlanInput) -> CostEstimate {
     CostEstimate {
         provider: fit.provider.clone(),
         currency,
-        monthly_total: compute,
+        monthly_total,
         components: vec![compute_component, storage, managed_db],
         confidence,
         reasons,
@@ -208,12 +258,23 @@ mod tests {
             (compute.monthly.unwrap() - expected).abs() < 0.01,
             "{compute:?}"
         );
-        assert_eq!(estimate.monthly_total, compute.monthly);
+        // Storage: 2 x 100 GiB at gp3 $0.08/GiB-month.
+        let storage = estimate
+            .components
+            .iter()
+            .find(|c| c.component == "storage")
+            .unwrap();
+        assert_eq!(storage.label, CostLabel::Estimated);
+        assert!(
+            (storage.monthly.unwrap() - 16.0).abs() < 0.01,
+            "{storage:?}"
+        );
+        assert_eq!(estimate.monthly_total, compute.monthly.map(|c| c + 16.0));
         assert_eq!(estimate.confidence, SampleConfidence::Medium);
         assert!(estimate
             .reasons
             .iter()
-            .any(|r| r.contains("storage and managed database are not calculated")));
+            .any(|r| r.contains("managed database is not calculated")));
     }
 
     #[test]
@@ -222,7 +283,9 @@ mod tests {
         fx.capacities.clear();
         let fits = fit(&fx.input(), MigrationStrategy::Rehost);
         let estimate = cost(&fits[0], &fx.input());
-        assert_eq!(estimate.monthly_total, None);
+        // Compute is not calculable, but observed storage still is; the
+        // total never invents the missing compute.
+        assert_eq!(estimate.monthly_total, Some(16.0));
         assert_eq!(estimate.confidence, SampleConfidence::Low);
         let compute = estimate
             .components
@@ -231,6 +294,53 @@ mod tests {
             .unwrap();
         assert_eq!(compute.label, CostLabel::NotCalculated);
         assert!(compute.detail.contains("without sizing data"));
+        assert!(estimate
+            .reasons
+            .iter()
+            .any(|r| r.contains("compute is not calculated")));
+    }
+
+    #[test]
+    fn storage_without_disk_sizing_is_not_calculated() {
+        let mut fx = testkit::complete_application(2);
+        fx.filesystems.clear();
+        let fits = fit(&fx.input(), MigrationStrategy::Rehost);
+        let estimate = cost(&fits[0], &fx.input());
+        let storage = estimate
+            .components
+            .iter()
+            .find(|c| c.component == "storage")
+            .unwrap();
+        assert_eq!(storage.label, CostLabel::NotCalculated);
+        assert!(storage.detail.contains("no disk sizing"), "{storage:?}");
+        assert!(estimate
+            .reasons
+            .iter()
+            .any(|r| r.contains("storage is not calculated")));
+    }
+
+    #[test]
+    fn storage_without_catalog_pricing_is_not_calculated() {
+        let fx = testkit::complete_application(2);
+        // A provider with no embedded catalog: nothing may be guessed.
+        let synthetic = crate::targets::matching::ProviderFit {
+            provider: "huawei".into(),
+            region: "cn-north-4".into(),
+            score: None,
+            reasons: Vec::new(),
+            matches: Vec::new(),
+            catalog_version: String::new(),
+        };
+        let estimate = cost(&synthetic, &fx.input());
+        assert_eq!(estimate.currency, "USD");
+        let storage = estimate
+            .components
+            .iter()
+            .find(|c| c.component == "storage")
+            .unwrap();
+        assert_eq!(storage.label, CostLabel::NotCalculated);
+        assert!(storage.detail.contains("not in the catalog"), "{storage:?}");
+        assert_eq!(estimate.monthly_total, None);
     }
 
     #[test]

@@ -31,7 +31,7 @@ Everything is read-only, scoped to authorized targets, and runs locally against 
 
 ## Capabilities
 
-- **Discovery**: Nmap (ports/services/OS), SNMP (network gear), SSH (Linux), PowerShell over SSH and native WinRM (Windows), DNS relationship evidence.
+- **Discovery**: built-in `native` sweep (top-ports TCP/UDP, banners, HTTP/TLS fingerprints — no external binary or privileges), Nmap (ports/services/OS), SNMP (network gear), SSH (Linux), PowerShell over SSH and native WinRM (Windows), DNS relationship evidence.
 - **Inventory**: assets, interfaces, services, host services, CPU/RAM capacity, filesystems, virtualization metadata, tags, environment, owner and criticality.
 - **Dependencies**: active-connection, DNS and manual edges with confidence; graph table/JSON/CSV and Mermaid export; application grouping.
 - **Metrics & right-sizing**: snapshot utilization plus a week of history from Prometheus or Zabbix; avg/p95/p99/peak windows with sample confidence; explainable CPU/RAM/swap/storage sizing rules (`rs.*`) — snapshots alone never drive a sizing decision.
@@ -39,6 +39,7 @@ Everything is read-only, scoped to authorized targets, and runs locally against 
 - **SKU matching**: `orbyn sku-match --provider aws|azure|gcp --cores <n> --ram-mb <m>` converts a right-sizing baseline into candidate instance types (smallest fit first), separate from the assessment rules.
 - **Migration waves**: `orbyn waves` orders the inventory into low/medium/high-risk waves with the reasoning exposed, keeps application groups together, and honors manual `--pin`/`--exclude` constraints.
 - **Integrations**: NetBox source-of-truth import; Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP and Azure adapters; Ansible and Terraform exports.
+- **Local agent & ingest server**: `orbyn agent run` samples this host's CPU/RAM/swap/load into the database (`--once` is cron/timer friendly), `orbyn agent report` shows the window and sample coverage, and `orbyn agent sync` ships buffered samples to `orbyn server run` — a single-tenant loopback ingest server with hash-stored, revocable enrollment tokens. See [agent.md](docs/agent.md).
 - **Operations**: bounded concurrency, rate limiting, subprocess timeouts and output caps, import size caps, retries with backoff, audit trail, discovery job history, secret redaction, deterministic golden datasets and CI-enforced fuzzing.
 
 See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
@@ -46,7 +47,7 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 ## Requirements
 
 - Rust 1.75+ to build; a released binary needs no toolchain (see [INSTALL.md](docs/INSTALL.md)).
-- External tools for collection: `nmap`, `snmpwalk` (net-snmp-utils), an OpenSSH client (`ssh`), `curl` (API importers and WinRM), optionally `dig`.
+- External tools for collection: `nmap`, `snmpwalk` (net-snmp-utils), an OpenSSH client (`ssh`), `curl` (API importers and WinRM), optionally `dig`. The built-in `native` collector needs none of these — no external binary or elevated privileges.
 
 Host-level collection uses key-based auth (ssh-agent or `--identity-file`); secrets are never stored. Windows hosts can be collected over OpenSSH or native WinRM (HTTPS, Basic auth); the WinRM password comes from `ORBYN_WINRM_PASSWORD` or stdin and is streamed to `curl` on stdin — never argv, logs or disk.
 
@@ -98,6 +99,7 @@ Run `orbyn <command> --help` for the full surface, or see the [CLI reference](do
 - **Inventory**: `assets`, `asset`, `services`, `interfaces`, `capacity`, `disks`, `host-services`, `connections`, `annotate`, `import`, `export`
 - **Relationships**: `graph`, `deps add|confirm|remove|dns`
 - **Metrics & assessment**: `metrics`, `assess [--rules]`
+- **Agent & server**: `agent run|report|sync`, `server run|enroll|revoke|list`
 - **Integrations**: `netbox import`, `prometheus import`, `zabbix import`, `proxmox import`, `aws import`, `huawei import`, `openstack import`, `gcp import`, `azure import`
 - **Other**: `completions`
 
@@ -137,6 +139,8 @@ v0.2  Inventory           v0.4  Dependency mapping
 v0.5  Migration assessment
 v1.0  Stable CLI product
 v1.0.x  Integrations, metrics + right-sizing, cloud adapters
+v1.3    Application intelligence, planner, target & cost intelligence
+v1.4+   Native discovery, local agent, remote sync, desktop app (see ROADMAP_V2.md)
 ```
 
 A web/HTTP interface is a possible later add-on, not a goal for the core tool. See [ROADMAP.md](docs/ROADMAP.md) and [BACKLOG.md](docs/BACKLOG.md).

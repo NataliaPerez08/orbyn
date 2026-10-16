@@ -1,0 +1,20 @@
+# Predefined dependency edges: source target port ('#' starts a comment)
+lb-01 web-01 80
+lb-01 web-02 80
+web-01 api-01 8080
+web-02 api-02 8080
+api-01 db-01 5432
+api-02 db-01 5432
+api-01 cache-01 6379
+api-02 cache-01 6379
+worker-01 db-01 5432
+worker-02 db-01 5432
+worker-01 cache-01 6379
+worker-02 cache-01 6379
+mon-01 web-01 9100
+mon-01 api-01 9100
+mon-01 db-01 9100
+legacy-app-01 legacy-db-01 3306
+web-stg-01 api-stg-01 8080
+api-stg-01 db-stg-01 5432
+dev-01 db-stg-01 5432

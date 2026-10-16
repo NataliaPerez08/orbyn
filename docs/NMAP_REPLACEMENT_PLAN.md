@@ -79,7 +79,7 @@ Normalizer → Evidence Store → Asset/Service Inventory
 
 **Output:** complete usage matrix, regression suite, and code-based priorities.
 
-### Phase I — Basic independence (v1.2)
+### Phase I — Basic independence (v1.4)
 
 - IPv4/CIDR/range target parser, allowlist/denylist, and target limits.
 - TCP connect with timeout, max concurrency, jitter, and cancellation.
@@ -90,7 +90,7 @@ Normalizer → Evidence Store → Asset/Service Inventory
 
 **Output:** basic host/TCP-port inventory without Nmap; advanced cases keep the fallback.
 
-### Phase II — Detection depth (v1.5)
+### Phase II — Detection depth (v1.7)
 
 - UDP with conservative interpretation of results.
 - SYN where privileges/platform allow.
@@ -107,7 +107,30 @@ Normalizer → Evidence Store → Asset/Service Inventory
 - Keep Nmap as opt-in for uncovered features, or drop it from distribution if it serves no supported workflow.
 - Document differences, permissions, and platforms explicitly.
 
-## 6. Parity gates and acceptance criteria
+## 6. Parity matrix — current status (v1.4 + v1.7 fingerprint slice, `--collector native`)
+
+Per-feature parity for the features Orbyn actually consumes
+(see [BASELINE_AUDIT.md](BASELINE_AUDIT.md) §2). Nmap remains the default
+collector; this matrix is what gates any default flip (ADR-0001).
+
+| Feature (Orbyn's use) | nmap adapter | native adapter | Parity |
+|---|---|---|---|
+| Host liveness | nmap default probes (ICMP + TCP 80/443) | ICMP echo via system `ping`, multi-host targets only; clean no-reply skips, errors fail open; `ORBYN_NATIVE_LIVENESS=0` sweeps everything | partial — narrower probe set, fail-open |
+| TCP port state | default top-1000, SYN or connect | top ~90 ports, TCP connect, bounded concurrency | partial — top-ports only |
+| Service name | `-sV` probe engine | port-number table, overridden by evidence: a parsed HTTP response renames the service (`http`/`https`) | partial — HTTP-family evidence only |
+| Version/product | `-sV` | passive banners (SSH/FTP/SMTP…) plus versioned probes `native-fingerprints/v1`: HTTP `GET` → `Server` header or status line; TLS handshake (certs not verified — identify, don't authenticate) → greeting or HTTP inside the tunnel | partial — no probe cascade, no payload matching beyond HTTP |
+| PTR hostname | built-in resolver | `dig +short -x` (graceful without dig); `ORBYN_NATIVE_REVERSE_DNS=0` | yes (when dig present) |
+| MAC/vendor | on-link ARP | not collected | no |
+| OS guess | `-O` (not invoked by Orbyn) | not collected | n/a — unused |
+| Scope safety | shared `validate_target` floors | same floors + hard host cap (65 536, `ORBYN_NATIVE_MAX_HOSTS`); oversized IPv6 ranges refused | yes — stricter |
+| Pacing | nmap timing templates | semaphore concurrency + `ORBYN_NATIVE_JITTER_MS` | partial |
+| UDP (not in the nmap baseline — TCP-only) | n/a (Orbyn never invoked `-sU`) | top ~8 UDP ports (53/123/137/161/500/514/1900/5353), unprivileged connected-datagram probes: response = open, ICMP unreachable = closed (no observation), silence = `open\|filtered`; `ORBYN_NATIVE_UDP=0` disables | new capability — conservative states, ICMP rate limits mean closed ports often read `open\|filtered` |
+| SYN / IPv6 ranges / traceroute | available | not implemented (SYN: raw sockets need privileges, don't port to Windows, and add nothing over connect scan for authorized inventory; IPv6/traceroute deferred until a measured need, see §9 risks) | deferred |
+
+**Not yet measured:** host/port recall and runtime against lab ground truth
+(NMAP-010). The matrix above is capability parity, not accuracy parity.
+
+## 7. Parity gates and acceptance criteria
 
 For each Orbyn profile, define thresholds before testing:
 
@@ -121,13 +144,13 @@ For each Orbyn profile, define thresholds before testing:
 
 Do not set arbitrary "Nmap parity" percentages before measuring the baseline and defining the workflows that matter.
 
-## 7. Test bench
+## 8. Test bench
 
 An isolated, authorized lab network with: Linux and Windows hosts; open/closed/filtered TCP; HTTP, SSH, TLS, and test-database services; a firewall; hosts that don't answer ICMP; valid/invalid DNS; IPv6 if applicable. Store a known-truth manifest and versioned results. Never run comparisons against third-party networks.
 
 Measurements: host recall, port precision, service/version identification, total time, error rate, packets/second, and overhead.
 
-## 8. Technical risks
+## 9. Technical risks
 
 - **Privileges:** ICMP/raw sockets/SYN may need administrative capabilities; implement a safe fallback.
 - **Windows vs Linux:** capture and raw sockets differ; abstract per-OS adapters.
@@ -136,23 +159,23 @@ Measurements: host recall, port precision, service/version identification, total
 - **Licenses/data:** review Nmap, service-database, and rule licenses before copying or redistributing; build an own corpus or use compatible data.
 - **False negatives:** firewalls, NAT, and rate limits can hide hosts; report uncertainty.
 
-## 9. Suggested issues
+## 10. Suggested issues
 
-| ID | Issue | Priority | Depends on |
-|---|---|---|---|
-| NMAP-001 | Audit actual invocations and consumed outputs | P0 | — |
-| NMAP-002 | Fixtures and regression lab | P0 | 001 |
-| NMAP-003 | DiscoveryBackend + capabilities + normalizer | P0 | 001 |
-| NMAP-004 | Target parser and authorization | P0 | 003 |
-| NMAP-005 | TCP connect scanner | P0 | 004 |
-| NMAP-006 | Rate limit, timeout, and cancellation | P0 | 005 |
-| NMAP-007 | ICMP/ARP discovery with fallback | P1 | 004 |
-| NMAP-008 | Basic banner/service probes | P1 | 005 |
-| NMAP-009 | Native/Nmap/auto selector | P0 | 003,005 |
-| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 |
-| NMAP-011 | UDP/SYN and IPv6 as needed | P2 | 010 |
-| NMAP-012 | Advanced fingerprints and retirement evaluation | P2 | 010,011 |
+| ID | Issue | Priority | Depends on | Status |
+|---|---|---|---|---|
+| NMAP-001 | Audit actual invocations and consumed outputs | P0 | — | done (BASELINE_AUDIT.md) |
+| NMAP-002 | Fixtures and regression lab | P0 | 001 | fixtures done; lab pending |
+| NMAP-003 | DiscoveryBackend + capabilities + normalizer | P0 | 001 | done (ADR-0001; `Collector` trait) |
+| NMAP-004 | Target parser and authorization | P0 | 003 | done (pre-existing; re-verified) |
+| NMAP-005 | TCP connect scanner | P0 | 004 | done (`src/collectors/native.rs`) |
+| NMAP-006 | Rate limit, timeout, and cancellation | P0 | 005 | done (semaphore, timeouts, jitter) |
+| NMAP-007 | ICMP/ARP discovery with fallback | P1 | 004 | ICMP via system `ping`, fail-open; ARP pending |
+| NMAP-008 | Basic banner/service probes | P1 | 005 | done (passive banners + port table + `native-fingerprints/v1` HTTP/TLS probes) |
+| NMAP-009 | Native/Nmap/auto selector | P0 | 003,005 | native+nmap done; `auto` gated on NMAP-010 |
+| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 | pending (needs authorized lab) |
+| NMAP-011 | UDP/SYN and IPv6 as needed | P2 | 010 | UDP done (unprivileged connect-probe, conservative `open\|filtered`); SYN deferred (privilege-gated, no gain over connect scan for authorized inventory); IPv6 ranges deferred |
+| NMAP-012 | Advanced fingerprints and retirement evaluation | P2 | 010,011 | v1 fingerprints done (HTTP/TLS); advanced probes pending |
 
-## 10. Nmap retirement condition
+## 11. Nmap retirement condition
 
 Nmap stops being an **installation requirement** when every officially supported workflow runs on the native engine or declares accepted degradations; tests pass on target platforms; differences are documented; and `auto` mode never silently depends on Nmap. Removing the adapter from the code is a separate, later, and reversible decision.

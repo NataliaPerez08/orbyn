@@ -165,7 +165,7 @@ async fn existing_initial_schema_is_upgraded_and_data_is_preserved() {
         .await
         .expect("count applied migrations");
     assert_eq!(
-        migration_count, 11,
+        migration_count, 12,
         "all current migrations must be applied"
     );
     assert!(table_names(&upgraded)
@@ -606,4 +606,53 @@ async fn asset_can_receive_every_observation_family() {
     );
     assert_eq!(store.list_connections("asset-all").await.unwrap().len(), 1);
     assert!(store.get_capacity("asset-all").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn retention_prune_removes_only_old_metric_samples() {
+    let store = open("retention-prune").await;
+    store
+        .store_observation(Observation::Asset(Asset {
+            id: "10-0-0-1".into(),
+            ip: "10.0.0.1".parse().unwrap(),
+            hostname: None,
+            device_class: None,
+            os_name: None,
+            os_version: None,
+            sys_descr: None,
+            environment: None,
+            owner: None,
+            criticality: None,
+            tags: Vec::new(),
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        }))
+        .await
+        .expect("asset");
+
+    let now = chrono::Utc::now();
+    let mk = |at: chrono::DateTime<chrono::Utc>| orbyn::domain::MetricSample {
+        asset_id: "10-0-0-1".into(),
+        sampled_at: at,
+        cpu_usage_percent: Some(1.0),
+        ram_used_mb: Some(1),
+        ram_available_mb: None,
+        swap_used_mb: None,
+        load_1m: None,
+        load_5m: None,
+        load_15m: None,
+    };
+    store
+        .insert_metric_samples(&[mk(now - chrono::Duration::hours(48)), mk(now)])
+        .await
+        .expect("insert");
+
+    let removed = store
+        .delete_metric_samples_before(now - chrono::Duration::hours(24))
+        .await
+        .expect("prune");
+    assert_eq!(removed, 1, "only the sample older than the cutoff goes");
+    let remaining = store.list_metric_samples("10-0-0-1", None).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert!(remaining[0].sampled_at >= now - chrono::Duration::hours(24));
 }

@@ -1,0 +1,71 @@
+#cloud-config
+# api-01 — Ubuntu 22.04 — small Flask API that holds persistent connections
+# to db-01 (PostgreSQL 5432, Redis 6379) so Orbyn discovers the edges.
+users:
+  - name: deploy
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __LAB_KEY__
+ssh_pwauth: false
+package_update: true
+packages:
+  - python3-flask
+  - python3-psycopg2
+  - python3-redis
+write_files:
+  - path: /opt/orbyn-api/app.py
+    content: |
+      import threading
+      import time
+
+      import flask
+      import psycopg2
+      import redis
+
+      DSN = "host=192.0.2.13 port=5432 dbname=appdb user=api password=orbyn-lab"
+      REDIS = dict(host="192.0.2.13", port=6379)
+
+      def hold_postgres():
+          while True:
+              try:
+                  conn = psycopg2.connect(DSN)
+                  conn.cursor().execute("SELECT 1")
+                  time.sleep(300)
+                  conn.close()
+              except Exception:
+                  time.sleep(5)
+
+      def hold_redis():
+          while True:
+              try:
+                  pubsub = redis.Redis(**REDIS).pubsub()
+                  pubsub.subscribe("orbyn-lab")
+                  for _ in pubsub.listen():
+                      pass
+              except Exception:
+                  time.sleep(5)
+
+      app = flask.Flask(__name__)
+
+      @app.get("/")
+      def index():
+          return "orbyn demo api\n"
+
+      threading.Thread(target=hold_postgres, daemon=True).start()
+      threading.Thread(target=hold_redis, daemon=True).start()
+      app.run(host="0.0.0.0", port=8080)
+  - path: /etc/systemd/system/orbyn-api.service
+    content: |
+      [Unit]
+      Description=Orbyn demo API
+      After=network-online.target
+      [Service]
+      ExecStart=/usr/bin/python3 /opt/orbyn-api/app.py
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now orbyn-api

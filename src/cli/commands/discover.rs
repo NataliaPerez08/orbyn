@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Result};
 
 use orbyn::collectors::credentials::CredentialProfile;
+use orbyn::collectors::native::NativeCollector;
 use orbyn::collectors::nmap::NmapCollector;
 use orbyn::collectors::snmp::{SnmpCollector, SnmpVersion};
 use orbyn::collectors::ssh::LinuxCollector;
@@ -67,6 +68,7 @@ pub(crate) async fn discover(
 
     let collector: Arc<dyn Collector> = match collector {
         DiscoveryCollector::Nmap => Arc::new(NmapCollector::new()),
+        DiscoveryCollector::Native => Arc::new(NativeCollector::new()),
         DiscoveryCollector::Snmp => Arc::new(SnmpCollector::new(
             community.as_deref().unwrap_or_default(),
             version,

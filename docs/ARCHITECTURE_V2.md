@@ -1,6 +1,6 @@
 # Orbyn — Target Technical Architecture v2
 
-**Status:** Proposal / ADR pending · **Date:** 2026-10-12
+**Status:** Accepted by implementation (Collector trait, Store, app layer shipped; see ADR-0001–0003) · **Date:** 2026-10-12
 
 > Target design, not a verified inventory of the code. Crate and table names are proposals; reconcile them with the repository before refactoring.
 

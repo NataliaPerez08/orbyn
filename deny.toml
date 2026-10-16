@@ -10,10 +10,22 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "LGPL-2.1-or-later",
+    # Desktop only: the gtk/webkit2gtk stack (cssparser & friends) is
+    # MPL-2.0, weak copyleft — fine to link and ship; MPL-covered files
+    # stay open.
+    "MPL-2.0",
     "MIT",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
+]
+
+[advisories]
+ignore = [
+    # Desktop only: proc-macro-error (via gtk3-macros) is unmaintained but
+    # is a compile-time proc-macro, not shipped; the whole gtk ecosystem
+    # rides on it. ponytail: drop when gtk3-macros migrates off it.
+    "RUSTSEC-2024-0370",
 ]
 
 [sources]

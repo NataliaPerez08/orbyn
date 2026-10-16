@@ -4,6 +4,7 @@
 //! through the command line; the library surface exists so capabilities can be
 //! embedded or reused by other tooling.
 
+pub mod agent;
 pub mod applications;
 pub mod assessment;
 pub mod collectors;
@@ -18,6 +19,7 @@ pub mod parsing;
 pub mod planning;
 pub mod process;
 pub mod redact;
+pub mod server;
 pub mod sku;
 pub mod store;
 pub mod targets;

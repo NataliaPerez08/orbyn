@@ -131,6 +131,12 @@ jobs:
       - name: Source policy
         run: cargo deny check sources
 
+      # The desktop crate has its own lockfile (tauri tree); the same
+      # policy applies, including the desktop-only allowances in
+      # deny.toml (MPL-2.0, compile-time proc-macro-error advisory).
+      - name: Desktop license + source policy
+        run: cargo deny --config deny.toml --manifest-path desktop/Cargo.toml check licenses sources
+
   fuzz:
     name: fuzz targets (build + smoke)
     runs-on: ubuntu-latest
@@ -164,3 +170,106 @@ jobs:
             max=4096; [ "$t" = nmap_xml ] && max=16384; [ "$t" = device_output ] && max=8192
             cargo +nightly fuzz run "$t" -- -runs=500 -max_len="$max"
           done
+
+  desktop:
+    name: desktop (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop
+
+      # Tauri needs webkit2gtk at build time; the desktop crate is a
+      # standalone workspace (excluded like fuzz) over the stable CLI.
+      - name: Install webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev
+
+      # tauri-build validates the sidecar path at compile time; compile
+      # jobs stage a placeholder, the installer job stages the engine.
+      - name: Stage engine sidecar placeholder
+        run: mkdir -p desktop/binaries && touch desktop/binaries/orbyn-x86_64-unknown-linux-gnu
+
+      - name: clippy
+        working-directory: desktop
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: test
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: build
+        working-directory: desktop
+        run: cargo build --locked
+
+  desktop-windows:
+    name: desktop (windows build)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop
+
+      # WebView2 ships with the runner; compile coverage only — the
+      # runtime smoke stays on Linux CI until the installer milestone.
+      - name: Stage engine sidecar placeholder
+        shell: bash
+        run: mkdir -p desktop/binaries && touch desktop/binaries/orbyn-x86_64-pc-windows-msvc.exe
+
+      - name: build
+        working-directory: desktop
+        run: cargo build --locked --all-targets
+
+  desktop-installer:
+    name: desktop (windows nsis installer)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop
+
+      - name: Build release engine
+        run: cargo build --locked --release
+
+      # The engine ships inside the installer as a Tauri sidecar, so a
+      # clean Windows machine needs no toolchain (v2.0 exit criterion).
+      - name: Stage engine sidecar
+        shell: bash
+        run: |
+          mkdir -p desktop/binaries
+          cp target/release/orbyn.exe desktop/binaries/orbyn-x86_64-pc-windows-msvc.exe
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: cargo tauri build --bundles nsis
+
+      # ADR-0003 D8: artifacts on main pushes now; tagged GitHub
+      # Releases become the channel at the release milestone.
+      - name: Upload installer
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: orbyn-windows-nsis
+          path: desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

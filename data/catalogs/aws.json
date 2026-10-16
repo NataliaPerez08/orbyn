@@ -5,6 +5,7 @@
   "retrieved_at": "2026-10-01",
   "source": "curated on-demand list prices",
   "currency": "USD",
+  "storage": {"sku": "gp3", "gb_monthly_price": 0.08},
   "skus": [
     {"sku": "t3.nano", "cpu": 2, "memory_mib": 512, "architecture": "x86_64", "storage": null, "capabilities": ["burstable"]},
     {"sku": "t3.micro", "cpu": 2, "memory_mib": 1024, "architecture": "x86_64", "storage": null, "capabilities": ["burstable"]},

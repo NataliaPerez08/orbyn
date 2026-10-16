@@ -66,7 +66,7 @@
             "label": "not_calculated",
             "monthly": null,
             "currency": "USD",
-            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+            "detail": "no disk sizing observed on members; not calculated"
           },
           {
             "component": "managed-database",
@@ -97,7 +97,7 @@
             "label": "not_calculated",
             "monthly": null,
             "currency": "USD",
-            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+            "detail": "no disk sizing observed on members; not calculated"
           },
           {
             "component": "managed-database",
@@ -128,7 +128,7 @@
             "label": "not_calculated",
             "monthly": null,
             "currency": "USD",
-            "detail": "storage sizing and storage pricing are not in the catalog; not calculated"
+            "detail": "no disk sizing observed on members; not calculated"
           },
           {
             "component": "managed-database",
