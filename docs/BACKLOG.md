@@ -363,6 +363,15 @@ CLI intact; full workflow with export.
   step added to the `desktop-installer` job); signing waits on a
   code-signing certificate (D8 revisit trigger). Remaining: a green
   installer build.
+- [x] **P1** Native save dialog for exports (`tauri-plugin-dialog`,
+  capability `dialog:default`): **Choose location…** fills the path
+  field, which stays as the fallback when the plugin is unavailable.
+- [x] **P1** Update notifications (ADR-0003 D9, notifications-only,
+  offline-first): when `ORBYN_UPDATE_MANIFEST_URL` is set the app
+  fetches a two-line version manifest with `curl` at startup and shows
+  a dismissible banner when a newer version is offered; no
+  auto-download, silent on any failure. Signed auto-update only after
+  D8's signing infrastructure exists.
 - [ ] **P0** CLI intact: desktop and server consume the same core APIs;
   no CLI regressions (exit criterion, checked by the existing e2e
   suites).
@@ -371,6 +380,8 @@ CLI intact; full workflow with export.
   packages/versions). Decided per ADR-0003 D9: notifications-only,
   offline-first — the app checks a version manifest and notifies; signed
   auto-update only after D8's signing infrastructure exists.
+  Progress: notifications shipped (above); the signed update path waits
+  on D8.
 - [ ] **P2** Multi-agent server: harden the v1.6 ingest server —
   aggregation TTL, quotas, and explicit sampling for connection
   cardinality (risk table); multi-tenancy still postponed. Decided per
@@ -385,21 +396,32 @@ CLI intact; full workflow with export.
 Track C remainder after v1.3.0: catalog freshness. Every report already
 carries source, date, version, currency, and assumptions — keep that.
 
-- [ ] **P2** Online pricing APIs: versioned, cached, with offline
-  fallback to the embedded catalogs; missing prices stay
-  `not_calculated`, never silently zero.
-- [ ] **P2** Huawei Cloud / OpenStack catalog data completion (currently
-  the thinnest adapters).
+- [x] **P2** Catalog freshness as versioned data packages (ADR-0002 D4):
+  runtime catalog directory (`ORBYN_CATALOG_DIR`, default
+  `./data/catalogs/`) overrides the embedded catalogs per provider with
+  validated packages; `orbyn catalog status|install --file|update --url`
+  (manifest-driven, explicit, never at report time); invalid packages are
+  skipped with a warning, never silently loaded; `retrieved_at` flows into
+  compare CSV/table output.
+- [x] **P2** Huawei Cloud / OpenStack catalog data completion: huawei
+  ships ECS flavors + on-demand prices + gpSSD storage tier
+  (ap-southeast-1, USD snapshot); openstack ships reference flavors
+  without prices (sizing works, cost stays honestly `not_calculated`).
+  Provider loops are catalog-driven — no hardcoded provider list remains
+  (`sku-match --provider` accepts any loaded provider).
 - [x] **P2** Storage costs: observed member filesystem capacity is
   priced at each catalog's curated general-purpose SSD tier (aws gp3
   $0.08, azure standard-ssd $0.075, gcp pd-balanced $0.10 per
   GiB-month, 2026-10 curation); no disk sizing or no storage pricing
   stays honestly `not_calculated`, never zero. The total sums
   calculated components only and the reasons name what is missing.
-- [ ] **P2** Managed-database costs: database services are detected and
-  named in the cost report, but managed-service pricing is not in the
-  catalog — stays `not_calculated` until per-engine catalog data is
-  curated (RDS/Cloud SQL/Azure SQL tiers).
+- [x] **P2** Managed-database costs (first cut, postgres + mysql): the
+  catalog carries per-engine service tiers (RDS / Azure Database for
+  PostgreSQL+MySQL / Cloud SQL); a detected database workload is priced
+  as the smallest managed tier covering its host — labeled `estimated`,
+  excluded from the total (the members' compute already covers
+  self-hosting). Engines without tiers (sqlserver, oracle, mongodb)
+  stay `not_calculated` until their catalog data is curated.
 
 ## Pending decisions (ROADMAP_V2 — all closed, see ADR-0002 and ADR-0003)
 

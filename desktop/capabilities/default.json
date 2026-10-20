@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Main window: core runtime (custom commands and events)",
+  "description": "Main window: core runtime (custom commands and events) plus the native save dialog",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

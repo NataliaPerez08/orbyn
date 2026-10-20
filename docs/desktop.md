@@ -49,7 +49,8 @@ clickable afterwards:
 4. **Save your results** — write the inventory as CSV (Excel), JSON
    (Orbyn), an Ansible inventory (INI or YAML), or Terraform. Relative
    paths are anchored in your home directory so exports are always
-   findable.
+   findable, and **Choose location…** opens the native save dialog
+   (the path field remains as the fallback).
 
 First run starts at step 1; returning operators with an existing
 inventory land directly on step 2. Messages are written for
@@ -96,7 +97,25 @@ lookup finds the engine without any `PATH` setup.
   desktop lockfile with the same `deny.toml` (plus the desktop-only
   allowances documented there).
 
+## Update notifications (ADR-0003 D9)
+
+The updater is notifications-only and offline-first. When
+`ORBYN_UPDATE_MANIFEST_URL` is set, the app fetches that URL with
+`curl` (5 s budget) at startup and expects a two-line text manifest:
+
+```text
+<latest version>
+<download URL>
+```
+
+If the offered version is numerically newer than the app's, a
+dismissible banner shows the version and the download link. Nothing is
+downloaded or installed automatically — signed auto-update only after
+signing infrastructure exists (ADR-0003 D8). No URL set, or any fetch
+failure, means silence; the app works fully offline.
+
 ## Not yet (tracked in the backlog)
 
-- Installer artifact upload and signed binaries.
-- Native save dialog for exports (currently an editable path field).
+- Signed binaries and a tagged-release installer channel (the NSIS
+  installer already uploads as a CI artifact on main pushes; signing
+  waits on a code-signing certificate).

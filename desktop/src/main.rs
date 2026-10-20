@@ -231,14 +231,76 @@ async fn export(app: tauri::AppHandle, format: String, path: String) -> Result<S
     Ok(path)
 }
 
+/// Notifications-only update check (ADR-0003 D9). When
+/// `ORBYN_UPDATE_MANIFEST_URL` is set, fetch a two-line text manifest
+/// (line 1: latest version, line 2: download URL) with `curl` and
+/// return a notice when the offered version is newer than this app's.
+/// Offline-first: no URL, or any fetch/parse failure, means no notice —
+/// never a blocking error, never an auto-download.
+#[tauri::command]
+async fn check_update() -> Result<Option<String>, String> {
+    let url = std::env::var("ORBYN_UPDATE_MANIFEST_URL")
+        .ok()
+        .map(|u| u.trim().to_string())
+        .unwrap_or_default();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let output = tokio::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "5", &url])
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let body = String::from_utf8_lossy(&output.stdout);
+    let mut lines = body.lines().map(str::trim).filter(|l| !l.is_empty());
+    let (Some(offered), Some(download)) = (lines.next(), lines.next()) else {
+        return Ok(None);
+    };
+    if version_newer(offered, env!("CARGO_PKG_VERSION")) {
+        Ok(Some(format!(
+            "Version {offered} of Orbyn is available. Download it at {download} \
+             (this window will not update itself)."
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+/// True when `offered` is a numerically newer dotted version than
+/// `current` (`1.10.0` > `1.9.2`; non-numeric parts count as 0).
+fn version_newer(offered: &str, current: &str) -> bool {
+    let parts = |v: &str| -> Vec<u64> {
+        v.trim_start_matches('v')
+            .split('.')
+            .map(|p| p.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (o, c) = (parts(offered), parts(current));
+    let len = o.len().max(c.len());
+    for i in 0..len {
+        let (a, b) = (o.get(i).copied().unwrap_or(0), c.get(i).copied().unwrap_or(0));
+        if a != b {
+            return a > b;
+        }
+    }
+    false
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             binary_status,
             discover,
             assets,
             report_html,
-            export
+            export,
+            check_update
         ])
         .run(tauri::generate_context!())
         .expect("orbyn desktop failed to start");
@@ -364,5 +426,16 @@ mod tests {
         assert!(db.starts_with("/home/op"), "{db}");
         assert!(db.ends_with("orbyn.db"), "{db}");
         assert_eq!(desktop_db_with(None, false), None);
+    }
+
+    #[test]
+    fn version_comparison_is_numeric_not_lexical() {
+        assert!(version_newer("1.10.0", "1.9.2"));
+        assert!(version_newer("0.2.0", "0.1.0"));
+        assert!(version_newer("v1.0.1", "1.0.0"));
+        assert!(version_newer("1.0.1", "1.0.0-alpha")); // non-numeric parts are 0
+        assert!(!version_newer("1.0.0", "1.0.0"));
+        assert!(!version_newer("1.0.0", "1.0.1"));
+        assert!(!version_newer("1.0.0", "1.0.0.1"));
     }
 }

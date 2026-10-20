@@ -26,6 +26,14 @@
   #engine-status { margin-left: auto; font-size: 12px; color: #aab4c4; }
   #engine-status.ok { color: #7ee29a; }
   #engine-status.err { color: #ff9d8f; }
+  #update-banner {
+    display: none; align-items: center; gap: 10px; padding: 8px 18px;
+    background: #1f3a5f; color: #dbe7f8; font-size: 13px;
+  }
+  #update-banner button {
+    font: inherit; border: none; background: none; color: #9cc3f0;
+    cursor: pointer; margin-left: auto; padding: 2px 6px;
+  }
 
   #steps {
     display: flex; gap: 4px; padding: 14px 18px 0; flex-wrap: wrap;
@@ -98,6 +106,10 @@
   <h1>Orbyn</h1>
   <span id="engine-status">checking engine…</span>
 </header>
+<div id="update-banner">
+  <span id="update-text"></span>
+  <button id="btn-dismiss-update">Dismiss</button>
+</div>
 
 <nav id="steps">
   <button class="step" data-step="1"><span class="num">1</span> Choose what to scan</button>
@@ -178,6 +190,7 @@
           <option value="terraform">Terraform</option>
         </select>
         <input type="text" id="export-path" value="orbyn-export.csv" spellcheck="false">
+        <button class="link" id="btn-browse" hidden>Choose location…</button>
         <button class="primary" id="btn-export">Save</button>
       </div>
       <p class="hint">
@@ -195,6 +208,18 @@
   const { invoke } = window.__TAURI__.core;
   const { listen } = window.__TAURI__.event;
   const $ = (id) => document.getElementById(id);
+
+  // Native save dialog (tauri-plugin-dialog). The path field stays the
+  // fallback when the plugin is unavailable.
+  if (window.__TAURI__.dialog?.save) {
+    $("btn-browse").hidden = false;
+    $("btn-browse").addEventListener("click", async () => {
+      const path = await window.__TAURI__.dialog.save({
+        defaultPath: $("export-path").value.trim() || "orbyn-export.csv",
+      });
+      if (path) $("export-path").value = path;
+    });
+  }
 
   // Highest step the operator has reached; steps up to it are clickable.
   let reached = 1;
@@ -250,6 +275,18 @@
       el.textContent = String(e);
       el.className = "err";
     }
+    // Notifications-only update check (ADR-0003 D9): silent unless a
+    // newer version is offered; never blocks, never auto-downloads.
+    try {
+      const notice = await invoke("check_update");
+      if (notice) {
+        $("update-text").textContent = notice;
+        $("update-banner").style.display = "flex";
+      }
+    } catch (_) { /* offline-first: no notice */ }
+    $("btn-dismiss-update").addEventListener("click", () => {
+      $("update-banner").style.display = "none";
+    });
     // Returning operators jump straight to their inventory; first run
     // starts at step 1.
     try {
