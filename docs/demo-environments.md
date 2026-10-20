@@ -108,6 +108,36 @@ cd demo/qemu
 web-01 asset detail (CPU, RAM, filesystems, running services, hypervisor
 detected as `kvm`), the dependency graph, and the assessment.
 
+### Exit-criteria harnesses
+
+Three scripts drive the ROADMAP_V2 lab-gated exit criteria against the
+running lab. They take the engine via `ORBYN_BIN=...` (default: `orbyn`
+on PATH) and never scan anything but the isolated lab bridge:
+
+- `./compare-nmap.sh` — **NMAP-010**: runs `orbyn discover` with both
+  the nmap and native collectors over `192.0.2.0/24`, then diffs hosts,
+  TCP ports, service names and runtime against the cloud-init ground
+  truth. Writes databases, CSV extracts and a markdown report to
+  `results/` — the parity evidence that gates the `auto` collector
+  mode and any default flip. Needs `nmap` on PATH (unprivileged runs
+  get the connect scan, the same posture as the native collector).
+- `./agent-lab.sh` — **v1.6 exit criteria**: starts the ingest server
+  on the host (`192.0.2.1:7780`), installs the agent on web-01,
+  api-01 and db-01 (three heterogeneous OSes; legacy-01 stays
+  agentless), enrolls/samples/syncs each, verifies the connection
+  evidence (api-01→db-01:5432/6379, web-01→api-01:8080) and the
+  dependency graph, then revokes db-01 mid-run and checks the sync is
+  refused while the local buffer keeps the samples. Re-enrolls db-01
+  afterwards so the lab stays usable. The binary must run on Ubuntu
+  20.04 (glibc 2.31) — the script verifies this on db-01 first.
+- `./agent-lab.sh --service` — **v1.5 setup**: installs the agent as a
+  systemd service plus a 5-minute sync timer on each VM, the setup for
+  the 7-day recoverable-observation run.
+- `./check-observation.sh` — **v1.5 exit criteria**: after the 7-day
+  run, validates the synced coverage on `server.db` — samples present
+  for every VM, span ≥ 168 h, largest gap under `OBS_MAX_GAP_SECS`
+  (default 600 s).
+
 ### Notes
 
 - The lab network is 192.0.2.0/24 (TEST-NET-3, never routed on real

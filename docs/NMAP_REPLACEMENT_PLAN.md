@@ -172,7 +172,7 @@ Measurements: host recall, port precision, service/version identification, total
 | NMAP-007 | ICMP/ARP discovery with fallback | P1 | 004 | ICMP via system `ping`, fail-open; ARP pending |
 | NMAP-008 | Basic banner/service probes | P1 | 005 | done (passive banners + port table + `native-fingerprints/v1` HTTP/TLS probes) |
 | NMAP-009 | Native/Nmap/auto selector | P0 | 003,005 | native+nmap done; `auto` gated on NMAP-010 |
-| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 | pending (needs authorized lab) |
+| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 | harness shipped (`demo/qemu/compare-nmap.sh`); recorded run pending an authorized lab |
 | NMAP-011 | UDP/SYN and IPv6 as needed | P2 | 010 | UDP done (unprivileged connect-probe, conservative `open\|filtered`); SYN deferred (privilege-gated, no gain over connect scan for authorized inventory); IPv6 ranges deferred |
 | NMAP-012 | Advanced fingerprints and retirement evaluation | P2 | 010,011 | v1 fingerprints done (HTTP/TLS); advanced probes pending |
 

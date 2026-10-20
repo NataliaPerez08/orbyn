@@ -9,11 +9,12 @@
 /fuzz/target
 /fuzz/artifacts
 /fuzz/corpus/*/[0-9a-f]*
-# QEMU demo lab — downloaded images, VM disks, seeds, keys, logs
+# QEMU demo lab — downloaded images, VM disks, seeds, keys, logs, run artifacts
 /demo/qemu/images/
 /demo/qemu/disks/
 /demo/qemu/seeds/
 /demo/qemu/logs/
+/demo/qemu/results/
 /demo/qemu/*.pid
 /demo/qemu/lab_key
 /demo/qemu/lab_key.pub

@@ -229,7 +229,9 @@ with scope floors already exists.
   `ORBYN_NATIVE_REVERSE_DNS=0`).
 - [ ] **P1** Recorded lab comparison native-vs-nmap on an authorized network
   (hosts found, ports found, services named, runtime) — gates any default
-  flip.
+  flip. Harness shipped: `demo/qemu/compare-nmap.sh` (runs both collectors
+  over the lab, diffs against the cloud-init ground truth, writes the
+  parity report to `results/`); recorded run pending a KVM host.
 - [x] **P2** Per-feature parity matrix published in the docs
   (NMAP_REPLACEMENT_PLAN.md §6).
 - [x] **P2** Launch jitter knob (`ORBYN_NATIVE_JITTER_MS`, random 0..N pause
@@ -261,7 +263,10 @@ with scope floors already exists.
   samples so only interval samples form the history. Compiled and
   unit-tested on `windows-latest` CI.
 - [ ] **P1** 7-day recoverable-observation validation on live Linux and
-  Windows hosts (lab-gated).
+  Windows hosts (lab-gated). Harness shipped: `demo/qemu/agent-lab.sh
+  --service` installs the agent service + sync timer on the lab VMs;
+  `demo/qemu/check-observation.sh` validates the coverage afterwards
+  (span ≥ 168 h, bounded gaps). Recorded run pending.
 
 ## v1.6 — Remote profiling & dependencies (ROADMAP_V2)
 
@@ -297,7 +302,11 @@ single-tenant — multi-tenancy is explicitly postponed (risk table).
   at-rest encryption before remote ingest); documented in agent.md.
 - [ ] **P1** Exit criteria (lab-gated): three heterogeneous hosts
   (Linux + Windows) observed through the server; connections backed by
-  evidence; revocation verified mid-run.
+  evidence; revocation verified mid-run. Harness shipped:
+  `demo/qemu/agent-lab.sh` (enrolls web-01/api-01/db-01 against the
+  host-side ingest server, verifies the connection evidence and the
+  graph, revokes db-01 mid-run and checks the refused sync + local
+  buffer); recorded run pending a KVM host.
 
 ## v1.7 — Native discovery II (ROADMAP_V2)
 
