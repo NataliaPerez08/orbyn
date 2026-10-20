@@ -162,14 +162,16 @@ inference.
 | Command | Purpose |
 | --- | --- |
 | `orbyn assess [--format ...] [--rules] [--application <name>]` | Migration assessment report / rule catalog / application rollup |
-| `orbyn sku-match --provider aws\|azure\|gcp --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
+| `orbyn sku-match --provider <any-loaded-provider> --cores <n> --ram-mb <m> [--format ...]` | Match a right-sizing baseline to candidate instance types (SKUs), smallest fit first |
 | `orbyn waves [--format ...] [--pin <asset>=<wave>]... [--exclude <asset>]...` | Ordered migration waves (low risk first) with exposed reasoning |
 | `orbyn plan <application> [--target aws\|azure\|gcp\|huawei\|openstack] [--explain] [--format ...]` | Migration plan for one application: readiness, strategy, targets, blockers, assumptions and wave — persisted as an audited artifact |
 | `orbyn plan --all [--target ...] [--format ...]` | Plan every application against one shared wave plan |
 | `orbyn bundle <application> [--target ...]` | Write a self-contained migration handoff directory (`<app>-migration/`); read-only |
 | `orbyn targets compare <application> [--format ...]` | Every provider catalog's fit score, monthly baseline and model versions for one application |
 | `orbyn targets recommend <application> [--format ...]` | Recommended provider plus an alternative, with the "why X instead of Y" evidence |
-| `orbyn catalog update` | Report the embedded catalog versions (offline default) |
+| `orbyn catalog status` | Report the loaded catalogs: embedded defaults plus runtime overrides, with versions, retrieval dates and sources |
+| `orbyn catalog install --file <pkg.json>` | Validate a catalog package and install it into the runtime catalog directory (effective on the next run) |
+| `orbyn catalog update --url <base>` | Fetch `<base>/manifest.json`, install newer versioned packages from the same base URL (explicit, never at report time) |
 
 `sku-match` keeps provider catalogs separate from the assessment: feed it the
 baseline suggested by an `rs.*` finding (e.g. "4 cores, 6144 MB") to see which
@@ -189,9 +191,10 @@ factor per concern) and a strategy recommendation (`rehost`, `replatform`,
 insufficient, never fabricated certainty). Targets size from the capacity
 allocation; `--target` adds instance-type recommendations from the provider
 catalog and affects recommendations only, never the discovered evidence.
-Providers without a curated catalog (huawei, openstack) say so instead of
-guessing. `--explain` adds the wave reasoning. Every plan is saved with its
-full provenance (rule versions, snapshot reference) and audited.
+Every plan target has a catalog; openstack matches reference flavors while
+its pricing stays honestly `not_calculated` (private-cloud pricing is
+site-specific). `--explain` adds the wave reasoning. Every plan is saved
+with its full provenance (rule versions, snapshot reference) and audited.
 
 `bundle` assembles the handoff: `inventory.json`/`csv`, `applications.json`,
 `dependencies.json`/`mmd`, `assessment.json`, `sizing.json`,
@@ -205,19 +208,25 @@ compatibility, architecture, migration complexity, dependency compatibility,
 region availability, pricing completeness, data confidence — each input
 stating its delta and reason, plus the estimated monthly baseline. Capability
 data and pricing data live in separate versioned catalog files
-(`data/catalogs/`, embedded at build time); every component is labeled
-`known | estimated | not_calculated` and an unknown component never silently
-becomes zero. `n/c` marks what could not be calculated. Prices are curated
-on-demand list prices — estimates, never quotes.
+(`data/catalogs/`, embedded at build time with runtime overrides); every
+component is labeled `known | estimated | not_calculated` and an unknown
+component never silently becomes zero. `n/c` marks what could not be
+calculated. Prices are curated on-demand list prices — estimates, never
+quotes. A detected database workload is priced as a managed-service
+alternative (postgres/mysql tiers, first cut) when the catalog has tiers for
+its engine — excluded from the total, since the members' compute already
+covers self-hosting.
 
 `targets recommend` picks the best fit and names an alternative, explaining
 the difference. Price never automatically determines the recommendation:
 only fit-relevant inputs do, and prices are reported as information.
 
-`catalog update` reports the embedded catalog versions. Catalogs are bundled
-at build time (local-first); a live pricing source would arrive behind the
-same catalog shape, and plans pin the catalog version they used so stale
-pricing is never used silently.
+`catalog` manages catalog freshness as versioned data packages (ADR-0002
+D4): the embedded catalogs are the offline default, a runtime directory
+(`ORBYN_CATALOG_DIR`, default `./data/catalogs/`) overrides per provider,
+`install` validates and writes a package, and `update` fetches a manifest
+and installs newer packages. Nothing is fetched at report time, and plans
+pin the catalog version they used so stale pricing is never used silently.
 
 ## Import and export
 

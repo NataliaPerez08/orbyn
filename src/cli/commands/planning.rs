@@ -11,21 +11,20 @@ use orbyn::output::Format;
 use crate::app::open_store;
 use crate::cli::args::PlanTarget;
 
-/// Map a CLI target to its label and SKU catalog (`None` when Orbyn has
-/// no catalog for that provider).
+/// Map a CLI target to its label and catalog provider (`None` when no
+/// catalog is loaded for that provider).
 fn map_target(target: Option<PlanTarget>) -> Option<crate::app::planning::TargetSpec> {
     target.map(|t| {
-        let (label, provider) = match t {
-            PlanTarget::Aws => ("aws", Some(orbyn::sku::Provider::Aws)),
-            PlanTarget::Azure => ("azure", Some(orbyn::sku::Provider::Azure)),
-            PlanTarget::Gcp => ("gcp", Some(orbyn::sku::Provider::Gcp)),
-            // No curated catalog: instance types stay NOT_CALCULATED.
-            PlanTarget::Huawei => ("huawei", None),
-            PlanTarget::Openstack => ("openstack", None),
+        let label = match t {
+            PlanTarget::Aws => "aws",
+            PlanTarget::Azure => "azure",
+            PlanTarget::Gcp => "gcp",
+            PlanTarget::Huawei => "huawei",
+            PlanTarget::Openstack => "openstack",
         };
         crate::app::planning::TargetSpec {
             label: label.into(),
-            provider,
+            provider: orbyn::targets::catalog(label).map(|_| label.to_string()),
         }
     })
 }

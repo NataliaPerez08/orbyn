@@ -1765,18 +1765,22 @@ pub fn targets_compare(c: &TargetComparison, format: Format) -> String {
         Format::Json => json(c),
         Format::Csv => {
             let mut out = String::from(
-                "provider,region,fit,catalog_version,compute_monthly,storage_monthly,\
+                "provider,region,fit,catalog_version,retrieved_at,compute_monthly,storage_monthly,\
                  managed_db_monthly,total_monthly,currency,cost_confidence\n",
             );
             for (fit, cost) in c.fits.iter().zip(c.costs.iter()) {
+                let retrieved_at = crate::targets::catalog(&fit.provider)
+                    .map(|cat| cat.retrieved_at.clone())
+                    .unwrap_or_default();
                 out.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{}\n",
                     csv(&fit.provider),
                     csv(&fit.region),
                     fit.score
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "n/c".into()),
                     csv(&fit.catalog_version),
+                    csv(&retrieved_at),
                     component_monthly(cost, "compute")
                         .map(|v| format!("{v:.2}"))
                         .unwrap_or_default(),
@@ -1846,6 +1850,21 @@ pub fn targets_compare(c: &TargetComparison, format: Format) -> String {
                     .map(|c| c.currency.as_str())
                     .unwrap_or("USD")
             ));
+            let catalogs: Vec<String> = c
+                .fits
+                .iter()
+                .filter_map(|fit| {
+                    crate::targets::catalog(&fit.provider).map(|cat| {
+                        format!(
+                            "{} {} (retrieved {})",
+                            cat.provider, cat.catalog_version, cat.retrieved_at
+                        )
+                    })
+                })
+                .collect();
+            if !catalogs.is_empty() {
+                out.push_str(&format!("Catalogs: {}\n", catalogs.join(", ")));
+            }
             out.push_str(&format!(
                 "Models: rules {}, inference {}, readiness {}, strategy {}, target-fit {}, cost {}\n",
                 c.versions.rules_version,
@@ -1943,10 +1962,10 @@ pub fn targets_recommend(r: &TargetRecommendation, format: Format) -> String {
     }
 }
 
-/// Render `orbyn catalog update`: the embedded catalog status. Catalogs
-/// are bundled at build time (offline default), so this reports the
-/// pinned versions rather than pretending to fetch new ones.
-pub fn catalog_status(catalogs: &[crate::targets::TargetCatalog]) -> String {
+/// Render `orbyn catalog status`: the loaded catalogs — embedded
+/// defaults plus any runtime overrides — with the directory that
+/// overrides come from.
+pub fn catalog_status(catalogs: &[crate::targets::TargetCatalog], dir: &std::path::Path) -> String {
     let mut t = table(&[
         "Provider",
         "Region",
@@ -1954,6 +1973,7 @@ pub fn catalog_status(catalogs: &[crate::targets::TargetCatalog]) -> String {
         "Retrieved",
         "SKUs",
         "Prices",
+        "Source",
     ]);
     for c in catalogs {
         t.add_row(vec![
@@ -1963,11 +1983,15 @@ pub fn catalog_status(catalogs: &[crate::targets::TargetCatalog]) -> String {
             Cell::new(&c.retrieved_at),
             Cell::new(c.skus.len()),
             Cell::new(c.prices.len()),
+            Cell::new(if c.runtime { "runtime" } else { "embedded" }),
         ]);
     }
-    let mut out = String::from(
-        "Catalogs are embedded at build time (offline default); \
-         online refresh is not available in this build.\n\n",
+    let mut out = format!(
+        "Catalogs: embedded defaults, plus runtime overrides from {} \
+          (set {}). Install a package with `orbyn catalog install`, or \
+          refresh from a manifest with `orbyn catalog update --url <base>`.\n\n",
+        dir.display(),
+        crate::targets::CATALOG_DIR_ENV,
     );
     out.push_str(&render_table(t));
     out.push_str("\nPlans and comparisons pin the catalog version they used.\n");

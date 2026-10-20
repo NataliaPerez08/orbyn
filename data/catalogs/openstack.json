@@ -1,0 +1,16 @@
+{
+  "provider": "openstack",
+  "region": "region1",
+  "catalog_version": "openstack-catalog/2026-10",
+  "retrieved_at": "2026-10-01",
+  "source": "reference flavors (private cloud: pricing is site-specific, so prices are deliberately absent)",
+  "currency": "USD",
+  "skus": [
+    {"sku": "m1.tiny", "cpu": 1, "memory_mib": 512, "architecture": "x86_64", "storage": null, "capabilities": []},
+    {"sku": "m1.small", "cpu": 1, "memory_mib": 2048, "architecture": "x86_64", "storage": null, "capabilities": []},
+    {"sku": "m1.medium", "cpu": 2, "memory_mib": 4096, "architecture": "x86_64", "storage": null, "capabilities": []},
+    {"sku": "m1.large", "cpu": 4, "memory_mib": 8192, "architecture": "x86_64", "storage": null, "capabilities": []},
+    {"sku": "m1.xlarge", "cpu": 8, "memory_mib": 16384, "architecture": "x86_64", "storage": null, "capabilities": []}
+  ],
+  "prices": []
+}

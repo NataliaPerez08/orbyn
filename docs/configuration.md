@@ -20,6 +20,7 @@ cp .env.example .env
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ORBYN_DB` | `./data/orbyn.db` | SQLite database path, or a `postgres://` URL |
+| `ORBYN_CATALOG_DIR` | `./data/catalogs/` | Runtime catalog directory: valid `*.json` packages override the embedded catalog for their provider (invalid files are skipped with a warning); see `orbyn catalog status` |
 | `ORBYN_PG_PASSWORD` | *(unset)* | Password for a PostgreSQL URL that omits one (fallback: `PGPASSWORD`) |
 | `ORBYN_LOG` | `orbyn=warn` | tracing filter (also `-v`/`-vv`) |
 | `ORBYN_NMAP_BIN` | `nmap` | Nmap binary path |

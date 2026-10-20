@@ -45,6 +45,34 @@
       ],
       "matches": [],
       "catalog_version": "gcp-catalog/2026-10"
+    },
+    {
+      "provider": "huawei",
+      "region": "ap-southeast-1",
+      "score": null,
+      "reasons": [
+        {
+          "input": "strategy",
+          "delta": 0,
+          "detail": "strategy is retain: network/infrastructure workloads are not migrated"
+        }
+      ],
+      "matches": [],
+      "catalog_version": "huawei-catalog/2026-10"
+    },
+    {
+      "provider": "openstack",
+      "region": "region1",
+      "score": null,
+      "reasons": [
+        {
+          "input": "strategy",
+          "delta": 0,
+          "detail": "strategy is retain: network/infrastructure workloads are not migrated"
+        }
+      ],
+      "matches": [],
+      "catalog_version": "openstack-catalog/2026-10"
     }
   ],
   "costs": [
@@ -72,11 +100,13 @@
           "label": "not_calculated",
           "monthly": null,
           "currency": "USD",
-          "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          "detail": "port 3306 on 192-168-0-1: no capacity data for the database host"
         }
       ],
       "confidence": "Low",
-      "reasons": [],
+      "reasons": [
+        "managed database is not calculated"
+      ],
       "cost_model_version": "cost/v1"
     },
     {
@@ -103,11 +133,13 @@
           "label": "not_calculated",
           "monthly": null,
           "currency": "USD",
-          "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          "detail": "port 3306 on 192-168-0-1: no capacity data for the database host"
         }
       ],
       "confidence": "Low",
-      "reasons": [],
+      "reasons": [
+        "managed database is not calculated"
+      ],
       "cost_model_version": "cost/v1"
     },
     {
@@ -134,11 +166,79 @@
           "label": "not_calculated",
           "monthly": null,
           "currency": "USD",
-          "detail": "database service detected (port 3306); managed-service pricing is not in the catalog"
+          "detail": "port 3306 on 192-168-0-1: no capacity data for the database host"
         }
       ],
       "confidence": "Low",
-      "reasons": [],
+      "reasons": [
+        "managed database is not calculated"
+      ],
+      "cost_model_version": "cost/v1"
+    },
+    {
+      "provider": "huawei",
+      "currency": "USD",
+      "monthly_total": null,
+      "components": [
+        {
+          "component": "compute",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "no member matches; compute not calculated"
+        },
+        {
+          "component": "storage",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "no disk sizing observed on members; not calculated"
+        },
+        {
+          "component": "managed-database",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "port 3306 on 192-168-0-1: no capacity data for the database host"
+        }
+      ],
+      "confidence": "Low",
+      "reasons": [
+        "managed database is not calculated"
+      ],
+      "cost_model_version": "cost/v1"
+    },
+    {
+      "provider": "openstack",
+      "currency": "USD",
+      "monthly_total": null,
+      "components": [
+        {
+          "component": "compute",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "no member matches; compute not calculated"
+        },
+        {
+          "component": "storage",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "no disk sizing observed on members; not calculated"
+        },
+        {
+          "component": "managed-database",
+          "label": "not_calculated",
+          "monthly": null,
+          "currency": "USD",
+          "detail": "port 3306 on 192-168-0-1: no capacity data for the database host"
+        }
+      ],
+      "confidence": "Low",
+      "reasons": [
+        "managed database is not calculated"
+      ],
       "cost_model_version": "cost/v1"
     }
   ],

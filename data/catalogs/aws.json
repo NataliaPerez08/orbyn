@@ -55,5 +55,17 @@
     {"sku": "r5.xlarge", "hourly_price": 0.252, "pricing_model": "on-demand"},
     {"sku": "r5.2xlarge", "hourly_price": 0.504, "pricing_model": "on-demand"},
     {"sku": "r5.4xlarge", "hourly_price": 1.008, "pricing_model": "on-demand"}
+  ],
+  "managed_databases": [
+    {"engine": "postgres", "sku": "db.t4g.micro", "cpu": 2, "memory_mib": 1024, "hourly_price": 0.016},
+    {"engine": "postgres", "sku": "db.t4g.small", "cpu": 2, "memory_mib": 2048, "hourly_price": 0.032},
+    {"engine": "postgres", "sku": "db.m6g.large", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.129},
+    {"engine": "postgres", "sku": "db.m6g.xlarge", "cpu": 4, "memory_mib": 16384, "hourly_price": 0.258},
+    {"engine": "postgres", "sku": "db.m6g.2xlarge", "cpu": 8, "memory_mib": 32768, "hourly_price": 0.516},
+    {"engine": "mysql", "sku": "db.t4g.micro", "cpu": 2, "memory_mib": 1024, "hourly_price": 0.015},
+    {"engine": "mysql", "sku": "db.t4g.small", "cpu": 2, "memory_mib": 2048, "hourly_price": 0.03},
+    {"engine": "mysql", "sku": "db.m6g.large", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.124},
+    {"engine": "mysql", "sku": "db.m6g.xlarge", "cpu": 4, "memory_mib": 16384, "hourly_price": 0.248},
+    {"engine": "mysql", "sku": "db.m6g.2xlarge", "cpu": 8, "memory_mib": 32768, "hourly_price": 0.496}
   ]
 }

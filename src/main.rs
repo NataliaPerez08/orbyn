@@ -164,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
             cores,
             ram_mb,
             format,
-        } => commands::sku::sku_match(provider, cores, ram_mb, format),
+        } => commands::sku::sku_match(provider, cores, ram_mb, format)?,
         Command::Waves {
             format,
             pins,
@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
             target,
         } => commands::planning::bundle(&config, application, target).await?,
         Command::Targets { action } => commands::targets::targets(&config, action).await?,
-        Command::Catalog { action } => commands::targets::catalog(action)?,
+        Command::Catalog { action } => commands::targets::catalog(action).await?,
     }
 
     Ok(())

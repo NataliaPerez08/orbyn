@@ -13,11 +13,14 @@ Shipped and covered by deterministic fixtures and end-to-end tests:
 - Agentless host-level collection (SSH/WinRM), dependency evidence and the connection graph, waves, bundles, audit trail.
 - Cloud adapters (Proxmox VE, AWS, Huawei Cloud, OpenStack, GCP, Azure) — offline fixture-tested; SKU matching over versioned embedded catalogs; multi-cloud compare/recommend where missing pricing is reported `not_calculated`, never silently zero.
 
-Not in the baseline (this roadmap's remaining work):
+Not in the baseline at plan time (2026-10-13); shipped since, per the
+backlog checkboxes:
 
-- Native discovery: Nmap is still the only discovery adapter.
-- No resident agent, no enrollment/sync; historical metrics come only from importers and snapshots.
-- No Desktop or Server interface; the CLI is the only surface.
+- Native discovery (`--collector native`, v1.4) and the fingerprint/UDP
+  slice of v1.7 — Nmap remains the default collector pending NMAP-010.
+- The local profiling agent (v1.5) with remote enrollment/sync (v1.6).
+- The Desktop MVP (read-only Discover/Observe/Export wizard) and the
+  single-tenant ingest server; the CLI remains the primary surface.
 
 Because releases `v1.0.x`–`v1.3.0` are taken, the remaining milestones are renumbered from **v1.4**.
 
@@ -63,7 +66,7 @@ Because releases `v1.0.x`–`v1.3.0` are taken, the remaining milestones are ren
 
 **B. Observability:** local agent → agent time-series storage → remote enrollment/sync, merged with the shipped agentless SSH/WinRM probes and Prometheus/Zabbix importers.
 
-**C. Intelligence:** shipped through v1.3.0 (grouping, evidence/confidence, right-sizing, waves, SKU/cost). Remaining: catalog freshness — online pricing APIs, Huawei/OpenStack catalog data, and managed-database costs (currently `not_calculated`; storage is priced from the catalog since the 2026-10 curation).
+**C. Intelligence:** shipped through v1.3.0 (grouping, evidence/confidence, right-sizing, waves, SKU/cost). Catalog freshness shipped as versioned data packages (runtime catalog dir + `orbyn catalog status|install|update`, huawei/openstack catalogs, postgres/mysql managed-database tiers); remaining: more engines and providers as catalog data, and a hosted manifest when distribution needs one.
 
 **D. Experience:** stable CLI (shipped) → Desktop MVP (Discover/Observe/Export) → dashboards → server and agent management.
 

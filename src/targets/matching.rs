@@ -11,7 +11,7 @@ use crate::assessment::external_endpoints;
 use crate::domain::MigrationStrategy;
 use crate::planning::PlanInput;
 
-use super::{catalog, TargetCatalog};
+use super::TargetCatalog;
 
 /// Version of the fit model; stamped into compare/recommend output.
 pub const TARGET_FIT_VERSION: &str = "target-fit/v1";
@@ -107,12 +107,7 @@ pub fn fit(input: &PlanInput, strategy: MigrationStrategy) -> Vec<ProviderFit> {
         .collect();
 
     let mut fits = Vec::new();
-    for provider in ["aws", "azure", "gcp"] {
-        let catalog = match catalog(provider) {
-            Some(c) => c,
-            None => continue,
-        };
-
+    for catalog in super::catalogs() {
         // Per-asset matches.
         let mut matches = Vec::new();
         let mut no_fit = 0usize;
@@ -301,9 +296,8 @@ fn catalog_providers(strategy: MigrationStrategy) -> Vec<ProviderFit> {
         MigrationStrategy::Unknown => "strategy is unknown: insufficient evidence to fit a target",
         _ => "no catalog for this provider",
     };
-    ["aws", "azure", "gcp"]
+    super::catalogs()
         .iter()
-        .filter_map(|p| catalog(p))
         .map(|c| ProviderFit {
             provider: c.provider.clone(),
             region: c.region.clone(),
@@ -329,17 +323,40 @@ mod tests {
     fn complete_application_fits_every_provider_at_full_score() {
         let fx = testkit::complete_application(2);
         let fits = fit(&fx.input(), MigrationStrategy::Rehost);
-        assert_eq!(fits.len(), 3);
+        assert_eq!(fits.len(), 5);
         for f in &fits {
-            assert_eq!(f.score, Some(100), "{}: {:?}", f.provider, f.reasons);
+            // Openstack is reference flavors without prices: its fit is
+            // penalized for pricing-completeness (asserted separately).
+            if f.provider != "openstack" {
+                assert_eq!(f.score, Some(100), "{}: {:?}", f.provider, f.reasons);
+            }
             assert_eq!(f.matches.len(), 2);
             let m = &f.matches[0];
             assert!(m.sku.is_some(), "{}: {:?}", f.provider, m);
-            assert!(m.hourly_price.is_some());
             assert_eq!(f.catalog_version, format!("{}-catalog/2026-10", f.provider));
+            if f.provider != "openstack" {
+                assert!(m.hourly_price.is_some(), "{}: {:?}", f.provider, m);
+            } else {
+                assert!(m.hourly_price.is_none());
+            }
         }
         let aws = &fits[0];
         assert_eq!(aws.matches[0].sku.as_deref(), Some("c5.xlarge"));
+    }
+
+    #[test]
+    fn openstack_flavors_match_but_pricing_stays_honest() {
+        let fx = testkit::complete_application(2);
+        let fits = fit(&fx.input(), MigrationStrategy::Rehost);
+        let openstack = fits.iter().find(|f| f.provider == "openstack").unwrap();
+        // Unpriced matches are a pricing-completeness penalty, never a
+        // silent zero price.
+        assert!(openstack.matches.iter().all(|m| m.hourly_price.is_none()));
+        assert!(openstack
+            .reasons
+            .iter()
+            .any(|r| r.input == "pricing-completeness" && r.detail.contains("without price data")));
+        assert_eq!(openstack.score, Some(90));
     }
 
     #[test]

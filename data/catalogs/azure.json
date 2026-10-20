@@ -47,5 +47,17 @@
     {"sku": "Standard_F4s_v2", "hourly_price": 0.17, "pricing_model": "on-demand"},
     {"sku": "Standard_F8s_v2", "hourly_price": 0.34, "pricing_model": "on-demand"},
     {"sku": "Standard_F16s_v2", "hourly_price": 0.68, "pricing_model": "on-demand"}
+  ],
+  "managed_databases": [
+    {"engine": "postgres", "sku": "B_Standard_B1ms", "cpu": 1, "memory_mib": 2048, "hourly_price": 0.018},
+    {"engine": "postgres", "sku": "B_Standard_B2ms", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.068},
+    {"engine": "postgres", "sku": "GP_Standard_D2ds_v4", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.135},
+    {"engine": "postgres", "sku": "GP_Standard_D4ds_v4", "cpu": 4, "memory_mib": 16384, "hourly_price": 0.271},
+    {"engine": "postgres", "sku": "GP_Standard_D8ds_v4", "cpu": 8, "memory_mib": 32768, "hourly_price": 0.542},
+    {"engine": "mysql", "sku": "B_Standard_B1ms", "cpu": 1, "memory_mib": 2048, "hourly_price": 0.016},
+    {"engine": "mysql", "sku": "B_Standard_B2ms", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.062},
+    {"engine": "mysql", "sku": "GP_Standard_D2ds_v4", "cpu": 2, "memory_mib": 8192, "hourly_price": 0.125},
+    {"engine": "mysql", "sku": "GP_Standard_D4ds_v4", "cpu": 4, "memory_mib": 16384, "hourly_price": 0.25},
+    {"engine": "mysql", "sku": "GP_Standard_D8ds_v4", "cpu": 8, "memory_mib": 32768, "hourly_price": 0.5}
   ]
 }

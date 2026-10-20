@@ -487,9 +487,10 @@ pub(crate) enum Command {
     /// Match a right-sizing baseline (vCPU + RAM) to candidate instance
     /// types (SKUs) for a provider.
     SkuMatch {
-        /// Provider catalog to match against.
-        #[arg(long, value_enum)]
-        provider: orbyn::sku::Provider,
+        /// Provider catalog to match against (any loaded catalog
+        /// provider: aws, azure, gcp, huawei, openstack, ...).
+        #[arg(long)]
+        provider: String,
         /// Required vCPU cores.
         #[arg(long)]
         cores: u32,
@@ -568,9 +569,9 @@ pub(crate) enum Command {
     },
 }
 
-/// Target providers for `orbyn plan --target`. Huawei and OpenStack are
-/// accepted but have no SKU catalog: recommendations report
-/// NOT_CALCULATED instead of fabricated instance types.
+/// Target providers for `orbyn plan --target`. Every variant has a
+/// catalog; instance types come from the loaded catalog data, and
+/// pricing stays honest where the catalog has none (openstack).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum PlanTarget {
     Aws,
@@ -604,10 +605,25 @@ pub(crate) enum TargetsAction {
 /// Sub-actions of `orbyn catalog`.
 #[derive(Debug, Subcommand)]
 pub(crate) enum CatalogAction {
-    /// Report the embedded catalog versions. Catalogs are bundled at
-    /// build time (offline default); online refresh requires a pricing
-    /// source and is not available in this build.
-    Update,
+    /// Report the loaded catalogs: embedded defaults plus any runtime
+    /// overrides from ORBYN_CATALOG_DIR.
+    Status,
+    /// Validate a catalog package and install it into the runtime
+    /// catalog directory (effective on the next run).
+    Install {
+        /// Path to the catalog package (JSON).
+        #[arg(long)]
+        file: String,
+    },
+    /// Fetch a versioned catalog manifest and install newer packages.
+    /// The manifest is read from `<url>/manifest.json`; packages are
+    /// fetched from the same base URL. Offline by default — nothing is
+    /// fetched at report time.
+    Update {
+        /// Base URL of the catalog manifest.
+        #[arg(long)]
+        url: String,
+    },
 }
 
 /// Shell backends supported by `orbyn completions`.

@@ -8,6 +8,7 @@
 //! Since v1.3 the capability data lives in the provider-neutral catalog
 //! (`crate::targets`, `data/catalogs/`); this module is the thin
 //! match-and-render wrapper the `sku-match` command and the planner use.
+//! Any loaded catalog provider works — embedded or installed at runtime.
 
 use std::fmt;
 
@@ -38,29 +39,13 @@ impl fmt::Display for Sku {
     }
 }
 
-/// Providers with a catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum Provider {
-    Aws,
-    Azure,
-    Gcp,
-}
-
-impl Provider {
-    /// Canonical provider label used in CSV output.
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::Aws => "aws",
-            Provider::Azure => "azure",
-            Provider::Gcp => "gcp",
-        }
-    }
-}
-
 /// Candidate SKUs meeting both the vCPU and RAM requirement, smallest fit
-/// first (by vCPU, then RAM).
-pub fn match_skus(provider: Provider, cores: u32, ram_mib: u64) -> Vec<Sku> {
-    let catalog = targets::catalog(provider.label()).expect("provider catalog");
+/// first (by vCPU, then RAM). A provider without a loaded catalog has no
+/// candidates — never a guess.
+pub fn match_skus(provider: &str, cores: u32, ram_mib: u64) -> Vec<Sku> {
+    let Some(catalog) = targets::catalog(provider) else {
+        return Vec::new();
+    };
     let mut fits: Vec<Sku> = catalog
         .skus
         .iter()
@@ -76,7 +61,7 @@ pub fn match_skus(provider: Provider, cores: u32, ram_mib: u64) -> Vec<Sku> {
 }
 
 /// Render the candidates for `orbyn sku-match`.
-pub fn render(provider: Provider, cores: u32, ram_mb: u64, format: Format) -> String {
+pub fn render(provider: &str, cores: u32, ram_mb: u64, format: Format) -> String {
     let candidates = match_skus(provider, cores, ram_mb);
     match format {
         Format::Json => serde_json::to_string_pretty(&candidates).unwrap_or_else(|_| "[]".into()),
@@ -85,10 +70,7 @@ pub fn render(provider: Provider, cores: u32, ram_mb: u64, format: Format) -> St
             for s in &candidates {
                 out.push_str(&format!(
                     "{},{},{},{}\n",
-                    provider.label(),
-                    s.name,
-                    s.vcpu,
-                    s.ram_mib
+                    provider, s.name, s.vcpu, s.ram_mib
                 ));
             }
             out
@@ -96,9 +78,8 @@ pub fn render(provider: Provider, cores: u32, ram_mb: u64, format: Format) -> St
         Format::Table => {
             if candidates.is_empty() {
                 return format!(
-                    "no {} instance type in the curated catalog meets {cores} vCPU \
-                     and {ram_mb} MiB RAM\n",
-                    provider.label()
+                    "no {provider} instance type in the curated catalog meets {cores} vCPU \
+                     and {ram_mb} MiB RAM\n"
                 );
             }
             let mut t = crate::output::table(&["Name", "vCPU", "RAM (MiB)"]);
@@ -110,9 +91,8 @@ pub fn render(provider: Provider, cores: u32, ram_mb: u64, format: Format) -> St
                 ]);
             }
             format!(
-                "{} instance types meeting {cores} vCPU and {ram_mb} MiB RAM \
+                "{provider} instance types meeting {cores} vCPU and {ram_mb} MiB RAM \
                  (smallest fit first):\n{}",
-                provider.label(),
                 crate::output::render_table(t)
             )
         }
@@ -125,20 +105,19 @@ mod tests {
 
     #[test]
     fn smallest_fit_is_first() {
-        assert_eq!(match_skus(Provider::Aws, 4, 16384)[0].name, "t3.xlarge");
-        assert_eq!(
-            match_skus(Provider::Azure, 4, 16384)[0].name,
-            "Standard_B4ms"
-        );
-        assert_eq!(match_skus(Provider::Gcp, 4, 16384)[0].name, "e2-standard-4");
+        assert_eq!(match_skus("aws", 4, 16384)[0].name, "t3.xlarge");
+        assert_eq!(match_skus("azure", 4, 16384)[0].name, "Standard_B4ms");
+        assert_eq!(match_skus("gcp", 4, 16384)[0].name, "e2-standard-4");
+        assert_eq!(match_skus("huawei", 4, 16384)[0].name, "s6.xlarge.4");
+        assert_eq!(match_skus("openstack", 4, 8192)[0].name, "m1.large");
     }
 
     #[test]
     fn every_candidate_meets_the_requirement() {
-        for provider in [Provider::Aws, Provider::Azure, Provider::Gcp] {
+        for catalog in targets::catalogs() {
             for cores in [1u32, 2, 4, 8, 16] {
                 for ram in [2048u64, 8192, 16384, 32768, 65536] {
-                    for sku in match_skus(provider, cores, ram) {
+                    for sku in match_skus(&catalog.provider, cores, ram) {
                         assert!(sku.vcpu >= cores, "{sku} below {cores} vCPU");
                         assert!(sku.ram_mib >= ram, "{sku} below {ram} MiB");
                     }
@@ -150,19 +129,29 @@ mod tests {
     #[test]
     fn no_fit_returns_empty() {
         // Nothing in the curated catalogs reaches 64 vCPU.
-        for provider in [Provider::Aws, Provider::Azure, Provider::Gcp] {
-            assert!(match_skus(provider, 64, 262_144).is_empty());
+        for catalog in targets::catalogs() {
+            assert!(match_skus(&catalog.provider, 64, 262_144).is_empty());
         }
+        // A provider without a catalog never guesses.
+        assert!(match_skus("digitalocean", 1, 512).is_empty());
     }
 
     #[test]
     fn catalogs_are_unique_and_non_empty() {
-        for provider in [Provider::Aws, Provider::Azure, Provider::Gcp] {
-            let catalog = targets::catalog(provider.label()).expect("catalog");
-            assert!(!catalog.skus.is_empty(), "{provider:?} catalog is empty");
+        for catalog in targets::catalogs() {
+            assert!(
+                !catalog.skus.is_empty(),
+                "{} catalog is empty",
+                catalog.provider
+            );
             let names: Vec<&str> = catalog.skus.iter().map(|s| s.sku.as_str()).collect();
             let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
-            assert_eq!(names.len(), unique.len(), "duplicate SKU in {provider:?}");
+            assert_eq!(
+                names.len(),
+                unique.len(),
+                "duplicate SKU in {}",
+                catalog.provider
+            );
         }
     }
 }

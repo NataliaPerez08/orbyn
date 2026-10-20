@@ -55,7 +55,8 @@ fn plan_reports_readiness_strategy_blockers_and_wave() {
     assert!(out.contains("production environment prod"), "{out}");
 
     // --target affects recommendations only: the provider is recorded,
-    // and providers without a catalog say so instead of guessing.
+    // and every plan target now has a catalog (openstack matches
+    // reference flavors; pricing stays honest elsewhere).
     let out = run_ok(orbyn(&dir).args(["plan", "frontend", "--target", "aws", "--format", "json"]));
     assert!(out.contains("\"provider\": \"aws\""), "{out}");
     let out = run_ok(orbyn(&dir).args([
@@ -66,7 +67,8 @@ fn plan_reports_readiness_strategy_blockers_and_wave() {
         "--format",
         "json",
     ]));
-    assert!(out.contains("no openstack catalog"), "{out}");
+    assert!(out.contains("\"provider\": \"openstack\""), "{out}");
+    assert!(!out.contains("no openstack catalog"), "{out}");
 
     // The plan is persisted and audited.
     let out = run_ok_combined(orbyn(&dir).args(["audit", "--format", "csv"]));

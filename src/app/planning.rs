@@ -19,11 +19,12 @@ use crate::app::applications;
 use crate::app::{begin_audit, finish_audit_result};
 
 /// A requested target provider: the label for the report, and the
-/// catalog for instance-type matching (`None` when Orbyn has no catalog
-/// for that provider — recommendations stay honest instead of guessed).
+/// catalog provider for instance-type matching (`None` when Orbyn has
+/// no catalog loaded for that provider — recommendations stay honest
+/// instead of guessed).
 pub(crate) struct TargetSpec {
     pub label: String,
-    pub provider: Option<orbyn::sku::Provider>,
+    pub provider: Option<String>,
 }
 
 /// The shared assessment snapshot every planning workflow starts from.
@@ -174,7 +175,7 @@ async fn build(
         }
         let mut instance_type = None;
         if let (Some(t), Some(c), Some(r)) = (&target, cores, ram_mb) {
-            if let Some(provider) = t.provider {
+            if let Some(provider) = &t.provider {
                 instance_type = orbyn::sku::match_skus(provider, c, r)
                     .first()
                     .map(|s| s.name.to_string());
