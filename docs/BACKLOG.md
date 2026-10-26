@@ -358,20 +358,20 @@ CLI intact; full workflow with export.
   first run starts at step 1, returning operators land on their
   inventory, engine errors surface under plain-language lead lines
   (cross-cutting DoD).
-- [ ] **P1** Windows installer without a toolchain (MSI/NSIS built in
+- [x] **P1** Windows installer without a toolchain (MSI/NSIS built in
   CI); signed binaries where applicable; SBOM + dependency scanning
   carried over from the CLI pipeline.
   Progress: the engine ships as a Tauri sidecar next to the app
   (sibling lookup, verified end-to-end via the local `.deb` bundle:
   both binaries in `/usr/bin`, app boots stripped-env and finds the
-  engine); `desktop-installer` CI job builds the NSIS installer on
-  main pushes (first green run pending); `cargo deny` now covers the
-  desktop lockfile (MPL-2.0 + compile-time proc-macro-error allowances
-  documented in deny.toml). Decided per ADR-0003: NSIS only (D7 — no MSI
-  variant), installers upload as workflow artifacts on main pushes (D8,
-  step added to the `desktop-installer` job); signing waits on a
-  code-signing certificate (D8 revisit trigger). Remaining: a green
-  installer build.
+  engine); `cargo deny` now covers the desktop lockfile (MPL-2.0 +
+  compile-time proc-macro-error allowances documented in deny.toml).
+  Decided per ADR-0003: NSIS only (D7 — no MSI variant), installers
+  upload as workflow artifacts on main pushes (D8, artifacts
+  `orbyn-windows-nsis` + standalone engine `orbyn-windows-engine`);
+  signing waits on a code-signing certificate (D8 revisit trigger).
+  First green installer build: CI run 40411024002 (2026-10-27),
+  `desktop (windows nsis installer)` green, artifacts uploaded.
 - [x] **P1** Native save dialog for exports (`tauri-plugin-dialog`,
   capability `dialog:default`): **Choose location…** fills the path
   field, which stays as the fallback when the plugin is unavailable.
