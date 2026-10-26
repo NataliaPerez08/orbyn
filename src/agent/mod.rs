@@ -64,6 +64,7 @@ pub struct MemFacts {
     pub swap_free_mb: Option<u64>,
 }
 
+#[cfg(unix)]
 impl MemFacts {
     pub fn ram_used_mb(&self) -> Option<u64> {
         match (self.ram_total_mb, self.ram_available_mb) {
