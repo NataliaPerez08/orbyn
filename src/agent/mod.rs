@@ -625,7 +625,9 @@ h2 {{ margin-top: 2rem; }}
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     const STAT_A: &str = "cpu  100 0 100 790 10 0 0 0 0 0\n";
+    #[cfg(unix)]
     const STAT_B: &str = "cpu  110 0 110 780 10 0 0 0 0 0\n";
 
     #[cfg(unix)]

@@ -258,6 +258,15 @@ jobs:
           mkdir -p desktop/binaries
           cp target/release/orbyn.exe desktop/binaries/orbyn-x86_64-pc-windows-msvc.exe
 
+      # Standalone engine binary for agent/server testing on Windows
+      # hosts (lab-gated v1.5/v1.6 evidence) without a toolchain there.
+      - name: Upload engine binary
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: orbyn-windows-engine
+          path: target/release/orbyn.exe
+          if-no-files-found: error
+
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2" --locked
 
