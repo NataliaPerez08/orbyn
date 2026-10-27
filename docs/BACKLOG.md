@@ -308,15 +308,15 @@ single-tenant — multi-tenancy is explicitly postponed (risk table).
 - [x] **P1** Transport security decision + docs: plain HTTP on
   loopback with Bearer tokens per ADR-0002 D3 (local-first, no
   at-rest encryption before remote ingest); documented in agent.md.
-- [ ] **P1** Exit criteria (lab-gated): three heterogeneous hosts
+- [x] **P1** Exit criteria (lab-gated): three heterogeneous hosts
   (Linux + Windows) observed through the server; connections backed by
   evidence; revocation verified mid-run. Harness shipped:
   `demo/qemu/agent-lab.sh` (enrolls web-01/api-01/db-01 against the
   host-side ingest server, verifies the connection evidence and the
   graph, revokes db-01 mid-run and checks the refused sync + local
   buffer); recorded run pending a KVM host.
-  Progress: Linux side recorded 2026-10-27 on the QEMU lab (KVM,
-  Proxmox) — 10/10 checks passed,
+  Recorded 2026-10-27 on the QEMU lab (KVM, Proxmox) — 10/10 checks
+  passed,
   [docs/lab-results/v16-20261027/evidence.log](lab-results/v16-20261027/evidence.log):
   three heterogeneous Ubuntu hosts (24.04/22.04/20.04) observed through
   the server, api-01→db-01:5432/6379 and web-01→api-01:8080 backed by
@@ -324,8 +324,12 @@ single-tenant — multi-tenancy is explicitly postponed (risk table).
   local buffering and re-enroll recovery. The run used a manual variant
   of the harness (`v16-evidence.sh`, committed alongside the log) that
   does not wipe `server.db`, preserving the in-flight 7-day v1.5
-  observation. Remaining: the Windows host once the lab VPS is
-  provisioned.
+  observation. Windows host recorded same day on the lab VPS
+  (ecs-84b2, Server 2022, reached via the approved Tailscale subnet
+  route): agent enrolled with a one-time token, scheduled tasks
+  mirroring the Linux units, samples and 14 live connections observed
+  through the same server —
+  [docs/lab-results/v16-20261027/windows-host.md](lab-results/v16-20261027/windows-host.md).
 
 ## v1.7 — Native discovery II (ROADMAP_V2)
 

@@ -11,7 +11,7 @@ provisioning drift, and harnesses that were never run end-to-end.
 | Run | Gates | Result |
 | --- | --- | --- |
 | [nmap-vs-native-20261025-231625/](nmap-vs-native-20261025-231625/report.md) | NMAP-010 — native-vs-nmap parity, gates the `auto` collector mode and any default flip (ADR-0002 D5) | All checks passed: host recall 4/4 both adapters; TCP port recall native 9/9 vs nmap 8/9 (nmap missed db-01:6379); named ports native 9/9 (fingerprint probes) vs nmap 0/9; runtime 266s vs 32s; UDP observations native-only. Parity holds for Orbyn's use cases. |
-| [v16-20261027/](v16-20261027/evidence.log) | v1.6 exit criteria (Linux side) — three heterogeneous hosts observed through the ingest server, connections backed by evidence, revocation verified mid-run | 10/10 passed on the live server (Ubuntu 24.04/22.04/20.04 agents, api-01→db-01:5432/6379 and web-01→api-01:8080 with graph edges, revocation refused + local buffering + re-enroll recovery). Recorded with `v16-evidence.sh`, a variant of `agent-lab.sh` that does not wipe `server.db`, preserving the in-flight 7-day v1.5 observation. |
+| [v16-20261027/](v16-20261027/evidence.log) | v1.6 exit criteria — three heterogeneous hosts (Linux + Windows) observed through the ingest server, connections backed by evidence, revocation verified mid-run | 10/10 passed on the live server (Ubuntu 24.04/22.04/20.04 agents, api-01→db-01:5432/6379 and web-01→api-01:8080 with graph edges, revocation refused + local buffering + re-enroll recovery). Recorded with `v16-evidence.sh`, a variant of `agent-lab.sh` that does not wipe `server.db`, preserving the in-flight 7-day v1.5 observation. Windows host (Server 2022 VPS via Tailscale subnet route) recorded in [windows-host.md](v16-20261027/windows-host.md): enrolled, scheduled tasks, samples + 14 live connections through the same server. |
 
 ## What the lab caught, and the fixes
 
@@ -57,7 +57,8 @@ provisioning drift, and harnesses that were never run end-to-end.
 
 ## Pending
 
-- v1.5 7-day observation: in flight since 2026-10-26T05:25Z; validate
-  with `demo/qemu/check-observation.sh` after ≥168h (≈2026-11-02).
-- v1.6 Windows host + v2.0 clean-machine installer run: pending the
-  Windows VPS.
+- v1.5 7-day observation: in flight — Linux since 2026-10-26T05:25Z
+  (validate ≈2026-11-02), Windows since 2026-10-27T19:00Z (validate
+  ≈2026-11-03); `demo/qemu/check-observation.sh` on both.
+- v2.0 clean-machine installer run: pending on the Windows VPS
+  (installer staged at `C:\orbyn\setup.exe`).
