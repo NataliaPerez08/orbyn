@@ -22,6 +22,9 @@ write_files:
       set -e
       PG_MAIN=$(ls -d /etc/postgresql/*/main | head -1)
       sed -i "s/^#listen_addresses.*/listen_addresses = '*'/" "$PG_MAIN/postgresql.conf"
+      # pg_hba below demands scram-sha-256; the role must be created with a
+      # SCRAM verifier or every login fails (focal's PG12 defaults to md5).
+      sed -i "s/^#\?password_encryption.*/password_encryption = scram-sha-256/" "$PG_MAIN/postgresql.conf"
       echo "host all api 192.0.2.0/24 scram-sha-256" >> "$PG_MAIN/pg_hba.conf"
       sed -i 's/^bind 127.0.0.1 ::1/bind 0.0.0.0/' /etc/redis/redis.conf
       sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf

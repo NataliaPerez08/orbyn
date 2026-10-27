@@ -14,6 +14,7 @@ packages:
   - python3-flask
   - python3-psycopg2
   - python3-redis
+  - python3-gunicorn
 write_files:
   - path: /opt/orbyn-api/app.py
     content: |
@@ -55,14 +56,20 @@ write_files:
 
       threading.Thread(target=hold_postgres, daemon=True).start()
       threading.Thread(target=hold_redis, daemon=True).start()
-      app.run(host="0.0.0.0", port=8080)
+
+      if __name__ == "__main__":
+          # Dev server only; under gunicorn (below) the module is imported
+          # as `app:app`. Werkzeug closes every connection, which defeats
+          # nginx's upstream keepalive pool — gunicorn keeps them open.
+          app.run(host="0.0.0.0", port=8080)
   - path: /etc/systemd/system/orbyn-api.service
     content: |
       [Unit]
       Description=Orbyn demo API
       After=network-online.target
       [Service]
-      ExecStart=/usr/bin/python3 /opt/orbyn-api/app.py
+      WorkingDirectory=/opt/orbyn-api
+      ExecStart=/usr/bin/python3 -m gunicorn --bind 0.0.0.0:8080 --worker-class gthread --threads 2 --keep-alive 75 app:app
       Restart=always
       [Install]
       WantedBy=multi-user.target
