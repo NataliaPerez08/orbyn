@@ -46,7 +46,7 @@ asset_id() { echo "${1//./-}"; }
 
 server_samples() { # ip -> sample_count on the server db
   "$ORBYN" --db "$SERVER_DB" agent report --asset-ip "$1" --format json 2>/dev/null \
-    | grep -o '"sample_count":[0-9]*' | grep -o '[0-9]*$'
+    | grep -oE '"sample_count": *[0-9]+' | grep -oE '[0-9]+'
 }
 
 # --- sanity: lab reachable, binary runs on the oldest guest -----------
@@ -156,17 +156,17 @@ else
 fi
 
 # --- criterion 2: connections backed by evidence -----------------------
-# The connections CSV uses dash-form asset ids: 192-0-2-12,192-0-2-13,tcp,5432
+# connections CSV columns: asset_id,proto,local_ip,local_port,remote_ip,remote_port,process
 echo "== verifying connection evidence =="
 CONNS=$("$ORBYN" --db "$SERVER_DB" connections 192.0.2.12 --format csv 2>/dev/null || true)
-echo "$CONNS" | grep -q "192-0-2-13,tcp,5432" \
+echo "$CONNS" | grep -q "192\.0\.2\.13,5432" \
   && check "api-01 -> db-01:5432 observed with evidence" 1 \
   || check "api-01 -> db-01:5432 observed with evidence" 0
-echo "$CONNS" | grep -q "192-0-2-13,tcp,6379" \
+echo "$CONNS" | grep -q "192\.0\.2\.13,6379" \
   && check "api-01 -> db-01:6379 observed with evidence" 1 \
   || check "api-01 -> db-01:6379 observed with evidence" 0
 CONNS=$("$ORBYN" --db "$SERVER_DB" connections 192.0.2.11 --format csv 2>/dev/null || true)
-echo "$CONNS" | grep -q "192-0-2-12,tcp,8080" \
+echo "$CONNS" | grep -q "192\.0\.2\.12,8080" \
   && check "web-01 -> api-01:8080 observed with evidence" 1 \
   || check "web-01 -> api-01:8080 observed with evidence" 0
 if [ "$SERVICE_MODE" = 0 ]; then
@@ -209,12 +209,12 @@ else
 fi
 if [ "$SERVICE_MODE" = 1 ]; then
   BUFFERED=$(ssh "${SSH_OPTS[@]}" deploy@192.0.2.13 \
-    "sudo /usr/local/bin/orbyn agent report --asset-ip 192.0.2.13 --format json --db /var/lib/orbyn/agent.db 2>/dev/null | grep -o '\"sample_count\":[0-9]*'" || true)
+    "sudo /usr/local/bin/orbyn agent report --asset-ip 192.0.2.13 --format json --db /var/lib/orbyn/agent.db 2>/dev/null | grep -oE '\"sample_count\": *[0-9]+' | grep -oE '[0-9]+' | head -1" || true)
 else
   BUFFERED=$(ssh "${SSH_OPTS[@]}" deploy@192.0.2.13 \
-    "/usr/local/bin/orbyn agent report --asset-ip 192.0.2.13 --format json --db /tmp/orbyn-agent.db 2>/dev/null | grep -o '\"sample_count\":[0-9]*'" || true)
+    "/usr/local/bin/orbyn agent report --asset-ip 192.0.2.13 --format json --db /tmp/orbyn-agent.db 2>/dev/null | grep -oE '\"sample_count\": *[0-9]+' | grep -oE '[0-9]+' | head -1" || true)
 fi
-if [ -n "$BUFFERED" ] && [ "$BUFFERED" != '"sample_count":0' ]; then
+if [ -n "$BUFFERED" ] && [ "$BUFFERED" != "0" ]; then
   check "db-01 keeps buffering locally after revocation ($BUFFERED)" 1
 else
   check "db-01 keeps buffering locally after revocation" 0

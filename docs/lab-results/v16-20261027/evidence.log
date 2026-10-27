@@ -1,0 +1,20 @@
+== criterion 1: three heterogeneous hosts observed through the server ==
+  192.0.2.11: 2176 samples
+  192.0.2.12: 2175 samples
+  192.0.2.13: 2174 samples
+  PASS  three heterogeneous hosts observed through the server (3/3)
+== criterion 2: connections backed by evidence ==
+  PASS  api-01 -> db-01:5432 observed with evidence
+  PASS  api-01 -> db-01:6379 observed with evidence
+  PASS  web-01 -> api-01:8080 observed with evidence
+  PASS  dependency graph has api-01 -> db-01 edges
+== criterion 3: revocation verified mid-run ==
+Revoked 192-0-2-13; its syncs are refused from now on.
+  PASS  revoked db-01 sync is refused
+  PASS  server sample count for db-01 unchanged after revocation (2174)
+  PASS  db-01 keeps buffering locally after revocation (2175)
+== re-enroll db-01 (leave the lab usable, resume the observation) ==
+  PASS  re-enrolled db-01 sync succeeds
+  PASS  buffered samples shipped after re-enroll (2174 -> 2175)
+
+v1.6 exit criteria: 10 passed, 0 failed

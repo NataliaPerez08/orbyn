@@ -315,6 +315,17 @@ single-tenant — multi-tenancy is explicitly postponed (risk table).
   host-side ingest server, verifies the connection evidence and the
   graph, revokes db-01 mid-run and checks the refused sync + local
   buffer); recorded run pending a KVM host.
+  Progress: Linux side recorded 2026-10-27 on the QEMU lab (KVM,
+  Proxmox) — 10/10 checks passed,
+  [docs/lab-results/v16-20261027/evidence.log](lab-results/v16-20261027/evidence.log):
+  three heterogeneous Ubuntu hosts (24.04/22.04/20.04) observed through
+  the server, api-01→db-01:5432/6379 and web-01→api-01:8080 backed by
+  connection evidence and graph edges, revocation verified mid-run with
+  local buffering and re-enroll recovery. The run used a manual variant
+  of the harness (`v16-evidence.sh`, committed alongside the log) that
+  does not wipe `server.db`, preserving the in-flight 7-day v1.5
+  observation. Remaining: the Windows host once the lab VPS is
+  provisioned.
 
 ## v1.7 — Native discovery II (ROADMAP_V2)
 
