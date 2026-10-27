@@ -419,9 +419,18 @@ CLI intact; full workflow with export.
   cardinality (risk table); multi-tenancy still postponed. Decided per
   ADR-0003 D10: deferred until a real deployment shows the need
   (measured-then-build).
-- [ ] **P1** Exit criteria (lab-gated): full workflow (discover →
+- [x] **P1** Exit criteria (lab-gated): full workflow (discover →
   observe → analyze → export) on a clean Windows machine with no
   toolchain installed.
+  Recorded 2026-10-27 on the lab Windows VPS (ecs-84b2, Server 2022,
+  clean — no rustc/cargo/git):
+  [docs/lab-results/v2-20261027/clean-machine.md](lab-results/v2-20261027/clean-machine.md).
+  NSIS silent install (exit 0, app + sidecar siblings, registry
+  entry), full workflow with the installed sidecar over the Tailscale
+  subnet route (native discover of the /24 lab: 6 assets in ~4.5 min,
+  agent report HTML, inventory JSON, CSV export with assets +
+  connections), and the operator-confirmed wizard rendering
+  (screenshot committed alongside).
 
 ## Intelligence track — catalog freshness (ROADMAP_V2 track C)
 

@@ -55,10 +55,10 @@ provisioning drift, and harnesses that were never run end-to-end.
    (`v16-evidence.sh` keeps the same checks against the live server
    without wiping it).
 
+| [v2-20261027/](v2-20261027/clean-machine.md) | v2.0 exit criteria — full workflow on a clean Windows machine with no toolchain | NSIS silent install on a clean Server 2022 VPS (app + sidecar siblings, registry entry); discover (native, /24 lab over the Tailscale subnet route: 6 assets in ~4.5 min) → observe (agent report HTML) → analyze (inventory JSON) → export (CSV, assets + connections) with the installed sidecar; wizard rendering operator-confirmed ([screenshot](v2-20261027/app-wizard.png)). |
+
 ## Pending
 
 - v1.5 7-day observation: in flight — Linux since 2026-10-26T05:25Z
   (validate ≈2026-11-02), Windows since 2026-10-27T19:00Z (validate
   ≈2026-11-03); `demo/qemu/check-observation.sh` on both.
-- v2.0 clean-machine installer run: pending on the Windows VPS
-  (installer staged at `C:\orbyn\setup.exe`).
