@@ -576,7 +576,11 @@ fn parse_systemctl(lines: &[String]) -> Vec<RunningService> {
 ///
 /// Accepted row shapes:
 ///
-/// - `ss`: `ESTAB|ESTABLISHED recvq sendq local peer [users:(("proc",...))]`
+/// - `ss` with a State column: `ESTAB|ESTABLISHED recvq sendq local peer
+///   [users:(("proc",...))]`
+/// - `ss` state-filtered (iproute2 >= 5 omits the State column when a
+///   `state` filter is given, so every row is established by construction):
+///   `recvq sendq local peer [users:(("proc",...))]`
 /// - `netstat`: `tcp|tcp6 recvq sendq local peer ESTABLISHED [pid/prog[:name]]`
 ///   where the trailing process column is the BusyBox `pid/prog` form or the
 ///   net-tools `pid/prog:name` form (`-` when unavailable).
@@ -591,6 +595,7 @@ pub(crate) fn parse_connections(lines: &[String]) -> Vec<Connection> {
         let trimmed = line.trim();
         if trimmed.is_empty()
             || trimmed.starts_with("State")
+            || trimmed.starts_with("Recv-Q")
             || trimmed.starts_with("Proto")
             || trimmed.starts_with("Active Internet")
         {
@@ -613,12 +618,11 @@ pub(crate) fn parse_connections(lines: &[String]) -> Vec<Connection> {
                 .find(|field| field.contains('/'))
                 .and_then(|field| netstat_process(field));
             (fields[3], fields[4], process)
-        } else {
+        } else if fields.first().is_some_and(|field| {
+            field.eq_ignore_ascii_case("estab") || field.eq_ignore_ascii_case("established")
+        }) {
             // ESTAB 0 0 local peer [users:(("proc",pid=..,fd=..))]
-            if fields.len() < 5
-                || !(fields[0].eq_ignore_ascii_case("estab")
-                    || fields[0].eq_ignore_ascii_case("established"))
-            {
+            if fields.len() < 5 {
                 continue;
             }
             let process = if fields.len() > 5 {
@@ -627,6 +631,21 @@ pub(crate) fn parse_connections(lines: &[String]) -> Vec<Connection> {
                 None
             };
             (fields[3], fields[4], process)
+        } else {
+            // State-filtered ss: 0 0 local peer [users:(("proc",...))] —
+            // two leading queue counters, no state token.
+            if fields.len() < 4
+                || !fields[0].chars().all(|c| c.is_ascii_digit())
+                || !fields[1].chars().all(|c| c.is_ascii_digit())
+            {
+                continue;
+            }
+            let process = if fields.len() > 4 {
+                first_quoted(&fields[4..].join(" "))
+            } else {
+                None
+            };
+            (fields[2], fields[3], process)
         };
 
         let Some((local_ip, local_port)) = parse_addr_port(local) else {
@@ -814,6 +833,26 @@ tcp        0      0 10.0.0.5:22             10.0.0.8:49223          CLOSE_WAIT\n
         assert_eq!(conns.len(), 1);
         assert_eq!(conns[0].remote_port, 51414);
         assert_eq!(conns[0].process, None);
+    }
+
+    /// iproute2 >= 5 omits the State column when a `state` filter is given:
+    /// every row is established by construction (observed on the QEMU lab,
+    /// Ubuntu 20.04–24.04).
+    #[test]
+    fn parses_state_filtered_ss_rows_without_state_column() {
+        let lines = vec![
+            "Recv-Q Send-Q Local Address:Port Peer Address:Port Process".to_string(),
+            "0      0      192.0.2.12:54322    192.0.2.13:5432      users:((\"flask\",pid=999,fd=6))".to_string(),
+            "0      44     192.0.2.11:22        192.0.2.1:54464       users:((\"sshd\",pid=1234,fd=4))".to_string(),
+            "0      0      192.0.2.11:22        127.0.0.1:9999".to_string(),
+        ];
+        let conns = parse_connections(&lines);
+        assert_eq!(conns.len(), 2, "header skipped, loopback dropped");
+        let to_db = conns.iter().find(|c| c.remote_port == 5432).unwrap();
+        assert_eq!(to_db.remote_ip.to_string(), "192.0.2.13");
+        assert_eq!(to_db.process.as_deref(), Some("flask"));
+        assert_eq!(to_db.local_port, Some(54322));
+        assert_eq!(conns[1].process.as_deref(), Some("sshd"));
     }
 
     /// BusyBox `netstat -tn`: same layout as net-tools, no process column.
