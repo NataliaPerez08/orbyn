@@ -13,7 +13,7 @@ fn nmap_discovery_persists_inventory_and_job() {
     let bin = fake_bin(&dir, "nmap", FAKE_NMAP_SCRIPT);
 
     let mut cmd = orbyn(&dir);
-    cmd.args(["discover", "--target", "10.0.0.10"])
+    cmd.args(["discover", "--target", "10.0.0.10", "--collector", "nmap"])
         .env("ORBYN_NMAP_BIN", &bin);
     let out = run_ok_combined(&mut cmd);
     assert!(out.contains("1 assets, 2 services"));
@@ -39,13 +39,34 @@ fn nmap_discovery_persists_inventory_and_job() {
 
 #[cfg(unix)]
 #[test]
+fn auto_resolves_to_native_and_records_it() {
+    let dir = TempDir::new("auto");
+
+    // Loopback: closed ports refuse instantly, so the sweep is fast
+    // regardless of what happens to listen there.
+    let out = run_ok_combined(
+        orbyn(&dir)
+            .args(["discover", "--target", "127.0.0.1", "--collector", "auto"])
+            .env("ORBYN_NATIVE_LIVENESS", "0")
+            .env("ORBYN_NATIVE_UDP", "0")
+            .env("ORBYN_NATIVE_REVERSE_DNS", "0"),
+    );
+    // the choice is explicit, never silent
+    assert!(out.contains("auto: native collector selected"), "{out}");
+    // the job records the backend that actually ran, not the selector
+    let jobs = run_ok(orbyn(&dir).args(["jobs", "--format", "csv"]));
+    assert!(jobs.contains("native,"), "{jobs}");
+}
+
+#[cfg(unix)]
+#[test]
 fn discover_rejects_unrestricted_scope() {
     let dir = TempDir::new("scope");
     let bin = fake_bin(&dir, "nmap", FAKE_NMAP_SCRIPT);
 
     let out = run_fail(
         orbyn(&dir)
-            .args(["discover", "--target", "0.0.0.0/0"])
+            .args(["discover", "--target", "0.0.0.0/0", "--collector", "nmap"])
             .env("ORBYN_NMAP_BIN", &bin),
     );
     assert!(
@@ -81,7 +102,7 @@ fn nmap_discovery_survives_stderr_flood() {
 
     let out = run_ok_combined(
         orbyn(&dir)
-            .args(["discover", "--target", "10.0.0.10"])
+            .args(["discover", "--target", "10.0.0.10", "--collector", "nmap"])
             .env("ORBYN_NMAP_BIN", &bin),
     );
     assert!(out.contains("1 assets, 1 services"), "{out}");
@@ -99,7 +120,7 @@ fn nmap_discovery_times_out_hanging_scans() {
 
     let out = run_fail(
         orbyn(&dir)
-            .args(["discover", "--target", "10.0.0.10"])
+            .args(["discover", "--target", "10.0.0.10", "--collector", "nmap"])
             .env("ORBYN_NMAP_BIN", &bin)
             .env("ORBYN_NMAP_TIMEOUT_SECS", "1"),
     );
@@ -660,7 +681,15 @@ fn discover_rejects_zero_concurrency_and_rate_limit() {
 
     let out = run_fail(
         orbyn(&dir)
-            .args(["discover", "--target", "10.0.0.10", "--concurrency", "0"])
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.10",
+                "--collector",
+                "nmap",
+                "--concurrency",
+                "0",
+            ])
             .env("ORBYN_NMAP_BIN", &bin),
     );
     assert!(
@@ -670,7 +699,15 @@ fn discover_rejects_zero_concurrency_and_rate_limit() {
 
     let out = run_fail(
         orbyn(&dir)
-            .args(["discover", "--target", "10.0.0.10", "--rate-limit", "0"])
+            .args([
+                "discover",
+                "--target",
+                "10.0.0.10",
+                "--collector",
+                "nmap",
+                "--rate-limit",
+                "0",
+            ])
             .env("ORBYN_NMAP_BIN", &bin),
     );
     assert!(

@@ -45,3 +45,12 @@ profiles (per-feature parity matrix, not all of Nmap). Removal happens at
 earliest one minor release after the flip, with no discovery regressions
 in that release. Until then nmap stays the default and `--collector
 native` stays opt-in; `auto` stays gated on the same data.
+
+**Flip executed 2026-10-27.** The gate was met by the recorded NMAP-010
+run ([docs/lab-results/nmap-vs-native-20261025-231625/]):
+host recall 4/4 on both adapters, TCP port recall native 9/9 vs nmap
+8/9, named ports 9/9 vs 0/9, UDP observations native-only. `native` is
+now the `discover` default, `auto` selects native with an explicit
+logged notice (never silent, never a silent nmap dependency), and
+`nmap` remains available as the opt-in adapter until its removal —
+earliest one minor release after the flip, per this decision.

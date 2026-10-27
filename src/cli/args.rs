@@ -39,6 +39,8 @@ pub(crate) enum DiscoveryCollector {
     Nmap,
     /// Built-in TCP-connect sweep (no external binary, no privileges).
     Native,
+    /// Best available backend; the choice is logged, never silent.
+    Auto,
     Snmp,
     Ssh,
     Windows,
@@ -184,16 +186,19 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: ServerAction,
     },
-    /// Discover assets in CIDR ranges or IPs (Nmap) or collect hosts
-    /// (SNMP walk, SSH Linux probe, Windows PowerShell probe over SSH,
-    /// or Windows PowerShell over native WinRM).
+    /// Discover assets in CIDR ranges or IPs (native sweep, Nmap
+    /// adapter) or collect hosts (SNMP walk, SSH Linux probe, Windows
+    /// PowerShell probe over SSH, or Windows PowerShell over native
+    /// WinRM).
     Discover {
         /// Target IP or CIDR range, e.g. 10.0.0.0/24 (single IP for
         /// snmp/ssh/windows/winrm). Repeatable.
         #[arg(long, action = ArgAction::Append, required = true)]
         target: Vec<String>,
-        /// Collector adapter to run.
-        #[arg(long, value_enum, default_value_t = DiscoveryCollector::Nmap)]
+        /// Collector adapter to run (default: native — parity with
+        /// nmap for Orbyn's profiles per NMAP-010; `auto` picks the
+        /// best backend and logs the choice).
+        #[arg(long, value_enum, default_value_t = DiscoveryCollector::Native)]
         collector: DiscoveryCollector,
         /// Maximum targets scanned in parallel.
         #[arg(long, default_value_t = 4)]

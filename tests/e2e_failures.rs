@@ -18,7 +18,7 @@ fn missing_collector_binary_records_a_failed_job() {
     let missing = dir.path().join("does-not-exist");
     let out = run_fail(
         orbyn(&dir)
-            .args(["discover", "--target", "10.0.0.10"])
+            .args(["discover", "--target", "10.0.0.10", "--collector", "nmap"])
             .env("ORBYN_NMAP_BIN", &missing),
     );
     assert!(out.contains("failed to start"), "got: {out}");

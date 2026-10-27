@@ -69,6 +69,15 @@ pub(crate) async fn discover(
     let collector: Arc<dyn Collector> = match collector {
         DiscoveryCollector::Nmap => Arc::new(NmapCollector::new()),
         DiscoveryCollector::Native => Arc::new(NativeCollector::new()),
+        // Parity with nmap for Orbyn's profiles is recorded (NMAP-010,
+        // docs/lab-results/nmap-vs-native-20261025-231625/), and the
+        // native sweep has no prerequisites — so `auto` selects it.
+        // The choice is explicit and logged, never silent, and `auto`
+        // never depends on nmap (NMAP_REPLACEMENT_PLAN §11).
+        DiscoveryCollector::Auto => {
+            eprintln!("auto: native collector selected (no degradation); use --collector nmap to force the nmap adapter");
+            Arc::new(NativeCollector::new())
+        }
         DiscoveryCollector::Snmp => Arc::new(SnmpCollector::new(
             community.as_deref().unwrap_or_default(),
             version,

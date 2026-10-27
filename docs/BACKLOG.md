@@ -239,7 +239,8 @@ with scope floors already exists.
   nmap 0/9 (no `-sV` in the default profile); runtime native 266s vs nmap
   32s (UDP sweep + fingerprint probes); UDP observations native-only (8).
   Parity holds for Orbyn's use cases (ADR-0002 D5): the `auto` collector
-  mode and the default flip are unblocked.
+  mode and the default flip are unblocked — both shipped 2026-10-27
+  (v1.7 items below).
 - [x] **P2** Per-feature parity matrix published in the docs
   (NMAP_REPLACEMENT_PLAN.md §6).
 - [x] **P2** Launch jitter knob (`ORBYN_NATIVE_JITTER_MS`, random 0..N pause
@@ -358,7 +359,15 @@ single-tenant — multi-tenancy is explicitly postponed (risk table).
   unprivileged). Revisit only with NMAP-010 lab data showing a need.
 - [ ] **P2** Traceroute / IPv6 ranges — deferred until a validated use
   case exists (plan §5 wording).
-- [ ] **P1** `auto` collector mode — gated on NMAP-010 parity data.
+- [x] **P1** `auto` collector mode — gated on NMAP-010 parity data.
+  Shipped 2026-10-27 with the default flip (ADR-0002 D5,
+  measured-then-default): `auto` selects the native collector (no
+  prerequisites, parity recorded) and prints an explicit notice —
+  never a silent switch, never a silent nmap dependency
+  (NMAP_REPLACEMENT_PLAN §11); the job records the backend that ran.
+  With the same gate met, `discover` now defaults to `--collector
+  native` and `nmap` is the opt-in legacy adapter; its removal is
+  earliest one minor release after the flip, per D5.
 
 ## v2.0 — Desktop & distributed platform (ROADMAP_V2)
 

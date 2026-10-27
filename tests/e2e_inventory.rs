@@ -239,7 +239,7 @@ fn jobs_history_respects_limit_and_csv() {
     for _ in 0..2 {
         run_ok(
             orbyn(&dir)
-                .args(["discover", "--target", "10.0.0.10"])
+                .args(["discover", "--target", "10.0.0.10", "--collector", "nmap"])
                 .env("ORBYN_NMAP_BIN", &bin),
         );
     }

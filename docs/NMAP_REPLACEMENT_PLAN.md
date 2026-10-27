@@ -110,8 +110,9 @@ Normalizer → Evidence Store → Asset/Service Inventory
 ## 6. Parity matrix — current status (v1.4 + v1.7 fingerprint slice, `--collector native`)
 
 Per-feature parity for the features Orbyn actually consumes
-(see [BASELINE_AUDIT.md](BASELINE_AUDIT.md) §2). Nmap remains the default
-collector; this matrix is what gates any default flip (ADR-0001).
+(see [BASELINE_AUDIT.md](BASELINE_AUDIT.md) §2). Native is the default
+collector since 2026-10-27 (ADR-0002 D5, gated on the recorded NMAP-010
+run); this matrix is the evidence for that flip.
 
 | Feature (Orbyn's use) | nmap adapter | native adapter | Parity |
 |---|---|---|---|
@@ -171,11 +172,19 @@ Measurements: host recall, port precision, service/version identification, total
 | NMAP-006 | Rate limit, timeout, and cancellation | P0 | 005 | done (semaphore, timeouts, jitter) |
 | NMAP-007 | ICMP/ARP discovery with fallback | P1 | 004 | ICMP via system `ping`, fail-open; ARP pending |
 | NMAP-008 | Basic banner/service probes | P1 | 005 | done (passive banners + port table + `native-fingerprints/v1` HTTP/TLS probes) |
-| NMAP-009 | Native/Nmap/auto selector | P0 | 003,005 | native+nmap done; `auto` gated on NMAP-010 |
-| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 | harness shipped (`demo/qemu/compare-nmap.sh`); recorded run pending an authorized lab |
+| NMAP-009 | Native/Nmap/auto selector | P0 | 003,005 | done — `auto` selects native with an explicit logged notice (never silent, never a silent nmap dependency); native is the default since the 2026-10-27 flip (ADR-0002 D5) |
+| NMAP-010 | Comparison CI and difference reporting | P0 | 002,009 | done — recorded run [docs/lab-results/nmap-vs-native-20261025-231625/]: parity or better on Orbyn's profiles; gate for the default flip satisfied |
 | NMAP-011 | UDP/SYN and IPv6 as needed | P2 | 010 | UDP done (unprivileged connect-probe, conservative `open\|filtered`); SYN deferred (privilege-gated, no gain over connect scan for authorized inventory); IPv6 ranges deferred |
 | NMAP-012 | Advanced fingerprints and retirement evaluation | P2 | 010,011 | v1 fingerprints done (HTTP/TLS); advanced probes pending |
 
 ## 11. Nmap retirement condition
 
 Nmap stops being an **installation requirement** when every officially supported workflow runs on the native engine or declares accepted degradations; tests pass on target platforms; differences are documented; and `auto` mode never silently depends on Nmap. Removing the adapter from the code is a separate, later, and reversible decision.
+
+Status: met as of 2026-10-27 — the supported discovery workflows run on
+native (default) or the opt-in credential collectors; the recorded
+NMAP-010 run documents the differences; `auto` selects native with an
+explicit notice and never touches nmap. Nmap is no longer an
+installation requirement; adapter removal is a separate, later,
+reversible decision (earliest one minor release after the flip, per
+ADR-0002 D5).
