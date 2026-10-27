@@ -1,0 +1,6 @@
+asset_id,proto,port,name,state,banner
+192-0-2-13,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.13
+192-0-2-13,udp,514,syslog,open|filtered,
+192-0-2-13,udp,1900,upnp,open|filtered,
+192-0-2-13,tcp,5432,postgresql,open,
+192-0-2-13,tcp,6379,redis,open,

@@ -1,0 +1,5 @@
+asset_id,proto,port,name,state,banner
+192-0-2-11,tcp,22,ssh,open,SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20
+192-0-2-11,tcp,80,http,open,nginx/1.24.0 (Ubuntu)
+192-0-2-11,udp,500,isakmp,open|filtered,
+192-0-2-11,udp,1900,upnp,open|filtered,

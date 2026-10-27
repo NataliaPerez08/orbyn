@@ -1,0 +1,5 @@
+asset_id,proto,port,name,state,banner
+192-0-2-12,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.18
+192-0-2-12,udp,53,domain,open|filtered,
+192-0-2-12,udp,123,ntp,open|filtered,
+192-0-2-12,tcp,8080,http,open,Werkzeug/2.0.2 Python/3.10.12

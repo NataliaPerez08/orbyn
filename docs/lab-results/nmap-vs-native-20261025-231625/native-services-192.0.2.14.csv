@@ -1,0 +1,4 @@
+asset_id,proto,port,name,state,banner
+192-0-2-14,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u7
+192-0-2-14,udp,123,ntp,open|filtered,
+192-0-2-14,udp,137,netbios-ns,open|filtered,

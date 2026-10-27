@@ -227,11 +227,19 @@ with scope floors already exists.
 - [x] **P1** Optional reverse DNS for discovered hosts (`dig +short -x` via the
   shared `dns::resolve_ptr`, graceful without dig;
   `ORBYN_NATIVE_REVERSE_DNS=0`).
-- [ ] **P1** Recorded lab comparison native-vs-nmap on an authorized network
+- [x] **P1** Recorded lab comparison native-vs-nmap on an authorized network
   (hosts found, ports found, services named, runtime) — gates any default
   flip. Harness shipped: `demo/qemu/compare-nmap.sh` (runs both collectors
   over the lab, diffs against the cloud-init ground truth, writes the
-  parity report to `results/`); recorded run pending a KVM host.
+  parity report to `results/`).
+  Recorded run: 2026-10-26, QEMU lab on KVM (Proxmox), all checks passed —
+  [docs/lab-results/nmap-vs-native-20261025-231625/report.md](lab-results/nmap-vs-native-20261025-231625/report.md).
+  Host recall 4/4 on both adapters; TCP port recall native 9/9 vs nmap 8/9
+  (nmap missed db-01:6379); named ports native 9/9 (fingerprint probes) vs
+  nmap 0/9 (no `-sV` in the default profile); runtime native 266s vs nmap
+  32s (UDP sweep + fingerprint probes); UDP observations native-only (8).
+  Parity holds for Orbyn's use cases (ADR-0002 D5): the `auto` collector
+  mode and the default flip are unblocked.
 - [x] **P2** Per-feature parity matrix published in the docs
   (NMAP_REPLACEMENT_PLAN.md §6).
 - [x] **P2** Launch jitter knob (`ORBYN_NATIVE_JITTER_MS`, random 0..N pause

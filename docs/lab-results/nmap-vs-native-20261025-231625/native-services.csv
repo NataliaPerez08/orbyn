@@ -1,0 +1,16 @@
+192-0-2-11,tcp,22,ssh,open,SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20
+192-0-2-11,tcp,80,http,open,nginx/1.24.0 (Ubuntu)
+192-0-2-11,udp,500,isakmp,open|filtered,
+192-0-2-11,udp,1900,upnp,open|filtered,
+192-0-2-12,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.18
+192-0-2-12,udp,53,domain,open|filtered,
+192-0-2-12,udp,123,ntp,open|filtered,
+192-0-2-12,tcp,8080,http,open,Werkzeug/2.0.2 Python/3.10.12
+192-0-2-13,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.13
+192-0-2-13,udp,514,syslog,open|filtered,
+192-0-2-13,udp,1900,upnp,open|filtered,
+192-0-2-13,tcp,5432,postgresql,open,
+192-0-2-13,tcp,6379,redis,open,
+192-0-2-14,tcp,22,ssh,open,SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u7
+192-0-2-14,udp,123,ntp,open|filtered,
+192-0-2-14,udp,137,netbios-ns,open|filtered,

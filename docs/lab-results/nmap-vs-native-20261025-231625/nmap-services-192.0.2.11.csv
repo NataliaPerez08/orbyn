@@ -1,0 +1,3 @@
+asset_id,proto,port,name,state,banner
+192-0-2-11,tcp,22,,open,
+192-0-2-11,tcp,80,,open,
