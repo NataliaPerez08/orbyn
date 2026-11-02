@@ -32,7 +32,7 @@ check() {
 }
 
 json_num() { # json key -> value (null when absent)
-  grep -oE "\"$1\": *[0-9.]+" | grep -oE '[0-9.]+'
+  grep -oE "\"$1\": *[0-9.]+" | grep -oE '[0-9.]+' | head -1
 }
 
 echo "== v1.5 observation coverage (span >= ${MIN_SPAN_HOURS}h, largest gap <= ${MAX_GAP_SECS}s) =="

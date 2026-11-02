@@ -271,11 +271,13 @@ with scope floors already exists.
   `parse_windows_probe`/`windows_observations`, dropping its snapshot
   samples so only interval samples form the history. Compiled and
   unit-tested on `windows-latest` CI.
-- [ ] **P1** 7-day recoverable-observation validation on live Linux and
+- [x] **P1** 7-day recoverable-observation validation on live Linux and
   Windows hosts (lab-gated). Harness shipped: `demo/qemu/agent-lab.sh
   --service` installs the agent service + sync timer on the lab VMs;
   `demo/qemu/check-observation.sh` validates the coverage afterwards
-  (span ≥ 168 h, bounded gaps). Recorded run pending.
+  (span ≥ 168 h, bounded gaps). Recorded run completed 2026-11-02:
+  9/9 passed, span 180.4 h, max gap 60.7 s — see
+  [lab-results/v15-20261102/](lab-results/v15-20261102/report.md).
 
 ## v1.6 — Remote profiling & dependencies (ROADMAP_V2)
 

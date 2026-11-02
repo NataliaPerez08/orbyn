@@ -56,9 +56,8 @@ provisioning drift, and harnesses that were never run end-to-end.
    without wiping it).
 
 | [v2-20261027/](v2-20261027/clean-machine.md) | v2.0 exit criteria — full workflow on a clean Windows machine with no toolchain | NSIS silent install on a clean Server 2022 VPS (app + sidecar siblings, registry entry); discover (native, /24 lab over the Tailscale subnet route: 6 assets in ~4.5 min) → observe (agent report HTML) → analyze (inventory JSON) → export (CSV, assets + connections) with the installed sidecar; wizard rendering operator-confirmed ([screenshot](v2-20261027/app-wizard.png)). |
+| [v15-20261102/](v15-20261102/report.md) | v1.5 exit criteria — 7-day observation span ≥ 168 h, largest gap ≤ 600 s, across three heterogeneous Linux hosts | 9/9 passed: web-01 10,778 samples / 180.4 h / 60.5 s gap, api-01 10,776 / 180.4 h / 60.7 s, db-01 10,780 / 180.4 h / 60.5 s. Connection evidence: api→db:5432, api→db:6379, web→api:8080 — all three dependency edges in the graph (confidence 0.9). Facts cadence (`ss -tnp`, hourly) confirmed the `ss` parser fix across Ubuntu 20.04/22.04/24.04. |
 
 ## Pending
 
-- v1.5 7-day observation: in flight — Linux since 2026-10-26T05:25Z
-  (validate ≈2026-11-02), Windows since 2026-10-27T19:00Z (validate
-  ≈2026-11-03); `demo/qemu/check-observation.sh` on both.
+- (none — all lab-gated items resolved)

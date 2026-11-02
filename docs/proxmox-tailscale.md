@@ -268,6 +268,31 @@ talks to whom, run host-level collection on the guests
 (see [SSH collector](collectors/ssh.md)) or add edges manually with
 `orbyn deps add`.
 
+### Lab-gated activities executed (2026-10-26 to 2026-11-02)
+
+Three BACKLOG items previously "pending a KVM host" were unblocked by
+running the [QEMU demo lab](demo-environments.md) on this host. Results
+recorded in [lab-results/](lab-results/README.md):
+
+**NMAP-010 — native-vs-nmap parity (completed).**
+`compare-nmap.sh` ran with orbyn v1.3.0 and nmap 7.95. Both collectors
+found 4/4 hosts. Native matched ground truth on all TCP ports (db-01
+3/3) where nmap missed one (2/3). Native named 100% of ports, nmap 0%.
+Native also found 8 UDP ports. Runtime: native 266s vs nmap 32s. Report
+in [lab-results/nmap-vs-native-20261025-231625/](lab-results/nmap-vs-native-20261025-231625/report.md).
+
+**v1.6 exit criteria — agent-lab.sh (completed).**
+10/10 passed: enrollment, sync, connection evidence (api→db:5432/6379,
+web→api:8080 with graph edges), revocation (sync refused, sample count
+frozen, local buffer persists), re-enrollment. Evidence in
+[lab-results/v16-20261027/](lab-results/v16-20261027/evidence.log).
+
+**v1.5 7-day observation — check-observation.sh (completed).**
+9/9 passed: 3 hosts observed for 180.4 h (> 168 h), largest gap 60.7 s
+(< 600 s). 10,776+ samples per host. Connection evidence confirmed via
+facts cadence (`ss -tnp`, hourly). Report in
+[lab-results/v15-20261102/](lab-results/v15-20261102/report.md).
+
 ## Security notes
 
 - The PVE web UI and API (`tcp/8006`) are **not** exposed to the public

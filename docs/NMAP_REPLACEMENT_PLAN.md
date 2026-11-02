@@ -165,7 +165,7 @@ Measurements: host recall, port precision, service/version identification, total
 | ID | Issue | Priority | Depends on | Status |
 |---|---|---|---|---|
 | NMAP-001 | Audit actual invocations and consumed outputs | P0 | — | done (BASELINE_AUDIT.md) |
-| NMAP-002 | Fixtures and regression lab | P0 | 001 | fixtures done; lab pending |
+| NMAP-002 | Fixtures and regression lab | P0 | 001 | done — fixtures + lab verified on KVM host ([proxmox-tailscale.md](proxmox-tailscale.md)) |
 | NMAP-003 | DiscoveryBackend + capabilities + normalizer | P0 | 001 | done (ADR-0001; `Collector` trait) |
 | NMAP-004 | Target parser and authorization | P0 | 003 | done (pre-existing; re-verified) |
 | NMAP-005 | TCP connect scanner | P0 | 004 | done (`src/collectors/native.rs`) |

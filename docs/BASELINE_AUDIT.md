@@ -89,7 +89,7 @@ store reconciliation, assessment/graph/export pipelines. Fuzz target
 | G-2 | `-sV` product/version depth is not reproducible with connect+banner only | Native slice records banners; deep probes stay on nmap until parity is measured |
 | G-3 | Native liveness = "some port answered"; no ICMP/ARP prefetch yet | Documented difference; ICMP/ARP liveness is the v1.4 follow-up |
 | G-4 | IPv6 CIDR ranges are impractical for connect scanning (≥2^64 hosts at /64) | Native refuses oversized expansions with a clear error; single IPv6 hosts work |
-| G-5 | No recorded lab comparison native-vs-nmap yet | Required before flipping any default; tracked in BACKLOG |
+| G-5 | No recorded lab comparison native-vs-nmap yet | Resolved — recorded run 2026-10-26 on Proxmox KVM host; native matches or exceeds nmap on port recall and naming (see [lab-results/](lab-results/README.md)) |
 | G-6 | Live/production validation of cloud adapters still open | Tracked in VALIDATION_MATRIX.md (pre-existing) |
 
 ## 7. Sprint 0 outputs

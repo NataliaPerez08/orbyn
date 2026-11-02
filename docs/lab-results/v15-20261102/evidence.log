@@ -1,0 +1,22 @@
+== v1.5 observation coverage (span >= 168h, largest gap <= 600s) ==
+  PASS  web-01: samples present (10778)
+  PASS  web-01: span >= 168h (180.38333333333333 h)
+  PASS  web-01: largest gap <= 600s (60.473 s)
+  PASS  api-01: samples present (10776)
+  PASS  api-01: span >= 168h (180.35 h)
+  PASS  api-01: largest gap <= 600s (60.711 s)
+  PASS  db-01: samples present (10780)
+  PASS  db-01: span >= 168h (180.41666666666666 h)
+  PASS  db-01: largest gap <= 600s (60.486 s)
+
+v1.5 exit criteria: 9 passed, 0 failed
+
+== connection evidence (facts cadence, --facts-interval-secs default 3600s) ==
+  PASS  api-01 -> db-01:5432 (PostgreSQL, python3)
+  PASS  api-01 -> db-01:6379 (Redis, python3)
+  PASS  web-01 -> api-01:8080 (nginx -> Flask API)
+
+== dependency graph ==
+  192-0-2-11 -> 192-0-2-12  tcp:8080  active-connections  confidence=0.9
+  192-0-2-12 -> 192-0-2-13  tcp:5432  active-connections  confidence=0.9
+  192-0-2-12 -> 192-0-2-13  tcp:6379  active-connections  confidence=0.9
